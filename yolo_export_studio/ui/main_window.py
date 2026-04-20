@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import platform
+import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from yolo_export_studio.core.jobs import ExportJob
 from yolo_export_studio.core.logs import ArtifactEvent, FinishedEvent, WorkerEvent
+from yolo_export_studio.core.preflight import CheckResult
 from yolo_export_studio.core.providers import ExportProvider
 from yolo_export_studio.core.routes import Route
 from yolo_export_studio.ui.dependency_panel import DependencyPanel
@@ -41,7 +43,7 @@ class MainWindow(QMainWindow):
         self._source_path: Path | None = None
         self._selected_route: Route | None = None
         self._artifact_path: str | None = None
-        self._current_checks: list = []
+        self._current_checks: list[CheckResult] = []
 
         self._setup_ui()
         self._wire_signals()
@@ -233,16 +235,13 @@ class MainWindow(QMainWindow):
         self._format_grid.set_routes(routes_with_checks)
         # Re-select the current route card
         if self._selected_route is not None:
-            for card in self._format_grid._cards:
-                if card._route.id == self._selected_route.id and card._state != "unavailable":
-                    card.set_state("selected")
+            self._format_grid.select_route_by_id(self._selected_route.id)
 
         self._update_convert_button()
 
     def _on_convert(self) -> None:
-        assert self._source_path is not None
-        assert self._selected_route is not None
-        assert self._provider is not None
+        if self._source_path is None or self._selected_route is None or self._provider is None:
+            return
 
         options = self._options_panel.get_options()
         output_dir = self._source_path.parent / "yolo-export-studio-exports"
@@ -294,7 +293,6 @@ class MainWindow(QMainWindow):
             return
         path = Path(self._artifact_path)
         folder = path.parent if path.is_file() else path
-        import subprocess
         if platform.system() == "Darwin":
             subprocess.Popen(["open", str(folder)])
         elif platform.system() == "Windows":

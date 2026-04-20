@@ -92,8 +92,8 @@ class OptionsPanel(QWidget):
         form.addRow(self._opset_row_label, self._opset)
 
         # data (calibration)
-        data_widget = QWidget()
-        data_layout = QHBoxLayout(data_widget)
+        self._data_widget = QWidget()
+        data_layout = QHBoxLayout(self._data_widget)
         data_layout.setContentsMargins(0, 0, 0, 0)
         self._data_edit = QLineEdit()
         self._data_edit.setPlaceholderText("Path to calibration data…")
@@ -103,7 +103,7 @@ class OptionsPanel(QWidget):
         data_layout.addWidget(self._data_edit)
         data_layout.addWidget(data_browse)
         self._data_row_label = QLabel("Cal. data:")
-        form.addRow(self._data_row_label, data_widget)
+        form.addRow(self._data_row_label, self._data_widget)
 
         outer.addWidget(self._body)
         self._body.hide()
@@ -154,7 +154,7 @@ class OptionsPanel(QWidget):
         self._set_row_visible(self._simplify_row_label, self._simplify, tf == "onnx")
         self._set_row_visible(self._nms_row_label, self._nms, tf in _NMS_FORMATS)
         self._set_row_visible(self._opset_row_label, self._opset, tf == "onnx")
-        self._set_row_visible(self._data_row_label, self._data_edit.parent(), route.needs_calibration)
+        self._set_row_visible(self._data_row_label, self._data_widget, route.needs_calibration)
 
     def _set_row_visible(self, label: QWidget, widget: QWidget, visible: bool) -> None:
         label.setVisible(visible)

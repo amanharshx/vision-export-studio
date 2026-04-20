@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Literal
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from yolo_export_studio.core.formats import FormatSpec
@@ -26,7 +27,7 @@ class FormatCard(QWidget):
     ) -> None:
         super().__init__(parent)
         self._route = route
-        self._state: str = "available"
+        self._state: Literal["available", "unavailable", "selected"] = "available"
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -75,12 +76,8 @@ class FormatCard(QWidget):
     ) -> None:
         self._state = state
         if state == "unavailable":
-            self.setGraphicsEffect(None)
-            self.setStyleSheet(self._BORDER_NORMAL)
-            self.setWindowOpacity(1.0)
-            # Use CSS opacity via a wrapper approach — set on the widget directly
             self.setStyleSheet(
-                "border: 1px solid #444; border-radius: 6px; padding: 8px; opacity: 0.4;"
+                "border: 1px solid #444; border-radius: 6px; padding: 8px;"
             )
             self.setEnabled(False)
             self.setToolTip(reason)
@@ -93,7 +90,7 @@ class FormatCard(QWidget):
             self.setStyleSheet(self._BORDER_NORMAL)
             self.setToolTip("")
 
-    def mousePressEvent(self, event) -> None:
+    def mousePressEvent(self, event: QMouseEvent) -> None:
         if self._state != "unavailable":
             self.selected.emit(self._route)
         super().mousePressEvent(event)

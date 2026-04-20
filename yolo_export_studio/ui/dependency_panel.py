@@ -51,17 +51,9 @@ class DependencyPanel(QWidget):
     def set_checks(self, checks: list[CheckResult]) -> None:
         self.clear()
         # Insert rows before the stretch at end
-        stretch_item = self._rows_layout.takeAt(self._rows_layout.count() - 1)
+        self._rows_layout.takeAt(self._rows_layout.count() - 1)
         for check in checks:
             self._rows_layout.addWidget(_CheckRow(check))
-        self._rows_layout.addStretch()
-
-    def set_loading(self) -> None:
-        self.clear()
-        stretch_item = self._rows_layout.takeAt(self._rows_layout.count() - 1)
-        label = QLabel("Checking dependencies…")
-        label.setStyleSheet("color: #888; font-style: italic;")
-        self._rows_layout.addWidget(label)
         self._rows_layout.addStretch()
 
     def clear(self) -> None:
@@ -73,8 +65,6 @@ class DependencyPanel(QWidget):
 
 class _CheckRow(QWidget):
     """One row in the dependency panel."""
-
-    _ICON = {"ready": ("[OK]", "#27ae60"), "warning": ("[!]", "#f39c12")}
 
     def __init__(self, check: CheckResult, parent: QWidget | None = None) -> None:
         super().__init__(parent)

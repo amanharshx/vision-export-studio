@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
@@ -38,11 +39,13 @@ class ProcessController(QObject):
         # Write job to a temp file; we delete it in _on_finished
         fd, self._job_file = tempfile.mkstemp(suffix=".json")
         os.close(fd)
-        job.write(__import__("pathlib").Path(self._job_file))
+        job.write(Path(self._job_file))
 
         self._stdout_buf = b""
         self._received_finished = False
 
+        if self._process is not None:
+            self._process.deleteLater()
         self._process = QProcess(self)
         self._process.setProgram(sys.executable)
         self._process.setArguments(["-m", "yolo_export_studio.workers.export_worker", self._job_file])

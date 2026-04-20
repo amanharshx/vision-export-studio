@@ -70,6 +70,12 @@ class FormatGrid(QWidget):
             card.deleteLater()
         self._cards.clear()
 
+    def select_route_by_id(self, route_id: str) -> None:
+        """Re-select a card by route id without emitting route_selected."""
+        for card in self._cards:
+            if card._route.id == route_id and card._state != "unavailable":
+                card.set_state("selected")
+
     def _on_card_selected(self, route: Route) -> None:
         for card in self._cards:
             if card._route is route:
