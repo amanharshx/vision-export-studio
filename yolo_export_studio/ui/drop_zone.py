@@ -56,8 +56,9 @@ class DropZone(QWidget):
         idle_layout.addWidget(self._recent_btn, alignment=Qt.AlignmentFlag.AlignCenter)
         self._recent_btn.setVisible(bool(load_history()))
 
+        self._idle_widget.setObjectName("dropZoneIdle")
         self._idle_widget.setStyleSheet(
-            "border: 2px dashed #888; border-radius: 6px; padding: 24px;"
+            "#dropZoneIdle { border: 2px dashed #888; border-radius: 6px; padding: 24px; }"
         )
 
         # Loaded state container
