@@ -85,6 +85,9 @@ def test_preflight_onnx_checks_onnx_package(tmp_path):
     results = _provider.preflight(onnx_route, {})
     items = {r.item for r in results}
     assert "onnx" in items
+    onnxslim_results = [r for r in results if r.item == "onnxslim"]
+    for r in onnxslim_results:
+        assert r.status == "warning", f"onnxslim status should be 'warning', got {r.status!r}"
 
 
 # ---------------------------------------------------------------------------

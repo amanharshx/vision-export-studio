@@ -64,7 +64,7 @@ OPENVINO_ROUTE = Route(
 )
 
 
-def _get_size(path) -> int:
+def _get_size(path: str | Path) -> int:
     p = Path(str(path))
     if p.is_file():
         return p.stat().st_size
@@ -73,14 +73,9 @@ def _get_size(path) -> int:
     return 0
 
 
-@contextlib.contextmanager
-def _stdout_to_stderr():
-    old = sys.stdout
-    sys.stdout = sys.stderr
-    try:
-        yield
-    finally:
-        sys.stdout = old
+_ROUTES_BY_ID: dict[str, Route] = {
+    r.id: r for r in (TORCHSCRIPT_ROUTE, ONNX_ROUTE, OPENVINO_ROUTE)
+}
 
 
 class UltralyticsProvider(ExportProvider):
@@ -124,7 +119,7 @@ class UltralyticsProvider(ExportProvider):
             if importlib.util.find_spec("onnxslim") is None:
                 results.append(CheckResult(
                     item="onnxslim",
-                    status="ready",
+                    status="warning",
                     reason=(
                         "onnxslim not installed; ONNX graph will not be simplified. "
                         "Install: pip install onnxslim"
@@ -163,15 +158,21 @@ class UltralyticsProvider(ExportProvider):
 
         try:
             emit(StartedEvent(job_id=job.job_id, route=job.route))
+
+            route = _ROUTES_BY_ID.get(job.route)
+            if route is None:
+                emit(FinishedEvent(ok=False, error=f"Unknown route: {job.route!r}"))
+                sys.exit(1)
+
             emit(LogEvent(level="info", message=f"Loading model: {job.source_path}"))
 
-            with _stdout_to_stderr():
+            with contextlib.redirect_stdout(sys.stderr):
                 from ultralytics import YOLO  # noqa: PLC0415
                 model = YOLO(job.source_path)
 
             emit(ProgressEvent(value=25, message="Model loaded"))
 
-            target_format = job.route.split(".")[-1]
+            target_format = route.target_format
 
             kwargs = {k: v for k, v in job.options.items() if v is not None}
             if kwargs.get("opset") == 0:
@@ -180,8 +181,12 @@ class UltralyticsProvider(ExportProvider):
             emit(LogEvent(level="info", message=f"Exporting to {target_format}..."))
             emit(ProgressEvent(value=50, message="Exporting"))
 
-            with _stdout_to_stderr():
+            with contextlib.redirect_stdout(sys.stderr):
                 artifact = model.export(format=target_format, **kwargs)
+
+            if not artifact or not Path(str(artifact)).exists():
+                emit(FinishedEvent(ok=False, error="Export returned no artifact path"))
+                sys.exit(1)
 
             emit(ProgressEvent(value=90, message="Finalising"))
             emit(ArtifactEvent(
