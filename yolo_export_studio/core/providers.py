@@ -54,6 +54,7 @@ class ExportProvider(ABC):
         route: Route,
         options: dict,
         output_dir: Path,
+        python_executable: Path | None = None,
     ) -> ExportJob:
         """Construct the job descriptor the worker will execute."""
 

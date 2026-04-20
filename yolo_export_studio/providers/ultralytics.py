@@ -563,13 +563,14 @@ class UltralyticsProvider(ExportProvider):
         route: Route,
         options: dict,
         output_dir: Path,
+        python_executable: Path | None = None,
     ) -> ExportJob:
         return ExportJob.create(
             provider=self.id,
             route=route.id,
             source_path=source,
             output_dir=output_dir,
-            python_executable=Path(sys.executable),
+            python_executable=python_executable or Path(sys.executable),
             options=options,
         )
 

@@ -48,7 +48,10 @@ class FormatCard(QWidget):
 
         # Route path
         path_label = QLabel(route.display_path)
-        path_label.setStyleSheet("font-size: 11px; color: #bbb;")
+        path_label.setStyleSheet(
+            "font-family: monospace; background: #222; border-radius: 3px;"
+            " padding: 2px 6px; color: #aaa;"
+        )
         path_label.setWordWrap(True)
         layout.addWidget(path_label)
 

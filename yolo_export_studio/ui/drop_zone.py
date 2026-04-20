@@ -9,10 +9,14 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
+
+from yolo_export_studio.core.history import load_history, record_path
 
 
 class DropZone(QWidget):
@@ -42,6 +46,15 @@ class DropZone(QWidget):
         browse_btn.setFixedWidth(120)
         browse_btn.clicked.connect(self._browse)
         idle_layout.addWidget(browse_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self._recent_btn = QToolButton()
+        self._recent_btn.setText("Recent")
+        self._recent_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._recent_menu = QMenu(self._recent_btn)
+        self._recent_btn.setMenu(self._recent_menu)
+        self._recent_menu.aboutToShow.connect(self._refresh_recent_menu)
+        idle_layout.addWidget(self._recent_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        self._recent_btn.setVisible(bool(load_history()))
 
         self._idle_widget.setStyleSheet(
             "border: 2px dashed #888; border-radius: 6px; padding: 24px;"
@@ -94,7 +107,17 @@ class DropZone(QWidget):
         source_match, provider = result
         self._show_loaded(path, provider.name)
         self._error_label.hide()
+        record_path(path)
+        self._recent_btn.setVisible(True)
         self.source_changed.emit(source_match, provider)
+
+    def _refresh_recent_menu(self) -> None:
+        self._recent_menu.clear()
+        history = load_history()
+        for p in history:
+            action = self._recent_menu.addAction(str(p))
+            action.triggered.connect(lambda checked=False, path=p: self._accept_path(path))
+        self._recent_btn.setVisible(bool(history))
 
     def _show_loaded(self, path: Path, provider_name: str) -> None:
         self._file_label.setText(f"{path.name}\n{provider_name}")

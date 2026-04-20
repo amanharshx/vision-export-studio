@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
 from yolo_export_studio.core.jobs import ExportJob
-from yolo_export_studio.core.logs import ArtifactEvent, FinishedEvent, ProgressEvent, WorkerEvent, parse_event
+from yolo_export_studio.core.logs import FinishedEvent, ProgressEvent, parse_event
 
 
 class ProcessController(QObject):
@@ -27,6 +27,9 @@ class ProcessController(QObject):
         self._received_finished = False
         self._cancel_requested = False
         self._job_file: str | None = None
+        self._pending: list[ExportJob] = []
+        self._stop_on_failure = True
+        self._seq_idx: int = 0
 
     # ------------------------------------------------------------------
     # Public API
@@ -55,6 +58,29 @@ class ProcessController(QObject):
         self._process.readyReadStandardError.connect(self._on_stderr)
         self._process.finished.connect(self._on_finished)
         self._process.start()
+
+    def start_sequence(self, jobs: list, stop_on_failure: bool = True) -> None:
+        """Run jobs sequentially. Starts the first immediately; chains the rest on finished."""
+        if not jobs or self.is_running:
+            return
+        self._pending = list(jobs[1:])
+        self._stop_on_failure = stop_on_failure
+        self._seq_idx = 0
+
+        def _on_seq_done(ok: bool, error: str) -> None:
+            if not ok and self._stop_on_failure:
+                self._pending.clear()
+                self.finished.disconnect(_on_seq_done)
+                return
+            if self._pending:
+                self._seq_idx += 1
+                next_job = self._pending.pop(0)
+                self.start(next_job)
+            else:
+                self.finished.disconnect(_on_seq_done)
+
+        self.finished.connect(_on_seq_done)
+        self.start(jobs[0])
 
     def cancel(self) -> None:
         if self._process is None:
@@ -140,8 +166,7 @@ class ProcessController(QObject):
         elif not self._received_finished:
             self.finished.emit(False, "Worker exited without sending finished event")
         else:
-            # finished event was already forwarded via event_received
-            pass
+            self.finished.emit(True, "")
 
     def _kill_if_running(self) -> None:
         if self.is_running and self._process is not None:
