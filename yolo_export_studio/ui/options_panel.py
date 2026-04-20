@@ -91,6 +91,12 @@ class OptionsPanel(QWidget):
         self._opset_row_label = QLabel("Opset:")
         form.addRow(self._opset_row_label, self._opset)
 
+        # chip name (RKNN only)
+        self._chip_name = QLineEdit()
+        self._chip_name.setPlaceholderText("e.g. rk3588, rk3576, rv1106")
+        self._chip_name_row_label = QLabel("Chip name:")
+        form.addRow(self._chip_name_row_label, self._chip_name)
+
         # data (calibration)
         self._data_widget = QWidget()
         data_layout = QHBoxLayout(self._data_widget)
@@ -118,6 +124,7 @@ class OptionsPanel(QWidget):
         self._nms.toggled.connect(self._emit)
         self._opset.valueChanged.connect(self._emit)
         self._data_edit.textChanged.connect(self._emit)
+        self._chip_name.textChanged.connect(self._emit)
 
     def _browse_data(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Select Calibration Data", "", "YAML (*.yaml *.yml);;All files (*)")
@@ -155,6 +162,7 @@ class OptionsPanel(QWidget):
         self._set_row_visible(self._nms_row_label, self._nms, tf in _NMS_FORMATS)
         self._set_row_visible(self._opset_row_label, self._opset, tf == "onnx")
         self._set_row_visible(self._data_row_label, self._data_widget, route.needs_calibration)
+        self._set_row_visible(self._chip_name_row_label, self._chip_name, tf == "rknn")
 
     def _set_row_visible(self, label: QWidget, widget: QWidget, visible: bool) -> None:
         label.setVisible(visible)
@@ -181,4 +189,8 @@ class OptionsPanel(QWidget):
             opts["nms"] = self._nms.isChecked()
         if self._route.needs_calibration:
             opts["data"] = self._data_edit.text()
+        if tf == "rknn":
+            name = self._chip_name.text().strip()
+            if name:
+                opts["name"] = name
         return opts
