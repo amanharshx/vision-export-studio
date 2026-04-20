@@ -15,7 +15,7 @@ from yolo_export_studio.core.logs import (
     ProgressEvent,
     StartedEvent,
 )
-from yolo_export_studio.core.preflight import CheckResult, check_package, check_platform
+from yolo_export_studio.core.preflight import CheckResult, check_binary, check_package, check_platform
 from yolo_export_studio.core.providers import ExportProvider, SourceMatch, register_provider
 from yolo_export_studio.core.routes import Route
 
@@ -175,6 +175,106 @@ EXECUTORCH_ROUTE = Route(
     notes="PyTorch ExecuTorch on-device inference. Requires torch >= 2.9. One-way.",
 )
 
+EDGETPU_ROUTE = Route(
+    id="ultralytics.pt.edgetpu",
+    provider_id="ultralytics",
+    source_format="pt",
+    target_format="edgetpu",
+    display_path="model.pt → model.onnx → saved_model/ → model.tflite → edgetpu_compiler → model_edgetpu.tflite",
+    pip_deps=(
+        ("tensorflow", "pip install tensorflow"),
+        ("onnx2tf", "pip install onnx2tf"),
+        ("onnx", "pip install onnx"),
+        ("onnxruntime", "pip install onnxruntime"),
+    ),
+    sys_deps=(("edgetpu_compiler", "Download from https://coral.ai/docs/edgetpu/compiler/#download"),),
+    platform_lock="linux_x86_64",
+    intermediates=("onnx", "saved_model", "tflite"),
+    one_way=True,
+    lossy=True,
+    needs_calibration=True,
+    notes="Google Coral hardware only. Full-integer quantisation forced. Linux x86_64 and edgetpu_compiler binary required.",
+)
+
+TFJS_ROUTE = Route(
+    id="ultralytics.pt.tfjs",
+    provider_id="ultralytics",
+    source_format="pt",
+    target_format="tfjs",
+    display_path="model.pt → model.onnx → saved_model/ → model.pb → tensorflowjs_converter → model_web_model/",
+    pip_deps=(
+        ("tensorflow", "pip install tensorflow"),
+        ("onnx2tf", "pip install onnx2tf"),
+        ("onnx", "pip install onnx"),
+        ("onnxruntime", "pip install onnxruntime"),
+        ("tensorflowjs", "pip install tensorflowjs"),
+    ),
+    sys_deps=(("tensorflowjs_converter", "pip install tensorflowjs"),),
+    intermediates=("onnx", "saved_model", "pb"),
+    supports_half=True,
+    supports_int8=True,
+    notes="Browser/Node.js deployment. tensorflowjs_converter binary installed via pip install tensorflowjs.",
+)
+
+PADDLE_ROUTE = Route(
+    id="ultralytics.pt.paddle",
+    provider_id="ultralytics",
+    source_format="pt",
+    target_format="paddle",
+    display_path="model.pt → model_paddle_model/",
+    pip_deps=(
+        ("paddlepaddle", "pip install paddlepaddle"),
+        ("x2paddle", "pip install x2paddle"),
+    ),
+    notes="PaddlePaddle via x2paddle jit.trace. Direct PyTorch → Paddle.",
+)
+
+IMX_ROUTE = Route(
+    id="ultralytics.pt.imx",
+    provider_id="ultralytics",
+    source_format="pt",
+    target_format="imx",
+    display_path="model.pt → FXModel → MCT INT8 → model_imx.onnx → imxconv-pt → model_imx_model/",
+    pip_deps=(
+        ("model-compression-toolkit", "pip install model-compression-toolkit"),
+        ("sony-custom-layers", "pip install sony-custom-layers"),
+        ("imx500-converter", "pip install imx500-converter"),
+    ),
+    sys_deps=(
+        ("imxconv-pt", "pip install imx500-converter"),
+        ("java", "Install Java >= 17: https://adoptium.net/"),
+    ),
+    platform_lock="linux",
+    intermediates=("onnx",),
+    supports_int8=True,
+    one_way=True,
+    lossy=True,
+    needs_calibration=True,
+    notes="Sony IMX500 AI sensor. Linux only. int8 forced True. Java >= 17 required. Calibration always required.",
+)
+
+AXELERA_ROUTE = Route(
+    id="ultralytics.pt.axelera",
+    provider_id="ultralytics",
+    source_format="pt",
+    target_format="axelera",
+    display_path="model.pt → axelera.quantize → axelera.compile → model_axelera_model/",
+    pip_deps=(("axelera", "pip install axelera-devkit"),),
+    platform_lock="linux",
+    supports_int8=True,
+    one_way=True,
+    lossy=True,
+    needs_calibration=True,
+    notes="Axelera Metis AIPU binary. Linux only. Calibration required. Requires torch >= 2.8.",
+)
+
+
+def _check_tf_stack(results: list) -> None:
+    results.append(check_package("tensorflow", "pip install tensorflow"))
+    results.append(check_package("onnx2tf", "pip install onnx2tf"))
+    results.append(check_package("onnx", "pip install onnx"))
+    results.append(check_package("onnxruntime", "pip install onnxruntime"))
+
 
 def _get_size(path: str | Path) -> int:
     p = Path(str(path))
@@ -198,6 +298,11 @@ _ROUTES_BY_ID: dict[str, Route] = {
         ENGINE_ROUTE,
         RKNN_ROUTE,
         EXECUTORCH_ROUTE,
+        EDGETPU_ROUTE,
+        TFJS_ROUTE,
+        PADDLE_ROUTE,
+        IMX_ROUTE,
+        AXELERA_ROUTE,
     )
 }
 
@@ -240,6 +345,11 @@ class UltralyticsProvider(ExportProvider):
                 ENGINE_ROUTE,
                 RKNN_ROUTE,
                 EXECUTORCH_ROUTE,
+                EDGETPU_ROUTE,
+                TFJS_ROUTE,
+                PADDLE_ROUTE,
+                IMX_ROUTE,
+                AXELERA_ROUTE,
             ]
         return []
 
@@ -280,10 +390,7 @@ class UltralyticsProvider(ExportProvider):
             results.append(check_package("onnx", "pip install onnx"))
 
         elif route.id == "ultralytics.pt.tflite":
-            results.append(check_package("tensorflow", "pip install tensorflow"))
-            results.append(check_package("onnx2tf", "pip install onnx2tf"))
-            results.append(check_package("onnx", "pip install onnx"))
-            results.append(check_package("onnxruntime", "pip install onnxruntime"))
+            _check_tf_stack(results)
 
         elif route.id == "ultralytics.pt.engine":
             results.append(check_package("tensorrt", "pip install tensorrt"))
@@ -340,6 +447,112 @@ class UltralyticsProvider(ExportProvider):
                     "Ensure your environment has torch >= 2.9 installed."
                 ),
                 install_hint="pip install 'torch>=2.9'",
+            ))
+
+        elif route.id == "ultralytics.pt.edgetpu":
+            results.append(check_platform("linux_x86_64"))
+            _check_tf_stack(results)
+            results.append(check_binary(
+                "edgetpu_compiler",
+                "Download from https://coral.ai/docs/edgetpu/compiler/#download",
+                docs_url="https://coral.ai/docs/edgetpu/compiler/",
+            ))
+
+        elif route.id == "ultralytics.pt.tfjs":
+            _check_tf_stack(results)
+            results.append(check_package("tensorflowjs", "pip install tensorflowjs"))
+            results.append(check_binary(
+                "tensorflowjs_converter",
+                "pip install tensorflowjs",
+                docs_url="https://github.com/tensorflow/tfjs/tree/master/tfjs-converter",
+            ))
+
+        elif route.id == "ultralytics.pt.paddle":
+            results.append(check_package("paddlepaddle", "pip install paddlepaddle"))
+            results.append(check_package("x2paddle", "pip install x2paddle"))
+
+        elif route.id == "ultralytics.pt.imx":
+            results.append(check_platform("linux"))
+            _mct_spec = importlib.util.find_spec("model_compression_toolkit")
+            if _mct_spec is None:
+                results.append(CheckResult(
+                    item="model-compression-toolkit",
+                    status="missing_package",
+                    reason="Package 'model-compression-toolkit' is not installed.",
+                    install_hint="pip install model-compression-toolkit",
+                ))
+            else:
+                results.append(CheckResult(item="model-compression-toolkit", status="ready"))
+            _scl_spec = importlib.util.find_spec("sony_custom_layers")
+            if _scl_spec is None:
+                results.append(CheckResult(
+                    item="sony-custom-layers",
+                    status="missing_package",
+                    reason="Package 'sony-custom-layers' is not installed.",
+                    install_hint="pip install sony-custom-layers",
+                ))
+            else:
+                results.append(CheckResult(item="sony-custom-layers", status="ready"))
+            _imxconv_spec = importlib.util.find_spec("imx500_converter")
+            if _imxconv_spec is None:
+                results.append(CheckResult(
+                    item="imx500-converter",
+                    status="missing_package",
+                    reason="Package 'imx500-converter' is not installed.",
+                    install_hint="pip install imx500-converter",
+                ))
+            else:
+                results.append(CheckResult(item="imx500-converter", status="ready"))
+            results.append(check_binary(
+                "imxconv-pt",
+                "pip install imx500-converter  # installs imxconv-pt binary",
+                docs_url="https://developer.aitrios.sony-semicon.com/en/raspberrypi-ai-camera/",
+            ))
+            _java_check = check_binary("java", "Install Java >= 17: https://adoptium.net/", docs_url="https://adoptium.net/")
+            if _java_check.status == "ready":
+                results.append(CheckResult(
+                    item="java",
+                    status="warning",
+                    reason="java binary found on PATH. Ensure version is >= 17 (run: java -version).",
+                    install_hint="Install Java >= 17: https://adoptium.net/",
+                ))
+            else:
+                results.append(_java_check)
+            results.append(CheckResult(
+                item="calibration_data",
+                status="calibration_required",
+                reason="IMX500 always requires a calibration dataset (MCT quantisation).",
+                install_hint="Pass data='path/to/data.yaml' in options.",
+            ))
+
+        elif route.id == "ultralytics.pt.axelera":
+            results.append(check_platform("linux"))
+            # pip package is 'axelera-devkit'; expected importable top-level namespace is 'axelera'
+            _axelera_spec = importlib.util.find_spec("axelera")
+            if _axelera_spec is None:
+                results.append(CheckResult(
+                    item="axelera-devkit",
+                    status="missing_package",
+                    reason="Package 'axelera-devkit' is not installed.",
+                    install_hint="pip install axelera-devkit",
+                ))
+            else:
+                results.append(CheckResult(item="axelera-devkit", status="ready"))
+            results.append(CheckResult(
+                item="torch_version",
+                status="warning",
+                reason=(
+                    "Axelera requires torch >= 2.8. "
+                    "Torch version cannot be verified without importing torch. "
+                    "Ensure your environment has torch >= 2.8 installed."
+                ),
+                install_hint="pip install 'torch>=2.8'",
+            ))
+            results.append(CheckResult(
+                item="calibration_data",
+                status="calibration_required",
+                reason="Axelera compilation requires a calibration dataset.",
+                install_hint="Pass data='path/to/data.yaml' in options.",
             ))
 
         return results
