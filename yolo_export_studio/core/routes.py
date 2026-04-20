@@ -18,15 +18,15 @@ class Route:
     display_path: str                    # e.g. "best.pt → best.onnx"
 
     # Dependency declarations (package_name, copyable_install_hint)
-    pip_deps: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    pip_deps: tuple[tuple[str, str], ...] = field(default=())
     # System binary deps (binary_name, install_hint)
-    sys_deps: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    sys_deps: tuple[tuple[str, str], ...] = field(default=())
 
     # Platform constraint: None = any, or "linux", "linux_x86_64", "not_windows", "macos"
     platform_lock: str | None = None
 
     # Intermediate format IDs consumed and discarded during the chain
-    intermediates: tuple[str, ...] = field(default_factory=tuple)
+    intermediates: tuple[str, ...] = field(default=())
 
     # Option capability flags
     requires_gpu: bool = False

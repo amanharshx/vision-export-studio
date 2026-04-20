@@ -60,7 +60,7 @@ ONNX = FormatSpec(
     can_be_target=True,
     one_way=False,
     platform_locked=False,
-    notes="Most portable intermediate. Common starting point for downstream conversions.",
+    notes="Most portable intermediate. Planned source format in a future phase (onnx → engine, onnx → rknn, etc.).",
 )
 
 OPENVINO = FormatSpec(
@@ -201,8 +201,8 @@ RKNN = FormatSpec(
     can_be_source=False,
     can_be_target=True,
     one_way=True,
-    platform_locked=True,
-    notes="Rockchip NPU binary. Target chip must be specified (e.g. rk3588).",
+    platform_locked=False,
+    notes="Rockchip NPU binary. Target chip must be specified (e.g. rk3588). Toolkit runs cross-platform; output is chip-locked.",
 )
 
 IMX = FormatSpec(

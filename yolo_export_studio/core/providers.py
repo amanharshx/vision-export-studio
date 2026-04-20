@@ -57,6 +57,10 @@ class ExportProvider(ABC):
     ) -> ExportJob:
         """Construct the job descriptor the worker will execute."""
 
+    @abstractmethod
+    def run(self, job: ExportJob) -> None:
+        """Worker-side execution. Called inside the subprocess — never from GUI."""
+
 
 # ---------------------------------------------------------------------------
 # Global registry
