@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import platform
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtCore import QProcess, Qt
+from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -29,7 +30,7 @@ from yolo_export_studio.core.logs import ArtifactEvent, FinishedEvent, StartedEv
 from yolo_export_studio.core.preflight import CheckResult
 from yolo_export_studio.core.providers import ExportProvider, get_provider
 from yolo_export_studio.core.routes import Route
-from yolo_export_studio.ui.dependency_panel import DependencyPanel
+from yolo_export_studio.ui.dependency_panel import DependencyPanel, _is_pip_install
 from yolo_export_studio.ui.drop_zone import DropZone
 from yolo_export_studio.ui.format_grid import FormatGrid
 from yolo_export_studio.ui.log_viewer import LogViewer
@@ -63,6 +64,7 @@ class MainWindow(QMainWindow):
         self._artifact_path: str | None = None
         self._current_checks: list[CheckResult] = []
         self._queue_job_idx: int = 0
+        self._install_proc: QProcess | None = None
 
         self._setup_ui()
         self._wire_signals()
@@ -215,6 +217,7 @@ class MainWindow(QMainWindow):
         self._format_grid.route_selected.connect(self._on_route_selected)
         self._options_panel.options_changed.connect(self._on_options_changed)
         self._dep_panel.recheck_requested.connect(self._on_recheck)
+        self._dep_panel.install_requested.connect(self._on_install_requested)
         self._convert_btn.clicked.connect(self._on_convert)
         self._add_queue_btn.clicked.connect(self._on_add_to_queue)
         self._cancel_btn.clicked.connect(self._proc.cancel)
@@ -288,6 +291,69 @@ class MainWindow(QMainWindow):
             self._format_grid.select_route_by_id(self._selected_route.id)
 
         self._update_convert_button()
+
+    def _on_install_requested(self, hint: str, item: str) -> None:
+        python = self._get_python_executable()
+        if python is None:
+            return
+
+        if not _is_pip_install(hint):
+            self._log_viewer.append_stderr(f"[install] Rejected hint: {hint!r}")
+            return
+        spec = shlex.split(hint)[2]
+
+        cmd = f"{python} -m pip install {spec}"
+        reply = QMessageBox.question(
+            self,
+            "Install Package",
+            f"Install '{spec}' using:\n\n  {cmd}\n\nProceed?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._dep_panel.set_installing(True)
+        self._convert_btn.setEnabled(False)
+        self._add_queue_btn.setEnabled(False)
+
+        self._install_proc = QProcess(self)
+        self._install_proc.setProgram(str(python))
+        self._install_proc.setArguments(["-m", "pip", "install", spec])
+
+        def _on_stdout(_proc=self._install_proc) -> None:
+            text = _proc.readAllStandardOutput().data().decode("utf-8", errors="replace")
+            if text.strip():
+                self._log_viewer.append_stderr(text)
+
+        def _on_stderr_data(_proc=self._install_proc) -> None:
+            text = _proc.readAllStandardError().data().decode("utf-8", errors="replace")
+            if text.strip():
+                self._log_viewer.append_stderr(text)
+
+        def _on_done(exit_code: int, exit_status: QProcess.ExitStatus) -> None:
+            self._dep_panel.set_installing(False)
+            if exit_status == QProcess.ExitStatus.CrashExit or exit_code != 0:
+                self._log_viewer.append_stderr(
+                    f"[install] Install failed (exit {exit_code}, status {exit_status.name})"
+                )
+            else:
+                self._log_viewer.append_stderr(f"[install] Installed {item}")
+            self._install_proc = None
+            self._on_recheck()
+
+        def _on_start_error(error: QProcess.ProcessError) -> None:
+            self._dep_panel.set_installing(False)
+            self._install_proc = None
+            self._update_convert_button()
+            self._log_viewer.append_stderr(
+                f"[install] Failed to start process: {error.name}"
+            )
+
+        self._install_proc.readyReadStandardOutput.connect(_on_stdout)
+        self._install_proc.readyReadStandardError.connect(_on_stderr_data)
+        self._install_proc.finished.connect(_on_done)
+        self._install_proc.errorOccurred.connect(_on_start_error)
+        self._install_proc.start()
 
     def _on_convert(self) -> None:
         if self._source_path is None or self._selected_route is None or self._provider is None:
@@ -442,6 +508,12 @@ class MainWindow(QMainWindow):
         self._open_btn.setEnabled(False)
         self.statusBar().showMessage("Running queue…")
         self._proc.start_sequence(jobs)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._install_proc is not None:
+            self._install_proc.kill()
+            self._install_proc.waitForFinished(3000)
+        super().closeEvent(event)
 
     def _update_convert_button(self) -> None:
         all_ok = (
