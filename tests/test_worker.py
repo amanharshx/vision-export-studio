@@ -15,6 +15,7 @@ def _run_worker(*args: str) -> subprocess.CompletedProcess:
         [sys.executable, "-m", "yolo_export_studio.workers.export_worker", *args],
         capture_output=True,
         text=True,
+        timeout=30,
     )
 
 
@@ -94,6 +95,7 @@ def test_missing_required_field(tmp_path):
     finished = _finished_event(events)
     assert finished is not None
     assert finished["ok"] is False
+    assert "provider" in finished.get("error", "")
 
 
 def test_source_not_found(tmp_path):

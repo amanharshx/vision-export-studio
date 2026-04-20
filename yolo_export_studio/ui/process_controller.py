@@ -98,6 +98,10 @@ class ProcessController(QObject):
             self.stderr_received.emit(text)
 
     def _on_finished(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
+        # Capture and reset cancel flag before branching — ensures it's always cleared
+        was_cancelled = self._cancel_requested
+        self._cancel_requested = False
+
         # Drain any remaining stdout
         remaining = self._process.readAllStandardOutput().data()
         if remaining:
@@ -124,13 +128,15 @@ class ProcessController(QObject):
             self._job_file = None
 
         if exit_status == QProcess.ExitStatus.CrashExit:
-            if self._cancel_requested:
-                self._cancel_requested = False
+            if was_cancelled:
                 self.finished.emit(False, "Cancelled")
             else:
                 self.crashed.emit()
         elif exit_code != 0 and not self._received_finished:
-            self.finished.emit(False, f"Worker exited unexpectedly (exit code {exit_code})")
+            if was_cancelled:
+                self.finished.emit(False, "Cancelled")
+            else:
+                self.finished.emit(False, f"Worker exited unexpectedly (exit code {exit_code})")
         elif not self._received_finished:
             self.finished.emit(False, "Worker exited without sending finished event")
         else:

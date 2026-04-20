@@ -15,13 +15,14 @@ import json
 import sys
 import traceback
 from pathlib import Path
+from typing import NoReturn
 
 
 def _emit(event_dict: dict) -> None:
     print(json.dumps(event_dict), flush=True)
 
 
-def _fail(error: str) -> None:
+def _fail(error: str) -> NoReturn:
     _emit({"type": "finished", "ok": False, "error": error})
     sys.exit(1)
 
@@ -43,15 +44,12 @@ def main() -> None:
         job = ExportJob.read(job_path)
     except Exception as exc:
         _fail(f"Failed to parse job file: {exc}")
-        return
 
     source = Path(job.source_path)
     if not source.exists():
         _fail(f"Source file not found: {job.source_path}")
-        return
     if not source.is_file():
         _fail(f"Source path is not a file: {job.source_path}")
-        return
 
     try:
         import yolo_export_studio.providers  # noqa: F401 — triggers register_provider()
@@ -59,10 +57,8 @@ def main() -> None:
         provider = get_provider(job.provider)
     except KeyError:
         _fail(f"Unknown provider: '{job.provider}'")
-        return
     except Exception as exc:
         _fail(f"Failed to load provider '{job.provider}': {exc}")
-        return
 
     try:
         provider.run(job)

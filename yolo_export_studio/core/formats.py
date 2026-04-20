@@ -254,3 +254,4 @@ ALL_FORMATS: dict[str, FormatSpec] = {
         NCNN, MNN, RKNN, IMX, EXECUTORCH, AXELERA,
     ]
 }
+FORMATS = ALL_FORMATS  # alias for consistency
