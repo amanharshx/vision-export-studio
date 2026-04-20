@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import platform
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -302,7 +303,24 @@ class MainWindow(QMainWindow):
             return
         spec = shlex.split(hint)[2]
 
-        cmd = f"{python} -m pip install {spec}"
+        # Resolve installer: uv (works without pip in venv) → adjacent pip script → python -m pip
+        uv = shutil.which("uv")
+        pip_script = Path(python).parent / ("pip.exe" if sys.platform == "win32" else "pip")
+        if uv:
+            program = uv
+            arguments = ["pip", "install", "--python", str(python), spec]
+            installer_label = "uv"
+        elif pip_script.exists():
+            program = str(pip_script)
+            arguments = ["install", spec]
+            installer_label = "pip"
+        else:
+            program = str(python)
+            arguments = ["-m", "pip", "install", spec]
+            installer_label = "python -m pip"
+
+        cmd = f"{program} {' '.join(arguments)}"
+
         reply = QMessageBox.question(
             self,
             "Install Package",
@@ -312,13 +330,15 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
+        self._log_viewer.append_stderr(f"[install] using {installer_label} for {python}")
+
         self._dep_panel.set_installing(True)
         self._convert_btn.setEnabled(False)
         self._add_queue_btn.setEnabled(False)
 
         self._install_proc = QProcess(self)
-        self._install_proc.setProgram(str(python))
-        self._install_proc.setArguments(["-m", "pip", "install", spec])
+        self._install_proc.setProgram(program)
+        self._install_proc.setArguments(arguments)
 
         def _on_stdout(_proc=self._install_proc) -> None:
             text = _proc.readAllStandardOutput().data().decode("utf-8", errors="replace")
@@ -344,10 +364,10 @@ class MainWindow(QMainWindow):
         def _on_start_error(error: QProcess.ProcessError) -> None:
             self._dep_panel.set_installing(False)
             self._install_proc = None
-            self._update_convert_button()
             self._log_viewer.append_stderr(
                 f"[install] Failed to start process: {error.name}"
             )
+            self._on_recheck()
 
         self._install_proc.readyReadStandardOutput.connect(_on_stdout)
         self._install_proc.readyReadStandardError.connect(_on_stderr_data)
