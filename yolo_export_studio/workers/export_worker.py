@@ -45,6 +45,14 @@ def main() -> None:
         _fail(f"Failed to parse job file: {exc}")
         return
 
+    source = Path(job.source_path)
+    if not source.exists():
+        _fail(f"Source file not found: {job.source_path}")
+        return
+    if not source.is_file():
+        _fail(f"Source path is not a file: {job.source_path}")
+        return
+
     try:
         import yolo_export_studio.providers  # noqa: F401 — triggers register_provider()
         from yolo_export_studio.core.providers import get_provider
