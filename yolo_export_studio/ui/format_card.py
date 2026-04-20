@@ -18,6 +18,8 @@ class FormatCard(QWidget):
 
     _BORDER_NORMAL = "border: 1px solid #555; border-radius: 6px; padding: 8px;"
     _BORDER_SELECTED = "border: 2px solid #2980b9; border-radius: 6px; padding: 7px; background: #1a3a5c;"
+    _BORDER_UNAVAILABLE = "border: 1px solid #444; border-radius: 6px; padding: 8px;"
+    _BORDER_UNAVAILABLE_SELECTED = "border: 2px solid #e67e22; border-radius: 6px; padding: 7px;"
 
     def __init__(
         self,
@@ -27,7 +29,8 @@ class FormatCard(QWidget):
     ) -> None:
         super().__init__(parent)
         self._route = route
-        self._state: Literal["available", "unavailable", "selected"] = "available"
+        self._state: Literal["available", "unavailable", "unavailable_selected", "selected"] = "available"
+        self._unavailable_reason: str = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -74,26 +77,27 @@ class FormatCard(QWidget):
 
     def set_state(
         self,
-        state: Literal["available", "unavailable", "selected"],
+        state: Literal["available", "unavailable", "unavailable_selected", "selected"],
         reason: str = "",
     ) -> None:
         self._state = state
         if state == "unavailable":
-            self.setStyleSheet(
-                "border: 1px solid #444; border-radius: 6px; padding: 8px;"
-            )
-            self.setEnabled(False)
-            self.setToolTip(reason)
+            if reason:
+                self._unavailable_reason = reason
+            self.setStyleSheet(self._BORDER_UNAVAILABLE)
+            self.setToolTip(self._unavailable_reason)
+        elif state == "unavailable_selected":
+            if reason:
+                self._unavailable_reason = reason
+            self.setStyleSheet(self._BORDER_UNAVAILABLE_SELECTED)
+            self.setToolTip(self._unavailable_reason)
         elif state == "selected":
-            self.setEnabled(True)
             self.setStyleSheet(self._BORDER_SELECTED)
             self.setToolTip("")
         else:
-            self.setEnabled(True)
             self.setStyleSheet(self._BORDER_NORMAL)
             self.setToolTip("")
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        if self._state != "unavailable":
-            self.selected.emit(self._route)
+        self.selected.emit(self._route)
         super().mousePressEvent(event)
