@@ -1,0 +1,56 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+*.whl
+.venv/
+venv/
+env/
+.env
+
+# PyInstaller
+*.spec
+dist/
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Ruff / linters
+.ruff_cache/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs / temp
+*.log
+*.tmp
+job_*.json
+
+# Model files (don't accidentally commit large models)
+*.pt
+*.onnx
+*.engine
+*.tflite
+*.mlpackage
+*.pte
+*.rknn
+*.mnn
+*.axm
