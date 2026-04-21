@@ -81,6 +81,7 @@ pub async fn start_export(
         "ultralytics.pt.tfjs",
         "ultralytics.pt.imx",
         "ultralytics.pt.axelera",
+        "ultralytics.pt.edgetpu",
     ];
 
     const VALID_ROUTE_IDS: &[&str] = &[
@@ -123,11 +124,17 @@ pub async fn start_export(
         }
     }
 
-    if int8 && data.trim().is_empty() && CALIBRATION_ROUTES.contains(&route_id.as_str()) {
-        return Err("INT8 quantisation requires a calibration dataset (data= path)".to_string());
+    if data.trim().is_empty() && CALIBRATION_ROUTES.contains(&route_id.as_str()) {
+        return Err("this route requires a calibration dataset (data= path)".to_string());
     }
     if !data.is_empty() && data.contains('=') {
         return Err("calibration data path must not contain '='".to_string());
+    }
+    if !data.trim().is_empty() && !std::path::Path::new(data.trim()).exists() {
+        return Err(format!(
+            "calibration data path does not exist: {}",
+            data.trim()
+        ));
     }
 
     // ------------------------------------------------------------------

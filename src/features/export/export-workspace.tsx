@@ -71,6 +71,11 @@ export function ExportWorkspace() {
       .catch((e: unknown) => setEnvError(String(e)));
   }, []);
 
+  // Reset calibration data path when route changes
+  useEffect(() => {
+    setOptions((prev) => ({ ...prev, data: "" }));
+  }, [selectedRouteId]);
+
   // Check dependencies whenever the selected route or resolved python path changes
   useEffect(() => {
     const pythonPath = envInfo?.python_path;

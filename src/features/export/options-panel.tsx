@@ -74,7 +74,7 @@ export function OptionsPanel({ route, options, onOptionsChange }: OptionsPanelPr
         ))}
       </div>
 
-      {route.needsCalibration && options.int8 && (
+      {route.needsCalibration && (!route.supportsInt8 || options.int8) && (
         <div className="grid gap-2">
           <Label>Calibration dataset</Label>
           <div className="flex gap-2">
@@ -97,7 +97,7 @@ export function OptionsPanel({ route, options, onOptionsChange }: OptionsPanelPr
           </div>
           {!options.data && (
             <p className="text-xs text-destructive">
-              Calibration dataset required to export with INT8.
+              Calibration dataset required for this export route.
             </p>
           )}
         </div>
