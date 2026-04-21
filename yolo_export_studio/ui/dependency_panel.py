@@ -54,6 +54,15 @@ class DependencyPanel(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(4)
 
+        self._platform_banner = QLabel()
+        self._platform_banner.setWordWrap(True)
+        self._platform_banner.setStyleSheet(
+            "background: #3a1a00; color: #f39c12; border: 1px solid #e67e22; "
+            "border-radius: 4px; padding: 6px 8px; font-size: 12px;"
+        )
+        self._platform_banner.setVisible(False)
+        outer.addWidget(self._platform_banner)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
@@ -74,6 +83,14 @@ class DependencyPanel(QWidget):
 
     def set_checks(self, checks: list[CheckResult]) -> None:
         self.clear()
+        platform_check = next(
+            (c for c in checks if c.status == "platform_unsupported"), None
+        )
+        if platform_check:
+            self._platform_banner.setText(f"\u26a0  {platform_check.reason}")
+            self._platform_banner.setVisible(True)
+        else:
+            self._platform_banner.setVisible(False)
         for check in checks:
             row = _CheckRow(check)
             row.install_clicked.connect(
@@ -84,6 +101,7 @@ class DependencyPanel(QWidget):
         self._rows_layout.addStretch()
 
     def clear(self) -> None:
+        self._platform_banner.setVisible(False)
         while self._rows_layout.count() > 0:
             item = self._rows_layout.takeAt(0)
             if item.widget():

@@ -25,12 +25,14 @@ class FormatCard(QWidget):
         self,
         route: Route,
         format_spec: FormatSpec,
+        platform_mismatch: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._route = route
         self._state: Literal["available", "unavailable", "unavailable_selected", "selected"] = "available"
         self._unavailable_reason: str = ""
+        self._platform_mismatch = platform_mismatch
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -71,9 +73,18 @@ class FormatCard(QWidget):
             flag_label.setStyleSheet("font-size: 10px; color: #e67e22;")
             layout.addWidget(flag_label)
 
+        # Platform-mismatch lock badge — visible only when current OS doesn't satisfy the lock
+        self._lock_label = QLabel("\u26a0  Wrong platform")
+        self._lock_label.setStyleSheet(
+            "font-size: 10px; font-weight: bold; color: #e74c3c; "
+            "background: #3a1a1a; border-radius: 3px; padding: 1px 5px;"
+        )
+        self._lock_label.setVisible(platform_mismatch)
+        layout.addWidget(self._lock_label)
+
         self.setStyleSheet(self._BORDER_NORMAL)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(110)
+        self.setMinimumHeight(125)
 
     def set_state(
         self,

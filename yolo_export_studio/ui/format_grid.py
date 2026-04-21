@@ -52,7 +52,8 @@ class FormatGrid(QWidget):
             format_spec = ALL_FORMATS.get(route.target_format)
             if format_spec is None:
                 continue
-            card = FormatCard(route, format_spec, self._container)
+            platform_mismatch = any(c.status == "platform_unsupported" for c in checks)
+            card = FormatCard(route, format_spec, platform_mismatch, self._container)
 
             failing = [c for c in checks if not c.ok]
             if failing:
