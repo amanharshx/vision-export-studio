@@ -1,8 +1,11 @@
 mod commands;
 
+use crate::commands::export::ExportState;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(ExportState::default())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -14,7 +17,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::environment::detect_environment
+            commands::environment::detect_environment,
+            commands::export::start_export,
+            commands::export::cancel_export,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

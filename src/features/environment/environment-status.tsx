@@ -76,15 +76,26 @@ function buildItems(
   ];
 }
 
-export function EnvironmentStatus() {
-  const [envInfo, setEnvInfo] = useState<EnvironmentInfo | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+interface EnvironmentStatusProps {
+  envInfo?: EnvironmentInfo | null;
+  loadError?: string | null;
+}
+
+export function EnvironmentStatus({ envInfo: envInfoProp, loadError: loadErrorProp }: EnvironmentStatusProps = {}) {
+  const [envInfoInternal, setEnvInfoInternal] = useState<EnvironmentInfo | null>(null);
+  const [loadErrorInternal, setLoadErrorInternal] = useState<string | null>(null);
+
+  const controlled = envInfoProp !== undefined || loadErrorProp !== undefined;
 
   useEffect(() => {
+    if (controlled) return;
     detectEnvironment()
-      .then(setEnvInfo)
-      .catch((e: unknown) => setLoadError(String(e)));
-  }, []);
+      .then(setEnvInfoInternal)
+      .catch((e: unknown) => setLoadErrorInternal(String(e)));
+  }, [controlled]);
+
+  const envInfo = controlled ? (envInfoProp ?? null) : envInfoInternal;
+  const loadError = controlled ? (loadErrorProp ?? null) : loadErrorInternal;
 
   const items = buildItems(envInfo, loadError);
 

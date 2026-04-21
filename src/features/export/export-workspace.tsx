@@ -1,9 +1,36 @@
 import { EnvironmentStatus } from "@/features/environment/environment-status";
+import { detectEnvironment } from "@/lib/tauri/environment";
+import { cancelExport, startExport } from "@/lib/tauri/export";
 import { defaultRoute, ultralyticsRoutes } from "@/lib/routes";
-import { useMemo, useState } from "react";
+import type {
+  EnvironmentInfo,
+  ExportCancelledPayload,
+  ExportFailedPayload,
+  ExportFinishedPayload,
+  ExportLinePayload,
+  ExportStatus,
+} from "@/lib/types";
+import { listen } from "@tauri-apps/api/event";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DropZone } from "./drop-zone";
 import { RouteDetails } from "./route-details";
 import { RouteGrid } from "./route-grid";
+
+interface ExportOptions {
+  imgsz: number;
+  batch: number;
+  half: boolean;
+  dynamic: boolean;
+  simplify: boolean;
+}
+
+const defaultOptions: ExportOptions = {
+  imgsz: 640,
+  batch: 1,
+  half: false,
+  dynamic: false,
+  simplify: false,
+};
 
 export function ExportWorkspace() {
   const [selectedRouteId, setSelectedRouteId] = useState(defaultRoute.id);
@@ -11,6 +38,125 @@ export function ExportWorkspace() {
     () => ultralyticsRoutes.find((route) => route.id === selectedRouteId) ?? defaultRoute,
     [selectedRouteId],
   );
+
+  // Environment
+  const [envInfo, setEnvInfo] = useState<EnvironmentInfo | null>(null);
+  const [envError, setEnvError] = useState<string | null>(null);
+
+  // Source model path
+  const [sourcePath, setSourcePath] = useState("");
+
+  // Export session state
+  const [sessionId, setSessionId] = useState<number | null>(null);
+  const [exportStatus, setExportStatus] = useState<ExportStatus>("idle");
+  const [logLines, setLogLines] = useState<string[]>([]);
+  const [invokeError, setInvokeError] = useState<string | null>(null);
+
+  // Export options
+  const [options, setOptions] = useState<ExportOptions>(defaultOptions);
+
+  // Ref to current sessionId for use inside event listener closures
+  const sessionIdRef = useRef<number | null>(null);
+  sessionIdRef.current = sessionId;
+
+  // Detect environment on mount
+  useEffect(() => {
+    detectEnvironment()
+      .then(setEnvInfo)
+      .catch((e: unknown) => setEnvError(String(e)));
+  }, []);
+
+  // Set up event listeners; re-register when sessionId changes
+  useEffect(() => {
+    const unlisteners: Array<() => void> = [];
+
+    const setup = async () => {
+      const ulStarted = await listen<{ session_id: number }>("export:started", (event) => {
+        if (event.payload.session_id === sessionIdRef.current) {
+          setExportStatus("running");
+        }
+      });
+      unlisteners.push(ulStarted);
+
+      const ulStdout = await listen<ExportLinePayload>("export:stdout", (event) => {
+        if (event.payload.session_id === sessionIdRef.current) {
+          setLogLines((prev) => [...prev, "[stdout] " + event.payload.line]);
+        }
+      });
+      unlisteners.push(ulStdout);
+
+      const ulStderr = await listen<ExportLinePayload>("export:stderr", (event) => {
+        if (event.payload.session_id === sessionIdRef.current) {
+          setLogLines((prev) => [...prev, "[stderr] " + event.payload.line]);
+        }
+      });
+      unlisteners.push(ulStderr);
+
+      const ulFinished = await listen<ExportFinishedPayload>("export:finished", (event) => {
+        if (event.payload.session_id === sessionIdRef.current) {
+          setExportStatus("finished");
+        }
+      });
+      unlisteners.push(ulFinished);
+
+      const ulFailed = await listen<ExportFailedPayload>("export:failed", (event) => {
+        if (event.payload.session_id === sessionIdRef.current) {
+          setExportStatus("failed");
+        }
+      });
+      unlisteners.push(ulFailed);
+
+      const ulCancelled = await listen<ExportCancelledPayload>("export:cancelled", (event) => {
+        if (event.payload.session_id === sessionIdRef.current) {
+          setExportStatus("cancelled");
+        }
+      });
+      unlisteners.push(ulCancelled);
+    };
+
+    setup().catch(console.error);
+
+    return () => {
+      for (const ul of unlisteners) ul();
+    };
+  }, []);
+
+  // Export handler
+  const handleExport = async () => {
+    if (!sourcePath || !envInfo?.yolo_path || exportStatus === "running") return;
+    setInvokeError(null);
+    setLogLines([]);
+    const outputDir = sourcePath.includes("/")
+      ? sourcePath.substring(0, sourcePath.lastIndexOf("/"))
+      : "";
+    try {
+      const id = await startExport({
+        source_path: sourcePath,
+        route_id: selectedRoute.id,
+        output_dir: outputDir,
+        yolo_path: envInfo.yolo_path,
+        imgsz: options.imgsz,
+        batch: options.batch,
+        half: options.half,
+        dynamic: options.dynamic,
+        simplify: options.simplify,
+      });
+      setSessionId(id);
+      setExportStatus("running");
+    } catch (e: unknown) {
+      setInvokeError(String(e));
+    }
+  };
+
+  // Cancel handler
+  const handleCancel = async () => {
+    if (sessionId === null || exportStatus !== "running") return;
+    try {
+      await cancelExport(sessionId);
+    } catch (e: unknown) {
+      console.error("cancel_export failed:", e);
+    }
+  };
 
   return (
     <main className="min-h-screen px-5 py-5 text-zinc-950 md:px-8 md:py-7">
@@ -24,15 +170,28 @@ export function ExportWorkspace() {
               and local `yolo export` runs.
             </p>
           </div>
-          <EnvironmentStatus />
+          <EnvironmentStatus envInfo={envInfo} loadError={envError} />
         </header>
 
         <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_390px]">
           <div className="space-y-5">
-            <DropZone />
+            <DropZone
+              path={sourcePath}
+              onFileSelect={setSourcePath}
+              errorMsg={invokeError}
+            />
             <RouteGrid selectedRouteId={selectedRoute.id} onSelectRoute={setSelectedRouteId} />
           </div>
-          <RouteDetails route={selectedRoute} />
+          <RouteDetails
+            route={selectedRoute}
+            sourcePath={sourcePath}
+            exportStatus={exportStatus}
+            logLines={logLines}
+            options={options}
+            onOptionsChange={setOptions}
+            onExport={handleExport}
+            onCancel={handleCancel}
+          />
         </section>
       </div>
     </main>
