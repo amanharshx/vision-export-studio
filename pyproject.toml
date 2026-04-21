@@ -5,12 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "yolo-export-studio"
 version = "0.1.0"
-description = "Desktop ML model export studio"
+description = "Model export metadata and legacy worker helpers for the Tauri desktop app"
 requires-python = ">=3.11"
-dependencies = ["PySide6>=6.7", "packaging>=23.0"]
-
-[project.scripts]
-yolo-export-studio = "yolo_export_studio.main:main"
+dependencies = ["packaging>=23.0"]
 
 [tool.setuptools.packages.find]
 where = ["."]

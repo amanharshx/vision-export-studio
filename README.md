@@ -1,153 +1,118 @@
 # YOLO Export Studio
 
-Desktop ML model export studio. Drop a model file, pick a target format, convert — locally, on your hardware, in your Python environment.
+Desktop ML model export studio. Drop a model file, pick a target format, convert locally through the user's Python environment.
 
-![Status](https://img.shields.io/badge/status-early%20development-orange)
-![Python](https://img.shields.io/badge/python-3.11%2B-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
+Status: early v2 scaffold.
 
----
+## Product Boundary
 
-## What It Does
+YOLO Export Studio is a model export studio, not a universal all-to-all converter.
 
-YOLO Export Studio takes a source model file and converts it to a deployment format using the appropriate toolchain running **entirely on your machine**. No cloud, no uploads, no surprises.
-
-```
-source model → provider route → target format
+```text
+source format -> supported route -> target format
 ```
 
-Current source: Ultralytics `.pt` models (YOLO v5/v8/v9/v10/v11).
+Current source focus: Ultralytics-compatible `.pt` weights.
 
----
+YOLO Export Studio must not imply compiled/runtime outputs are reversible. TensorRT, RKNN, IMX, Edge TPU, Axelera, TFLite, and some CoreML outputs are one-way or platform-locked deployment artifacts.
 
-## Supported Formats
+## Stack
 
-| Format | Type | One-way | Platform |
-|---|---|---|---|
-| TorchScript | intermediate | no | any |
-| ONNX | intermediate | no | any |
-| OpenVINO IR | intermediate | no | any |
-| TensorRT `.engine` | runtime | **yes** | NVIDIA GPU |
-| CoreML `.mlpackage` | runtime | **yes** | Apple only |
-| TF SavedModel | intermediate | no | any |
-| TFLite | runtime | **yes** | any |
-| Edge TPU | vendor | **yes** | Linux x86_64 + Coral |
-| TF.js | runtime | no | any |
-| PaddlePaddle | intermediate | no | any |
-| NCNN | runtime | no | any |
-| MNN | runtime | no | any |
-| RKNN | vendor | **yes** | any (chip-locked output) |
-| Sony IMX500 | vendor | **yes** | Linux |
-| ExecuTorch `.pte` | runtime | no | any |
-| Axelera Metis `.axm` | vendor | **yes** | Linux |
+```text
+React + TypeScript + Tailwind + shadcn
+Tauri v2 desktop shell
+Rust command layer for process control
+Ultralytics `yolo export` CLI as export engine
+Bun for all JavaScript package tasks
+```
 
----
+Python remains in this branch only for route metadata and legacy worker reference while v2 reaches parity.
 
 ## Architecture
 
-```
-PySide6 GUI Process (no ML imports)
-  │
-  ├── QThread — preflight dep checks (read-only, fast)
-  │
-  └── QProcess — spawns worker subprocess
-        │
-        args   → path to job.json
-        stdout ← JSONL events (started, log, progress, artifact, finished)
-        stderr ← raw diagnostics
-        exit   → 0 success, non-zero failure
-```
-
-The worker process imports ML libraries (`torch`, `ultralytics`, etc.) and runs the actual export. If it crashes (segfault, CUDA OOM, TensorRT error), the GUI stays alive. GPU memory is fully released when the worker exits.
-
----
-
-## Installation
-
-```bash
-# GUI dependencies only
-pip install -e .
-
-# ML dependencies go in whatever environment you point YOLO Export Studio at
-pip install ultralytics  # for .pt → onnx/torchscript/openvino/etc.
-pip install tensorrt     # for .pt → .engine (NVIDIA only)
-# etc.
+```text
+React UI
+  -> Tauri invoke/listen
+Rust command layer
+  -> validates paths/options
+  -> finds selected Python and yolo CLI
+  -> spawns yolo export with argv, not shell strings
+  -> streams stdout/stderr events
+  -> owns cancel/kill
+Ultralytics CLI
+  -> runs export in user's Python environment
 ```
 
-Requires Python 3.11+.
+React must not spawn shell commands directly. The Rust layer owns subprocess handles, quoting, cancel, and event streaming.
 
----
+## Supported Initial Routes
 
-## Usage
+Route metadata is migrated from `yolo_export_studio/providers/ultralytics.py` into `src/lib/routes.ts`.
 
-```bash
-yolo-export-studio
-```
-
-Or:
-
-```bash
-python -m yolo_export_studio.main
-```
-
-> **Note:** The GUI is not yet implemented (Phase 1 in progress). The data model, worker protocol, and fake provider for testing are complete.
-
----
-
-## Project Structure
-
-```
-yolo_export_studio/
-├── main.py                     # Entry point
-├── core/
-│   ├── formats.py              # FormatSpec — all 16+ formats
-│   ├── routes.py               # Route dataclass (deps, platform, options)
-│   ├── providers.py            # ExportProvider ABC + registry
-│   ├── preflight.py            # Read-only dep checker (importlib-based)
-│   ├── jobs.py                 # ExportJob JSON serialization
-│   └── logs.py                 # JSONL event models + parser
-├── providers/
-│   └── fake.py                 # Fake provider (smoke tests, UI dev)
-├── workers/
-│   └── export_worker.py        # Standalone subprocess entry point
-└── ui/
-    ├── main_window.py          # Main window (stub)
-    ├── drop_zone.py            # Drag-and-drop model file (stub)
-    ├── format_grid.py          # Chip flow layout + format chips
-    ├── options_panel.py        # Conversion options (stub)
-    ├── dependency_panel.py     # Dep checklist + install hints (stub)
-    ├── process_controller.py   # QProcess lifecycle (stub)
-    └── log_viewer.py           # Live JSONL log (stub)
-```
-
----
-
-## Roadmap
-
-| Phase | Status | Description |
-|---|---|---|
-| 0 — Scaffold | ✅ Done | Core dataclasses, provider registry, fake provider, worker protocol |
-| 1 — GUI Skeleton | 🔨 Next | Main window, drop zone, format grid, options panel, log viewer |
-| 2 — Worker Protocol | — | Export worker CLI, JSONL events, cancel, crash handling |
-| 3 — Ultralytics Routes | — | `.pt → onnx/torchscript/openvino` with real preflight |
-| 4 — More Routes | — | CoreML, NCNN, MNN, TFLite, TensorRT, RKNN, ExecuTorch |
-| 5 — Vendor Routes | — | EdgeTPU, IMX500, Axelera, TFJS, PaddlePaddle |
-| 6 — Polish | — | Interpreter selector, multi-format queue, history |
-| 7 — More Providers | — | ONNX as source, HuggingFace via Optimum |
-| 8 — Distribution | — | PyInstaller, `.app`, `.exe` |
-
----
+| Target | Notes |
+|---|---|
+| TorchScript | Intermediate |
+| ONNX | Portable intermediate |
+| OpenVINO | Intel deployment |
+| TensorRT | NVIDIA GPU, one-way |
+| CoreML | Apple target, one-way |
+| TFLite | Mobile/runtime, often one-way |
+| Edge TPU | Coral, Linux x86_64, one-way |
+| TF.js | Browser/Node deployment |
+| PaddlePaddle | Intermediate/runtime |
+| NCNN | Mobile/embedded |
+| MNN | Mobile runtime, one-way |
+| RKNN | Rockchip NPU, chip-locked |
+| Sony IMX500 | Linux, calibration required |
+| ExecuTorch | On-device runtime |
+| Axelera Metis | Linux, calibration required |
 
 ## Development
 
+Prerequisites:
+
 ```bash
-# Run fake worker smoke test
-touch /tmp/test.pt
-python -c "
-from yolo_export_studio.core.jobs import ExportJob
-from pathlib import Path
-j = ExportJob.create('fake', 'fake.pt.onnx', Path('/tmp/test.pt'), Path('/tmp'), Path('python'), {})
-j.write(Path('/tmp/job.json'))
-"
-python -m yolo_export_studio.workers.export_worker /tmp/job.json
+bun --version
+cargo --version
+cargo tauri --version
+```
+Install frontend dependencies:
+
+```bash
+bun install
+```
+
+Run web shell:
+
+```bash
+bun run dev
+```
+
+Run desktop shell:
+
+```bash
+bun run tauri dev
+```
+
+Build frontend:
+
+```bash
+bun run build
+```
+
+## Project Structure
+
+```text
+src/
+  components/ui/          shadcn components
+  features/export/        export workspace UI
+  features/environment/   Python/yolo status UI
+  lib/routes.ts           temporary TS route metadata
+  lib/types.ts            shared frontend types
+src-tauri/
+  src/                    Tauri v2 Rust entry and future commands
+yolo_export_studio/
+  core/                   legacy route/preflight/job models, temporary reference
+  providers/              legacy Ultralytics metadata, temporary reference
+  workers/                legacy worker, temporary reference
 ```
