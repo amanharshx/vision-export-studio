@@ -93,14 +93,14 @@ class MainWindow(QMainWindow):
 
         # Left panel — content centered with max width
         left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        self._left_layout = QVBoxLayout(left)
+        self._left_layout.setContentsMargins(0, 0, 0, 0)
 
         self._left_content = QWidget()
-        self._left_content.setMaximumWidth(700)
+        self._left_content.setMaximumWidth(750)
         content_layout = QVBoxLayout(self._left_content)
-        content_layout.setContentsMargins(16, 16, 16, 16)
-        content_layout.setSpacing(12)
+        content_layout.setContentsMargins(24, 40, 24, 24)
+        content_layout.setSpacing(20)
 
         self._drop_zone = DropZone()
         content_layout.addWidget(self._drop_zone)
@@ -112,7 +112,7 @@ class MainWindow(QMainWindow):
         self._format_grid = FormatGrid()
         content_layout.addWidget(self._format_grid, stretch=1)
 
-        left_layout.addWidget(self._left_content, alignment=Qt.AlignmentFlag.AlignCenter)
+        self._left_layout.addWidget(self._left_content, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self._splitter.addWidget(left)
 
@@ -257,7 +257,6 @@ class MainWindow(QMainWindow):
         ]
         self._format_grid.set_routes(routes_with_checks)
         self._tf_label.setVisible(True)
-        self._left_content.setMaximumWidth(16777215)  # remove max-width after file loaded
         self._options_panel.set_route(None)
         self._dep_panel.clear()
         self._log_viewer.clear()

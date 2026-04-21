@@ -38,12 +38,27 @@ class DropZone(QWidget):
         idle_layout = QVBoxLayout(self._idle_widget)
         idle_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        prompt = QLabel("Drop a .pt model file here\nor")
+        idle_layout.setSpacing(12)
+        idle_layout.setContentsMargins(40, 40, 40, 40)
+
+        prompt = QLabel("Drop a .pt model file here")
         prompt.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        prompt.setStyleSheet("font-size: 16px; font-weight: 500; color: #333;")
         idle_layout.addWidget(prompt)
 
-        browse_btn = QPushButton("Browse…")
-        browse_btn.setFixedWidth(120)
+        hint = QLabel("Supports Ultralytics YOLO .pt files")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setStyleSheet("font-size: 12px; color: #999;")
+        idle_layout.addWidget(hint)
+
+        browse_btn = QPushButton("Choose File")
+        browse_btn.setFixedWidth(160)
+        browse_btn.setFixedHeight(36)
+        browse_btn.setStyleSheet(
+            "QPushButton { background: #2980b9; color: white; font-weight: bold; "
+            "border: none; border-radius: 6px; font-size: 13px; }"
+            "QPushButton:hover { background: #3498db; }"
+        )
         browse_btn.clicked.connect(self._browse)
         idle_layout.addWidget(browse_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -56,9 +71,10 @@ class DropZone(QWidget):
         idle_layout.addWidget(self._recent_btn, alignment=Qt.AlignmentFlag.AlignCenter)
         self._recent_btn.setVisible(bool(load_history()))
 
+        self._idle_widget.setMinimumSize(500, 220)
         self._idle_widget.setObjectName("dropZoneIdle")
         self._idle_widget.setStyleSheet(
-            "#dropZoneIdle { border: 2px dashed #b0b0b0; border-radius: 6px; padding: 12px; }"
+            "#dropZoneIdle { border: 2px dashed #c0c0c0; border-radius: 12px; background: #ffffff; }"
         )
 
         # Loaded state container
