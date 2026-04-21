@@ -2,7 +2,6 @@
 
 # Surface
 CARD_BG = "#ffffff"
-CARD_HOVER = "#f5f5f5"
 CARD_UNAVAIL_SEL_BG = "#fff8f0"
 
 # Border
