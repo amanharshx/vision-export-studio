@@ -41,17 +41,6 @@ from yolo_export_studio.ui.process_controller import ProcessController
 from yolo_export_studio.ui.queue_panel import QueueEntry, QueuePanel
 
 
-_LIGHT_STYLESHEET = """
-QWidget { background-color: #f0f0f0; color: #1a1a1a; }
-QGroupBox { border: 1px solid #ccc; border-radius: 4px; margin-top: 6px; }
-QGroupBox::title { color: #333; }
-QPushButton { background-color: #e0e0e0; color: #1a1a1a; border: 1px solid #bbb; border-radius: 3px; padding: 4px 8px; }
-QPushButton:hover { background-color: #d0d0d0; }
-QLineEdit { background-color: #fff; color: #1a1a1a; border: 1px solid #bbb; border-radius: 3px; padding: 2px 4px; }
-QListWidget { background-color: #fff; color: #1a1a1a; }
-QScrollArea { background-color: #f0f0f0; }
-"""
-
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -87,7 +76,7 @@ class MainWindow(QMainWindow):
 
         badge = QLabel(platform.machine())
         badge.setStyleSheet(
-            "background: #2c3e50; color: #ecf0f1; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+            "background: #e8e8e8; color: #1a1a1a; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
         )
         header_layout.addWidget(badge)
 
@@ -99,10 +88,6 @@ class MainWindow(QMainWindow):
         browse_interp_btn = QPushButton("Browse…")
         browse_interp_btn.clicked.connect(self._browse_interpreter)
         header_layout.addWidget(browse_interp_btn)
-
-        self._theme_btn = QPushButton("☀ Light")
-        self._theme_btn.clicked.connect(self._toggle_theme)
-        header_layout.addWidget(self._theme_btn)
 
         # --- Splitter ---
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -155,7 +140,7 @@ class MainWindow(QMainWindow):
         self._convert_btn.setStyleSheet(
             f"QPushButton {{ background: {ACCENT}; color: white; font-weight: bold; "
             f"border: none; border-radius: {RADIUS}px; }}"
-            f"QPushButton:disabled {{ background: #333; color: {TEXT_DIM}; }}"
+            f"QPushButton:disabled {{ background: #e0e0e0; color: {TEXT_DIM}; }}"
             f"QPushButton:hover:enabled {{ background: #3498db; }}"
         )
         btn_row.addWidget(self._convert_btn)
@@ -185,7 +170,7 @@ class MainWindow(QMainWindow):
         self._progress_bar.setFixedHeight(6)
         self._progress_bar.setTextVisible(False)
         self._progress_bar.setStyleSheet(
-            f"QProgressBar {{ border: none; background: #333; border-radius: 3px; }}"
+            f"QProgressBar {{ border: none; background: #e0e0e0; border-radius: 3px; }}"
             f"QProgressBar::chunk {{ background: {ACCENT}; border-radius: 3px; }}"
         )
         right_layout.addWidget(self._progress_bar)
@@ -216,6 +201,15 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(splitter, stretch=1)
         self.setCentralWidget(central)
+
+        QApplication.instance().setStyleSheet(
+            "QWidget { background-color: #f5f5f5; color: #1a1a1a; }"
+            "QScrollArea, QPlainTextEdit { background-color: #ffffff; }"
+            "QLineEdit { background-color: #ffffff; border: 1px solid #d0d0d0; border-radius: 3px; padding: 2px 4px; }"
+            "QPushButton { background-color: #ebebeb; color: #1a1a1a; border: 1px solid #d0d0d0; border-radius: 3px; padding: 4px 8px; }"
+            "QPushButton:hover { background-color: #dedede; }"
+            "QSplitter::handle:horizontal { background-color: #d0d0d0; width: 1px; }"
+        )
 
         # Process controller
         self._proc = ProcessController(self)
@@ -481,15 +475,6 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Select Python interpreter")
         if path and Path(path).exists():
             self._interp_edit.setText(path)
-
-    def _toggle_theme(self) -> None:
-        app = QApplication.instance()
-        if self._theme_btn.text() == "☀ Light":
-            app.setStyleSheet(_LIGHT_STYLESHEET)
-            self._theme_btn.setText("● Dark")
-        else:
-            app.setStyleSheet("")
-            self._theme_btn.setText("☀ Light")
 
     def _setup_shortcuts(self) -> None:
         QShortcut(QKeySequence("Ctrl+O"), self).activated.connect(self._drop_zone._browse)

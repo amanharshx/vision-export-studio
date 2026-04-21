@@ -58,7 +58,7 @@ class DropZone(QWidget):
 
         self._idle_widget.setObjectName("dropZoneIdle")
         self._idle_widget.setStyleSheet(
-            "#dropZoneIdle { border: 2px dashed #555; border-radius: 6px; padding: 12px; }"
+            "#dropZoneIdle { border: 2px dashed #b0b0b0; border-radius: 6px; padding: 12px; }"
         )
 
         # Loaded state container

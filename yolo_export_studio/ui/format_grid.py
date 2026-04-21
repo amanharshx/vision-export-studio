@@ -148,8 +148,8 @@ class FormatChip(QWidget):
 
     def _apply_style(self) -> None:
         if self._state == "selected":
-            self.setStyleSheet(self._card_style(ACCENT, ACCENT))
-            self._name_label.setStyleSheet("font-size: 12px; color: white;")
+            self.setStyleSheet(self._card_style(CARD_BG, ACCENT))
+            self._name_label.setStyleSheet(f"font-size: 12px; color: {ACCENT};")
         elif self._state == "unavailable_selected":
             self.setStyleSheet(self._card_style(CARD_UNAVAIL_SEL_BG, BORDER_UNAVAIL_SEL))
             self._name_label.setStyleSheet(f"font-size: 12px; color: {TEXT};")

@@ -1,18 +1,18 @@
 """Design tokens for the YOLO Export Studio UI."""
 
 # Surface
-CARD_BG = "#383838"
-CARD_HOVER = "#404040"
-CARD_UNAVAIL_SEL_BG = "#3a2a1a"
+CARD_BG = "#ffffff"
+CARD_HOVER = "#f5f5f5"
+CARD_UNAVAIL_SEL_BG = "#fff8f0"
 
 # Border
-BORDER = "#505050"
+BORDER = "#d0d0d0"
 BORDER_UNAVAIL_SEL = "#e67e22"
 
 # Text
-TEXT = "#ecf0f1"
-TEXT_MUTED = "#777"
-TEXT_DIM = "#555"
+TEXT = "#1a1a1a"
+TEXT_MUTED = "#888"
+TEXT_DIM = "#bbb"
 
 # Accent
 ACCENT = "#2980b9"

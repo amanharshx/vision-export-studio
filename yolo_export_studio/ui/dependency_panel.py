@@ -57,7 +57,7 @@ class DependencyPanel(QWidget):
         self._platform_banner = QLabel()
         self._platform_banner.setWordWrap(True)
         self._platform_banner.setStyleSheet(
-            "background: #3a1a00; color: #f39c12; border: 1px solid #e67e22; "
+            "background: #fff3e0; color: #b45309; border: 1px solid #e67e22; "
             "border-radius: 4px; padding: 6px 8px; font-size: 12px;"
         )
         self._platform_banner.setVisible(False)
