@@ -63,6 +63,10 @@ class DropZone(QWidget):
 
         # Loaded state container
         self._loaded_widget = QWidget()
+        self._loaded_widget.setObjectName("dropZoneLoaded")
+        self._loaded_widget.setStyleSheet(
+            "#dropZoneLoaded { border: 1px solid #e0e0e0; border-radius: 8px; padding: 12px; background: #ffffff; }"
+        )
         loaded_layout = QHBoxLayout(self._loaded_widget)
 
         self._file_label = QLabel()

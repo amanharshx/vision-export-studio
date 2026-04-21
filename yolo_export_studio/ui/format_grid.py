@@ -24,16 +24,17 @@ from yolo_export_studio.ui.theme import (
     BORDER,
     BORDER_UNAVAIL_SEL,
     CARD_BG,
-    CARD_HOVER,
     CARD_UNAVAIL_SEL_BG,
     CAT_COLORS,
+    CHIP_HOVER_BG,
+    CHIP_SELECTED_BG,
     RED,
     TEXT,
     TEXT_MUTED,
 )
 
-_H_GAP = 6
-_V_GAP = 6
+_H_GAP = 8
+_V_GAP = 8
 
 
 class FlowLayout(QLayout):
@@ -125,11 +126,11 @@ class FormatChip(QWidget):
         self._cat_color = CAT_COLORS.get(format_spec.category.lower(), BORDER)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(4)
+        layout.setContentsMargins(12, 6, 12, 6)
+        layout.setSpacing(6)
 
         self._name_label = QLabel(format_spec.name)
-        self._name_label.setStyleSheet(f"font-size: 12px; color: {TEXT};")
+        self._name_label.setStyleSheet(f"font-size: 13px; color: {TEXT};")
         layout.addWidget(self._name_label)
 
         if platform_mismatch:
@@ -139,26 +140,26 @@ class FormatChip(QWidget):
             layout.addWidget(warn)
 
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(30)
+        self.setFixedHeight(36)
         self.setToolTip(route.display_path)
         self._apply_style()
 
     def _card_style(self, bg: str, border: str) -> str:
-        return f"#fchip {{ background: {bg}; border: 2px solid {border}; border-radius: 14px; }}"
+        return f"#fchip {{ background: {bg}; border: 2px solid {border}; border-radius: 8px; }}"
 
     def _apply_style(self) -> None:
         if self._state == "selected":
-            self.setStyleSheet(self._card_style(CARD_BG, ACCENT))
-            self._name_label.setStyleSheet(f"font-size: 12px; color: {ACCENT};")
+            self.setStyleSheet(self._card_style(CHIP_SELECTED_BG, ACCENT))
+            self._name_label.setStyleSheet(f"font-size: 13px; color: {ACCENT};")
         elif self._state == "unavailable_selected":
             self.setStyleSheet(self._card_style(CARD_UNAVAIL_SEL_BG, BORDER_UNAVAIL_SEL))
-            self._name_label.setStyleSheet(f"font-size: 12px; color: {TEXT};")
+            self._name_label.setStyleSheet(f"font-size: 13px; color: {TEXT};")
         elif self._state == "unavailable":
             self.setStyleSheet(self._card_style(CARD_BG, BORDER))
-            self._name_label.setStyleSheet(f"font-size: 12px; color: {TEXT_MUTED};")
+            self._name_label.setStyleSheet(f"font-size: 13px; color: {TEXT_MUTED};")
         else:
             self.setStyleSheet(self._card_style(CARD_BG, self._cat_color))
-            self._name_label.setStyleSheet(f"font-size: 12px; color: {TEXT};")
+            self._name_label.setStyleSheet(f"font-size: 13px; color: {TEXT};")
 
     def set_state(
         self,
@@ -177,7 +178,7 @@ class FormatChip(QWidget):
     def enterEvent(self, event: QEnterEvent) -> None:
         if self._state in ("available", "unavailable"):
             border = self._cat_color if self._state == "available" else BORDER
-            self.setStyleSheet(self._card_style(CARD_HOVER, border))
+            self.setStyleSheet(self._card_style(CHIP_HOVER_BG, border))
         super().enterEvent(event)
 
     def leaveEvent(self, event: QEvent) -> None:

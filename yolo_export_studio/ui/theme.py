@@ -27,4 +27,7 @@ CAT_COLORS = {
 
 RADIUS = 6
 
-SECTION_HEADER = f"font-size: 11px; font-weight: bold; color: {TEXT_MUTED}; padding: 2px 0;"
+CHIP_SELECTED_BG = "#eaf3fb"
+CHIP_HOVER_BG = "#f0f7ff"
+
+SECTION_HEADER = "font-size: 15px; font-weight: 600; color: #333333; padding: 4px 0;"

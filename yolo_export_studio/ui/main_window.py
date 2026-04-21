@@ -100,7 +100,7 @@ class MainWindow(QMainWindow):
         self._drop_zone = DropZone()
         left_layout.addWidget(self._drop_zone)
 
-        _tf = QLabel("TARGET FORMAT")
+        _tf = QLabel("Target Format")
         _tf.setStyleSheet(SECTION_HEADER)
         left_layout.addWidget(_tf)
         self._format_grid = FormatGrid()
@@ -114,14 +114,14 @@ class MainWindow(QMainWindow):
         right_layout.setContentsMargins(4, 8, 8, 8)
         right_layout.setSpacing(8)
 
-        _oh = QLabel("OPTIONS")
+        _oh = QLabel("Options")
         _oh.setStyleSheet(SECTION_HEADER)
         right_layout.addWidget(_oh)
         self._options_panel = OptionsPanel()
         self._options_panel.setFixedHeight(240)
         right_layout.addWidget(self._options_panel)
 
-        _dh = QLabel("DEPENDENCIES")
+        _dh = QLabel("Dependencies")
         _dh.setStyleSheet(SECTION_HEADER)
         right_layout.addWidget(_dh)
         self._dep_panel = DependencyPanel()
@@ -178,7 +178,7 @@ class MainWindow(QMainWindow):
         self._artifact_label.setVisible(False)
         right_layout.addWidget(self._artifact_label)
 
-        _lh = QLabel("LOG")
+        _lh = QLabel("Log")
         _lh.setStyleSheet(SECTION_HEADER)
         right_layout.addWidget(_lh)
         self._log_viewer = LogViewer()
