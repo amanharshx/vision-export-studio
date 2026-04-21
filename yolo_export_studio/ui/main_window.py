@@ -41,7 +41,6 @@ from yolo_export_studio.ui.process_controller import ProcessController
 from yolo_export_studio.ui.queue_panel import QueueEntry, QueuePanel
 
 
-
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
