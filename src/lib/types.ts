@@ -61,25 +61,21 @@ export interface ExportOptions {
 
 export type ExportStatus = "idle" | "running" | "finished" | "failed" | "cancelled";
 
-export interface ExportStartedPayload {
-  session_id: number;
-}
-
 export interface ExportLinePayload {
-  session_id: number;
+  session_id: string;
   line: string;
 }
 
 export interface ExportFinishedPayload {
-  session_id: number;
+  session_id: string;
   exit_code: number;
 }
 
 export interface ExportFailedPayload {
-  session_id: number;
+  session_id: string;
   error: string;
 }
 
 export interface ExportCancelledPayload {
-  session_id: number;
+  session_id: string;
 }

@@ -45,7 +45,7 @@ export function ExportWorkspace() {
   const [sourcePath, setSourcePath] = useState("");
 
   // Export session state
-  const [sessionId, setSessionId] = useState<number | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [exportStatus, setExportStatus] = useState<ExportStatus>("idle");
   const [logLines, setLogLines] = useState<string[]>([]);
   const [invokeError, setInvokeError] = useState<string | null>(null);
@@ -54,7 +54,7 @@ export function ExportWorkspace() {
   const [options, setOptions] = useState<ExportOptions>(defaultOptions);
 
   // Ref to current sessionId for use inside event listener closures
-  const sessionIdRef = useRef<number | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = sessionId;
 
   // Detect environment on mount

@@ -4,6 +4,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
+use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // State
@@ -11,8 +12,7 @@ use tauri::Emitter;
 
 #[derive(Default)]
 pub struct ExportState {
-    pub sessions: Arc<Mutex<HashMap<u64, Child>>>,
-    pub counter: Arc<Mutex<u64>>,
+    pub sessions: Arc<Mutex<HashMap<String, Child>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -20,31 +20,26 @@ pub struct ExportState {
 // ---------------------------------------------------------------------------
 
 #[derive(serde::Serialize, Clone)]
-struct ExportStartedPayload {
-    session_id: u64,
-}
-
-#[derive(serde::Serialize, Clone)]
 struct ExportLinePayload {
-    session_id: u64,
+    session_id: String,
     line: String,
 }
 
 #[derive(serde::Serialize, Clone)]
 struct ExportFinishedPayload {
-    session_id: u64,
+    session_id: String,
     exit_code: i32,
 }
 
 #[derive(serde::Serialize, Clone)]
 struct ExportFailedPayload {
-    session_id: u64,
+    session_id: String,
     error: String,
 }
 
 #[derive(serde::Serialize, Clone)]
 struct ExportCancelledPayload {
-    session_id: u64,
+    session_id: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -65,7 +60,7 @@ pub async fn start_export(
     half: bool,
     dynamic: bool,
     simplify: bool,
-) -> Result<u64, String> {
+) -> Result<String, String> {
     // ------------------------------------------------------------------
     // Validation
     // ------------------------------------------------------------------
@@ -97,14 +92,7 @@ pub async fn start_export(
     // ------------------------------------------------------------------
     // Assign session id
     // ------------------------------------------------------------------
-    let session_id = {
-        let mut counter = state
-            .counter
-            .lock()
-            .map_err(|e| format!("counter lock poisoned: {}", e))?;
-        *counter += 1;
-        *counter
-    };
+    let session_id = Uuid::new_v4().to_string();
 
     // ------------------------------------------------------------------
     // Build and spawn child process
@@ -151,13 +139,8 @@ pub async fn start_export(
             .sessions
             .lock()
             .map_err(|e| format!("sessions lock poisoned: {}", e))?;
-        sessions.insert(session_id, child);
+        sessions.insert(session_id.clone(), child);
     }
-
-    // Emit started event.
-    app_handle
-        .emit("export:started", ExportStartedPayload { session_id })
-        .map_err(|e| format!("emit error: {}", e))?;
 
     // ------------------------------------------------------------------
     // Streaming threads
@@ -166,6 +149,7 @@ pub async fn start_export(
 
     // stdout reader thread
     let ah_stdout = app_handle.clone();
+    let sid_stdout = session_id.clone();
     let stdout_handle = std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
@@ -174,7 +158,7 @@ pub async fn start_export(
                     let _ = ah_stdout.emit(
                         "export:stdout",
                         ExportLinePayload {
-                            session_id,
+                            session_id: sid_stdout.clone(),
                             line: l,
                         },
                     );
@@ -186,6 +170,7 @@ pub async fn start_export(
 
     // stderr reader thread
     let ah_stderr = app_handle.clone();
+    let sid_stderr = session_id.clone();
     let stderr_handle = std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
         for line in reader.lines() {
@@ -194,7 +179,7 @@ pub async fn start_export(
                     let _ = ah_stderr.emit(
                         "export:stderr",
                         ExportLinePayload {
-                            session_id,
+                            session_id: sid_stderr.clone(),
                             line: l,
                         },
                     );
@@ -206,6 +191,7 @@ pub async fn start_export(
 
     // waiter thread — joins both readers, then waits for the child process
     let ah_wait = app_handle.clone();
+    let sid_wait = session_id.clone();
     std::thread::spawn(move || {
         // Wait for both stream readers to finish.
         let _ = stdout_handle.join();
@@ -219,14 +205,14 @@ pub async fn start_export(
                     let _ = ah_wait.emit(
                         "export:failed",
                         ExportFailedPayload {
-                            session_id,
+                            session_id: sid_wait.clone(),
                             error: "sessions lock poisoned during wait".to_string(),
                         },
                     );
                     return;
                 }
             };
-            sessions.remove(&session_id)
+            sessions.remove(&sid_wait)
         };
 
         match child_opt {
@@ -240,7 +226,7 @@ pub async fn start_export(
                         let _ = ah_wait.emit(
                             "export:finished",
                             ExportFinishedPayload {
-                                session_id,
+                                session_id: sid_wait,
                                 exit_code: 0,
                             },
                         );
@@ -249,7 +235,7 @@ pub async fn start_export(
                         let _ = ah_wait.emit(
                             "export:failed",
                             ExportFailedPayload {
-                                session_id,
+                                session_id: sid_wait,
                                 error: format!("exit code: {}", code),
                             },
                         );
@@ -259,7 +245,7 @@ pub async fn start_export(
                     let _ = ah_wait.emit(
                         "export:failed",
                         ExportFailedPayload {
-                            session_id,
+                            session_id: sid_wait,
                             error: format!("wait error: {}", e),
                         },
                     );
@@ -279,25 +265,38 @@ pub async fn start_export(
 pub async fn cancel_export(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, ExportState>,
-    session_id: u64,
+    session_id: String,
 ) -> Result<bool, String> {
-    // Emit cancelled before killing so the frontend can transition state
-    // immediately rather than waiting for the process to die.
-    app_handle
-        .emit("export:cancelled", ExportCancelledPayload { session_id })
-        .map_err(|e| format!("emit error: {}", e))?;
+    // Acquire lock, remove the child atomically.
+    let child_opt = {
+        let mut sessions = state
+            .sessions
+            .lock()
+            .map_err(|e| format!("sessions lock poisoned: {}", e))?;
+        sessions.remove(&session_id)
+    };
 
-    let mut sessions = state
-        .sessions
-        .lock()
-        .map_err(|e| format!("sessions lock poisoned: {}", e))?;
-
-    match sessions.get_mut(&session_id) {
-        Some(child) => {
-            child.kill().map_err(|e| format!("kill failed: {}", e))?;
-            sessions.remove(&session_id);
+    match child_opt {
+        None => {
+            // Session not found — either already finished or unknown id.
+            // Do not emit; the waiter thread owns the terminal event in this case.
+            Ok(false)
+        }
+        Some(mut child) => {
+            // process is gone from registry regardless of kill result
+            // (succeeds: terminated; fails: already exited — goal satisfied either way)
+            let _ = child.kill();
+            // reap zombie; ignore wait errors (process may already be dead)
+            let _ = child.wait();
+            app_handle
+                .emit(
+                    "export:cancelled",
+                    ExportCancelledPayload {
+                        session_id: session_id.clone(),
+                    },
+                )
+                .map_err(|e| format!("emit error: {}", e))?;
             Ok(true)
         }
-        None => Ok(false),
     }
 }

@@ -12,10 +12,10 @@ export interface StartExportInput {
   simplify: boolean;
 }
 
-export async function startExport(input: StartExportInput): Promise<number> {
-  return invoke<number>("start_export", { ...input });
+export async function startExport(input: StartExportInput): Promise<string> {
+  return invoke<string>("start_export", { ...input });
 }
 
-export async function cancelExport(sessionId: number): Promise<boolean> {
+export async function cancelExport(sessionId: string): Promise<boolean> {
   return invoke<boolean>("cancel_export", { session_id: sessionId });
 }
