@@ -35,6 +35,17 @@ export interface RouteSpec {
   notes: string;
 }
 
+export type EnvironmentStatus = "ok" | "partial" | "missing" | "loading" | "error";
+
+export interface EnvironmentInfo {
+  python_path: string;
+  python_version: string;
+  ultralytics_version: string;
+  yolo_path: string;
+  status: EnvironmentStatus;
+  warnings: string[];
+}
+
 export interface ExportOptions {
   imgsz: number;
   batch: number;
