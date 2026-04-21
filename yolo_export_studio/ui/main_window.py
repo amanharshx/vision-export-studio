@@ -91,20 +91,28 @@ class MainWindow(QMainWindow):
         # --- Splitter ---
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Left panel
+        # Left panel — content centered with max width
         left = QWidget()
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(8, 8, 4, 8)
-        left_layout.setSpacing(8)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+
+        self._left_content = QWidget()
+        self._left_content.setMaximumWidth(700)
+        content_layout = QVBoxLayout(self._left_content)
+        content_layout.setContentsMargins(16, 16, 16, 16)
+        content_layout.setSpacing(12)
 
         self._drop_zone = DropZone()
-        left_layout.addWidget(self._drop_zone)
+        content_layout.addWidget(self._drop_zone)
 
-        _tf = QLabel("Target Format")
-        _tf.setStyleSheet(SECTION_HEADER)
-        left_layout.addWidget(_tf)
+        self._tf_label = QLabel("Target Format")
+        self._tf_label.setStyleSheet(SECTION_HEADER)
+        self._tf_label.setVisible(False)
+        content_layout.addWidget(self._tf_label)
         self._format_grid = FormatGrid()
-        left_layout.addWidget(self._format_grid, stretch=1)
+        content_layout.addWidget(self._format_grid, stretch=1)
+
+        left_layout.addWidget(self._left_content, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self._splitter.addWidget(left)
 
@@ -248,6 +256,8 @@ class MainWindow(QMainWindow):
             (route, provider.preflight(route, {})) for route in routes
         ]
         self._format_grid.set_routes(routes_with_checks)
+        self._tf_label.setVisible(True)
+        self._left_content.setMaximumWidth(16777215)  # remove max-width after file loaded
         self._options_panel.set_route(None)
         self._dep_panel.clear()
         self._log_viewer.clear()
