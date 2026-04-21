@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { formats } from "@/lib/routes";
-import type { ExportStatus, RouteSpec } from "@/lib/types";
+import type { ExportOptions, ExportStatus, RouteSpec } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Play, Square } from "lucide-react";
 import { DependencyPanel } from "./dependency-panel";
@@ -11,21 +11,13 @@ import { ExportLog } from "./export-log";
 import { OptionsPanel } from "./options-panel";
 import { categoryTone, routeBadges } from "./route-card";
 
-interface ExportPanelOptions {
-  imgsz: number;
-  batch: number;
-  half: boolean;
-  dynamic: boolean;
-  simplify: boolean;
-}
-
 interface RouteDetailsProps {
   route: RouteSpec;
   sourcePath: string;
   exportStatus: ExportStatus;
   logLines: string[];
-  options: ExportPanelOptions;
-  onOptionsChange: (options: ExportPanelOptions) => void;
+  options: ExportOptions;
+  onOptionsChange: (options: ExportOptions) => void;
   onExport: () => void;
   onCancel: () => void;
 }

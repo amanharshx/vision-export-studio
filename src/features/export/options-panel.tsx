@@ -1,24 +1,16 @@
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import type { RouteSpec } from "@/lib/types";
-
-interface ExportPanelOptions {
-  imgsz: number;
-  batch: number;
-  half: boolean;
-  dynamic: boolean;
-  simplify: boolean;
-}
+import type { ExportOptions, RouteSpec } from "@/lib/types";
 
 interface OptionsPanelProps {
   route: RouteSpec;
-  options: ExportPanelOptions;
-  onOptionsChange: (options: ExportPanelOptions) => void;
+  options: ExportOptions;
+  onOptionsChange: (options: ExportOptions) => void;
 }
 
 export function OptionsPanel({ route, options, onOptionsChange }: OptionsPanelProps) {
-  const set = <K extends keyof ExportPanelOptions>(key: K, value: ExportPanelOptions[K]) => {
+  const set = <K extends keyof ExportOptions>(key: K, value: ExportOptions[K]) => {
     onOptionsChange({ ...options, [key]: value });
   };
 
@@ -61,7 +53,7 @@ export function OptionsPanel({ route, options, onOptionsChange }: OptionsPanelPr
             ["FP16", "half", route.supportsHalf],
             ["Dynamic axes", "dynamic", route.supportsDynamic],
             ["Simplify graph", "simplify", route.targetFormat === "onnx"],
-          ] as [string, keyof ExportPanelOptions, boolean][]
+          ] as [string, keyof ExportOptions, boolean][]
         ).map(([label, key, enabled]) => (
           <div
             key={label}

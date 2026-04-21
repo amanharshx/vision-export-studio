@@ -8,6 +8,7 @@ import type {
   ExportFailedPayload,
   ExportFinishedPayload,
   ExportLinePayload,
+  ExportOptions,
   ExportStatus,
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
@@ -16,20 +17,17 @@ import { DropZone } from "./drop-zone";
 import { RouteDetails } from "./route-details";
 import { RouteGrid } from "./route-grid";
 
-interface ExportOptions {
-  imgsz: number;
-  batch: number;
-  half: boolean;
-  dynamic: boolean;
-  simplify: boolean;
-}
-
 const defaultOptions: ExportOptions = {
   imgsz: 640,
   batch: 1,
   half: false,
+  int8: false,
   dynamic: false,
   simplify: false,
+  nms: false,
+  opset: null,
+  data: "",
+  name: "",
 };
 
 export function ExportWorkspace() {
@@ -71,13 +69,6 @@ export function ExportWorkspace() {
     const unlisteners: Array<() => void> = [];
 
     const setup = async () => {
-      const ulStarted = await listen<{ session_id: number }>("export:started", (event) => {
-        if (event.payload.session_id === sessionIdRef.current) {
-          setExportStatus("running");
-        }
-      });
-      unlisteners.push(ulStarted);
-
       const ulStdout = await listen<ExportLinePayload>("export:stdout", (event) => {
         if (event.payload.session_id === sessionIdRef.current) {
           setLogLines((prev) => [...prev, "[stdout] " + event.payload.line]);
@@ -114,7 +105,9 @@ export function ExportWorkspace() {
       unlisteners.push(ulCancelled);
     };
 
-    setup().catch(console.error);
+    setup().catch((e: unknown) => {
+      setInvokeError("Failed to set up export listeners: " + String(e));
+    });
 
     return () => {
       for (const ul of unlisteners) ul();
@@ -154,7 +147,7 @@ export function ExportWorkspace() {
     try {
       await cancelExport(sessionId);
     } catch (e: unknown) {
-      console.error("cancel_export failed:", e);
+      setInvokeError("Cancel failed: " + String(e));
     }
   };
 

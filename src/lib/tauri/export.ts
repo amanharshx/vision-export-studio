@@ -13,7 +13,7 @@ export interface StartExportInput {
 }
 
 export async function startExport(input: StartExportInput): Promise<number> {
-  return invoke<number>("start_export", input as unknown as Record<string, unknown>);
+  return invoke<number>("start_export", { ...input });
 }
 
 export async function cancelExport(sessionId: number): Promise<boolean> {

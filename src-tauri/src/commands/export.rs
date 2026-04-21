@@ -73,12 +73,25 @@ pub async fn start_export(
         return Err(format!("source path does not exist: {}", source_path));
     }
 
+    if source_path.contains('=') {
+        return Err("source path must not contain '='".to_string());
+    }
+
     if route_id != "ultralytics.pt.onnx" {
         return Err(format!("route not supported in this build: {}", route_id));
     }
 
     if yolo_path.is_empty() || !Path::new(&yolo_path).exists() {
         return Err(format!("yolo not found at: {}", yolo_path));
+    }
+
+    if !output_dir.is_empty() {
+        if output_dir.contains('=') {
+            return Err("output dir must not contain '='".to_string());
+        }
+        if !Path::new(&output_dir).exists() {
+            return Err(format!("output dir does not exist: {}", output_dir));
+        }
     }
 
     // ------------------------------------------------------------------
