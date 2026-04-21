@@ -1,8 +1,10 @@
 import { EnvironmentStatus } from "@/features/environment/environment-status";
 import { detectEnvironment } from "@/lib/tauri/environment";
+import { checkDependencies } from "@/lib/tauri/deps";
 import { cancelExport, startExport } from "@/lib/tauri/export";
 import { defaultRoute, ultralyticsRoutes } from "@/lib/routes";
 import type {
+  DepCheckResult,
   EnvironmentInfo,
   ExportCancelledPayload,
   ExportFailedPayload,
@@ -53,6 +55,11 @@ export function ExportWorkspace() {
   // Export options
   const [options, setOptions] = useState<ExportOptions>(defaultOptions);
 
+  // Dependency check state
+  const [depResults, setDepResults] = useState<DepCheckResult[] | null>(null);
+  const [depCheckLoading, setDepCheckLoading] = useState(false);
+  const [depCheckError, setDepCheckError] = useState<string | null>(null);
+
   // Ref to current sessionId for use inside event listener closures
   const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = sessionId;
@@ -63,6 +70,41 @@ export function ExportWorkspace() {
       .then(setEnvInfo)
       .catch((e: unknown) => setEnvError(String(e)));
   }, []);
+
+  // Check dependencies whenever the selected route or resolved python path changes
+  useEffect(() => {
+    const pythonPath = envInfo?.python_path;
+    if (!pythonPath || !selectedRouteId) {
+      setDepResults(null);
+      return;
+    }
+
+    let cancelled = false;
+    setDepResults(null);
+    setDepCheckLoading(true);
+    setDepCheckError(null);
+
+    checkDependencies(selectedRouteId, pythonPath)
+      .then((response) => {
+        if (!cancelled) {
+          setDepResults(response.results);
+        }
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setDepCheckError(String(e));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setDepCheckLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRouteId, envInfo?.python_path]);
 
   // Set up event listeners; re-register when sessionId changes
   useEffect(() => {
@@ -184,6 +226,7 @@ export function ExportWorkspace() {
             onOptionsChange={setOptions}
             onExport={handleExport}
             onCancel={handleCancel}
+            depResults={depResults ?? undefined}
           />
         </section>
       </div>

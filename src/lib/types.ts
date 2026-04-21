@@ -79,3 +79,22 @@ export interface ExportFailedPayload {
 export interface ExportCancelledPayload {
   session_id: string;
 }
+
+export type DepCheckStatus =
+  | "ready"
+  | "missing_package"
+  | "missing_binary"
+  | "platform_unsupported"
+  | "warning"
+  | "unknown";
+
+export interface DepCheckResult {
+  item: string;
+  status: DepCheckStatus;
+  reason: string;
+  install_hint: string;
+}
+
+export interface DepCheckResponse {
+  results: DepCheckResult[];
+}

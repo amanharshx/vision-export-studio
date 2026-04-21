@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { formats } from "@/lib/routes";
-import type { ExportOptions, ExportStatus, RouteSpec } from "@/lib/types";
+import type { DepCheckResult, ExportOptions, ExportStatus, RouteSpec } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Play, Square } from "lucide-react";
 import { DependencyPanel } from "./dependency-panel";
@@ -20,6 +20,7 @@ interface RouteDetailsProps {
   onOptionsChange: (options: ExportOptions) => void;
   onExport: () => void;
   onCancel: () => void;
+  depResults?: DepCheckResult[];
 }
 
 export function RouteDetails({
@@ -31,6 +32,7 @@ export function RouteDetails({
   onOptionsChange,
   onExport,
   onCancel,
+  depResults,
 }: RouteDetailsProps) {
   const format = formats[route.targetFormat];
 
@@ -77,7 +79,7 @@ export function RouteDetails({
           <CardTitle className="text-lg text-zinc-950">Dependencies</CardTitle>
         </CardHeader>
         <CardContent>
-          <DependencyPanel route={route} />
+          <DependencyPanel route={route} depResults={depResults} />
         </CardContent>
       </Card>
 
