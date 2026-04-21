@@ -26,6 +26,8 @@ pub struct DepCheckResponse {
 struct PipDep {
     package_name: &'static str,
     install_hint: &'static str,
+    /// When true, a missing package emits status "warning" instead of "missing_package".
+    optional: bool,
 }
 
 struct SysDep {
@@ -46,10 +48,13 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
                 PipDep {
                     package_name: "onnx",
                     install_hint: "pip install onnx",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "onnxslim",
                     install_hint: "pip install onnxslim",
+                    // onnxslim is optional: the route note says "onnxslim optional"
+                    optional: true,
                 },
             ],
             sys: &[],
@@ -59,10 +64,12 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
                 PipDep {
                     package_name: "openvino",
                     install_hint: "pip install openvino",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "nncf",
                     install_hint: "pip install nncf",
+                    optional: false,
                 },
             ],
             sys: &[],
@@ -71,6 +78,7 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
             pip: &[PipDep {
                 package_name: "coremltools",
                 install_hint: "pip install coremltools",
+                optional: false,
             }],
             sys: &[],
         }),
@@ -79,10 +87,12 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
                 PipDep {
                     package_name: "ncnn",
                     install_hint: "pip install ncnn",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "pnnx",
                     install_hint: "pip install pnnx",
+                    optional: false,
                 },
             ],
             sys: &[],
@@ -92,10 +102,12 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
                 PipDep {
                     package_name: "MNN",
                     install_hint: "pip install MNN",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "onnx",
                     install_hint: "pip install onnx",
+                    optional: false,
                 },
             ],
             sys: &[],
@@ -105,18 +117,22 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
                 PipDep {
                     package_name: "tensorflow",
                     install_hint: "pip install tensorflow",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "onnx2tf",
                     install_hint: "pip install onnx2tf",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "onnx",
                     install_hint: "pip install onnx",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "onnxruntime",
                     install_hint: "pip install onnxruntime",
+                    optional: false,
                 },
             ],
             sys: &[],
@@ -125,6 +141,7 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
             pip: &[PipDep {
                 package_name: "tensorrt",
                 install_hint: "pip install tensorrt",
+                optional: false,
             }],
             sys: &[],
         }),
@@ -133,10 +150,12 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
                 PipDep {
                     package_name: "rknn-toolkit2",
                     install_hint: "pip install rknn-toolkit2",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "onnx",
                     install_hint: "pip install onnx",
+                    optional: false,
                 },
             ],
             sys: &[],
@@ -145,6 +164,7 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
             pip: &[PipDep {
                 package_name: "executorch",
                 install_hint: "pip install executorch",
+                optional: false,
             }],
             sys: &[],
         }),
@@ -153,18 +173,22 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
                 PipDep {
                     package_name: "tensorflow",
                     install_hint: "pip install tensorflow",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "onnx2tf",
                     install_hint: "pip install onnx2tf",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "onnx",
                     install_hint: "pip install onnx",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "onnxruntime",
                     install_hint: "pip install onnxruntime",
+                    optional: false,
                 },
             ],
             sys: &[SysDep {
@@ -177,22 +201,27 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
                 PipDep {
                     package_name: "tensorflow",
                     install_hint: "pip install tensorflow",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "onnx2tf",
                     install_hint: "pip install onnx2tf",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "onnx",
                     install_hint: "pip install onnx",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "onnxruntime",
                     install_hint: "pip install onnxruntime",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "tensorflowjs",
                     install_hint: "pip install tensorflowjs",
+                    optional: false,
                 },
             ],
             sys: &[SysDep {
@@ -205,10 +234,12 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
                 PipDep {
                     package_name: "paddlepaddle",
                     install_hint: "pip install paddlepaddle",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "x2paddle",
                     install_hint: "pip install x2paddle",
+                    optional: false,
                 },
             ],
             sys: &[],
@@ -218,14 +249,17 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
                 PipDep {
                     package_name: "model-compression-toolkit",
                     install_hint: "pip install model-compression-toolkit",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "sony-custom-layers",
                     install_hint: "pip install sony-custom-layers",
+                    optional: false,
                 },
                 PipDep {
                     package_name: "imx500-converter",
                     install_hint: "pip install imx500-converter",
+                    optional: false,
                 },
             ],
             sys: &[
@@ -243,6 +277,7 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
             pip: &[PipDep {
                 package_name: "axelera",
                 install_hint: "pip install axelera-devkit",
+                optional: false,
             }],
             sys: &[],
         }),
@@ -262,7 +297,6 @@ fn importable_name(package_name: &str) -> String {
         "model-compression-toolkit" => "model_compression_toolkit".to_string(),
         "sony-custom-layers" => "sony_custom_layers".to_string(),
         "imx500-converter" => "imx500_converter".to_string(),
-        "axelera-devkit" => "axelera".to_string(),
         // axelera is already the importable name used in routes.ts pipDeps
         "axelera" => "axelera".to_string(),
         // MNN preserves case
@@ -277,13 +311,21 @@ fn importable_name(package_name: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Run `python -c <code>` and return trimmed stdout.
-/// Returns Err only when the process cannot be spawned.
+/// Returns Err when the process cannot be spawned or exits with a non-zero status.
 fn probe(python: &str, code: &str) -> Result<String, String> {
     let output = Command::new(python)
         .arg("-c")
         .arg(code)
         .output()
-        .map_err(|e| format!("failed to spawn python probe: {}", e))?;
+        .map_err(|e| format!("failed to spawn probe: {}", e))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!(
+            "python probe exited {:?}: {}",
+            output.status.code(),
+            err
+        ));
+    }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
@@ -316,13 +358,23 @@ pub async fn check_dependencies(
 
     let mut results: Vec<DepCheckResult> = Vec::new();
 
-    // Always check ultralytics first.
-    let ultra_result = check_pip_dep(&python_path, "ultralytics", "pip install ultralytics");
+    // Always check ultralytics first (required, not optional).
+    let ultra_result = check_pip_dep(
+        &python_path,
+        "ultralytics",
+        "pip install ultralytics",
+        false,
+    );
     results.push(ultra_result);
 
     // Check route pip deps.
     for dep in deps.pip {
-        let result = check_pip_dep(&python_path, dep.package_name, dep.install_hint);
+        let result = check_pip_dep(
+            &python_path,
+            dep.package_name,
+            dep.install_hint,
+            dep.optional,
+        );
         results.push(result);
     }
 
@@ -339,7 +391,12 @@ pub async fn check_dependencies(
 // Per-dep check helpers
 // ---------------------------------------------------------------------------
 
-fn check_pip_dep(python: &str, package_name: &str, install_hint: &str) -> DepCheckResult {
+fn check_pip_dep(
+    python: &str,
+    package_name: &str,
+    install_hint: &str,
+    optional: bool,
+) -> DepCheckResult {
     let imp = importable_name(package_name);
     let code = format!(
         "import importlib.util; print(importlib.util.find_spec('{}') is not None)",
@@ -358,6 +415,13 @@ fn check_pip_dep(python: &str, package_name: &str, install_hint: &str) -> DepChe
                     item: package_name.to_string(),
                     status: "ready".to_string(),
                     reason: String::new(),
+                    install_hint: install_hint.to_string(),
+                }
+            } else if optional {
+                DepCheckResult {
+                    item: package_name.to_string(),
+                    status: "warning".to_string(),
+                    reason: "optional: improves model portability".to_string(),
                     install_hint: install_hint.to_string(),
                 }
             } else {

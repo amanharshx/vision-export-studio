@@ -80,6 +80,21 @@ export interface ExportCancelledPayload {
   session_id: string;
 }
 
+/**
+ * Status values emitted by the Rust check_dependencies command (DepCheckResult.status).
+ *
+ * Rust sends this as a plain String field, so the union here documents the contract.
+ *
+ * Currently emitted by Rust:
+ *   "ready"           — dependency found
+ *   "missing_package" — pip package absent (hard required)
+ *   "missing_binary"  — system binary absent on PATH
+ *   "warning"         — optional dep absent; export will still work
+ *   "unknown"         — probe could not run (python crashed / spawn failed)
+ *
+ * Reserved for Phase 5 platform gating (not yet emitted by Rust):
+ *   "platform_unsupported" — route is locked to a platform the user is not on
+ */
 export type DepCheckStatus =
   | "ready"
   | "missing_package"

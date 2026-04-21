@@ -21,6 +21,8 @@ interface RouteDetailsProps {
   onExport: () => void;
   onCancel: () => void;
   depResults?: DepCheckResult[];
+  depCheckLoading?: boolean;
+  depCheckError?: string | null;
 }
 
 export function RouteDetails({
@@ -33,6 +35,8 @@ export function RouteDetails({
   onExport,
   onCancel,
   depResults,
+  depCheckLoading,
+  depCheckError,
 }: RouteDetailsProps) {
   const format = formats[route.targetFormat];
 
@@ -79,7 +83,12 @@ export function RouteDetails({
           <CardTitle className="text-lg text-zinc-950">Dependencies</CardTitle>
         </CardHeader>
         <CardContent>
-          <DependencyPanel route={route} depResults={depResults} />
+          <DependencyPanel
+            route={route}
+            depResults={depResults}
+            depCheckLoading={depCheckLoading}
+            depCheckError={depCheckError}
+          />
         </CardContent>
       </Card>
 

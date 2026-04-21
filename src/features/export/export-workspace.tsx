@@ -227,6 +227,8 @@ export function ExportWorkspace() {
             onExport={handleExport}
             onCancel={handleCancel}
             depResults={depResults ?? undefined}
+            depCheckLoading={depCheckLoading}
+            depCheckError={depCheckError}
           />
         </section>
       </div>
