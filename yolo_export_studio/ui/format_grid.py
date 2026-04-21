@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from PySide6.QtCore import QRect, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QEnterEvent, QMouseEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -180,7 +180,7 @@ class FormatChip(QWidget):
             self.setStyleSheet(self._card_style(CARD_HOVER, border))
         super().enterEvent(event)
 
-    def leaveEvent(self, event) -> None:
+    def leaveEvent(self, event: QEvent) -> None:
         if self._state in ("available", "unavailable"):
             self._apply_style()
         super().leaveEvent(event)
@@ -259,7 +259,7 @@ class FormatGrid(QWidget):
         for card in self._cards:
             if card._route is route:
                 self._activate_card(card)
-            elif card._state in ("available", "selected"):
+            elif card._state == "selected":
                 card.set_state("available")
             elif card._state == "unavailable_selected":
                 card.set_state("unavailable")
