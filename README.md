@@ -26,7 +26,7 @@ Ultralytics `yolo export` CLI as export engine
 Bun for all JavaScript package tasks
 ```
 
-Python remains in this branch only for route metadata and legacy worker reference while v2 reaches parity.
+Python is invoked at runtime only via the user's environment through `yolo export`.
 
 ## Architecture
 
@@ -47,7 +47,7 @@ React must not spawn shell commands directly. The Rust layer owns subprocess han
 
 ## Supported Initial Routes
 
-Route metadata is migrated from `yolo_export_studio/providers/ultralytics.py` into `src/lib/routes.ts`.
+`src/lib/routes.ts` is the sole route metadata source.
 
 | Target | Notes |
 |---|---|
@@ -107,12 +107,8 @@ src/
   components/ui/          shadcn components
   features/export/        export workspace UI
   features/environment/   Python/yolo status UI
-  lib/routes.ts           temporary TS route metadata
+  lib/routes.ts           route metadata
   lib/types.ts            shared frontend types
 src-tauri/
   src/                    Tauri v2 Rust entry and future commands
-yolo_export_studio/
-  core/                   legacy route/preflight/job models, temporary reference
-  providers/              legacy Ultralytics metadata, temporary reference
-  workers/                legacy worker, temporary reference
 ```
