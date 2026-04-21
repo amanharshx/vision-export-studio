@@ -39,7 +39,7 @@ function buildItems(
       loadError.length > 40 ? loadError.slice(0, 40) + "…" : loadError;
     return [
       { label: "Python", value: truncated, status: "error" },
-      { label: "YOLO CLI", value: truncated, status: "error" },
+      { label: "YOLO CLI", value: "—", status: "loading" },
       { label: "Backend", value: "Tauri v2", status: "ok" },
     ];
   }
@@ -72,7 +72,7 @@ function buildItems(
       value: env.yolo_path || "Not found",
       status: yoloStatus,
     },
-    { label: "Backend", value: "Tauri v2", status: "ok" },
+    { label: "Backend", value: "Tauri v2", status: env.status },
   ];
 }
 
@@ -89,28 +89,39 @@ export function EnvironmentStatus() {
   const items = buildItems(envInfo, loadError);
 
   return (
-    <div className="grid min-w-[280px] grid-cols-1 gap-2 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
-      {items.map((item) => {
-        const Icon = statusIcon(item.status);
-        return (
-          <Card
-            key={item.label}
-            className="border-zinc-900/10 bg-white/75 py-3 shadow-sm"
-          >
-            <CardContent className="flex items-center gap-3 px-3">
-              <span className="flex size-9 items-center justify-center rounded-md bg-zinc-950 text-white">
-                <Icon className="size-4" aria-hidden="true" />
-              </span>
-              <span>
-                <span className="block text-xs text-zinc-500">{item.label}</span>
-                <span className="block text-sm font-medium text-zinc-950">
-                  {item.value}
+    <div>
+      <div className="grid min-w-[280px] grid-cols-1 gap-2 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
+        {items.map((item) => {
+          const Icon = statusIcon(item.status);
+          return (
+            <Card
+              key={item.label}
+              className="border-zinc-900/10 bg-white/75 py-3 shadow-sm"
+            >
+              <CardContent className="flex items-center gap-3 px-3">
+                <span className="flex size-9 items-center justify-center rounded-md bg-zinc-950 text-white">
+                  <Icon className="size-4" aria-hidden="true" />
                 </span>
-              </span>
-            </CardContent>
-          </Card>
-        );
-      })}
+                <span>
+                  <span className="block text-xs text-zinc-500">{item.label}</span>
+                  <span className="block text-sm font-medium text-zinc-950">
+                    {item.value}
+                  </span>
+                </span>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+      {envInfo && envInfo.warnings.length > 0 && (
+        <ul className="mt-1 space-y-0.5">
+          {envInfo.warnings.map((w, i) => (
+            <li key={i} className="text-xs text-amber-600">
+              {w}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

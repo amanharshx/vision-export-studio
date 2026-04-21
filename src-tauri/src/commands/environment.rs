@@ -1,4 +1,13 @@
+use std::path::Path;
 use std::process::Command;
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DetectionStatus {
+    Ok,
+    Partial,
+    Missing,
+}
 
 #[derive(serde::Serialize)]
 pub struct EnvironmentInfo {
@@ -6,7 +15,7 @@ pub struct EnvironmentInfo {
     pub python_version: String,
     pub ultralytics_version: String,
     pub yolo_path: String,
-    pub status: String,
+    pub status: DetectionStatus,
     pub warnings: Vec<String>,
 }
 
@@ -33,6 +42,13 @@ fn run(argv: &[&str]) -> Result<(String, String, bool), String> {
 /// Otherwise try "python3" then "python", picking the first that responds to --version.
 fn resolve_python(python_path: Option<&str>) -> Result<String, String> {
     if let Some(path) = python_path {
+        // If the caller supplied an explicit filesystem path (contains a separator),
+        // verify it exists before spawning — avoids misleading spawn errors.
+        if path.contains('/') || path.contains('\\') {
+            if !Path::new(path).exists() {
+                return Err(format!("Python path does not exist: {}", path));
+            }
+        }
         // Validate the provided path by running --version.
         run(&[path, "--version"])
             .map_err(|e| format!("provided python path is not executable: {}", e))?;
@@ -40,7 +56,7 @@ fn resolve_python(python_path: Option<&str>) -> Result<String, String> {
     }
 
     for candidate in &["python3", "python"] {
-        if let Ok(_) = run(&[candidate, "--version"]) {
+        if run(&[candidate, "--version"]).is_ok() {
             return Ok(candidate.to_string());
         }
     }
@@ -49,7 +65,7 @@ fn resolve_python(python_path: Option<&str>) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn detect_environment(python_path: Option<String>) -> Result<EnvironmentInfo, String> {
+pub async fn detect_environment(python_path: Option<String>) -> Result<EnvironmentInfo, String> {
     let mut warnings: Vec<String> = Vec::new();
 
     // Step 1: resolve the Python executable.
@@ -114,11 +130,11 @@ pub fn detect_environment(python_path: Option<String>) -> Result<EnvironmentInfo
 
     // Step 5: derive status.
     let status = if python_version.is_empty() {
-        "missing".to_string()
+        DetectionStatus::Missing
     } else if !ultralytics_version.is_empty() && !yolo_path.is_empty() {
-        "ok".to_string()
+        DetectionStatus::Ok
     } else {
-        "partial".to_string()
+        DetectionStatus::Partial
     };
 
     Ok(EnvironmentInfo {
