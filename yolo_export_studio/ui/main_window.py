@@ -33,6 +33,7 @@ from yolo_export_studio.core.providers import ExportProvider, get_provider
 from yolo_export_studio.core.routes import Route
 from yolo_export_studio.ui.dependency_panel import DependencyPanel, _is_pip_install
 from yolo_export_studio.ui.drop_zone import DropZone
+from yolo_export_studio.ui.theme import ACCENT, RADIUS, RED, SECTION_HEADER, TEXT_DIM
 from yolo_export_studio.ui.format_grid import FormatGrid
 from yolo_export_studio.ui.log_viewer import LogViewer
 from yolo_export_studio.ui.options_panel import OptionsPanel
@@ -113,14 +114,11 @@ class MainWindow(QMainWindow):
         left_layout.setSpacing(8)
 
         self._drop_zone = DropZone()
-        self._drop_zone.setFixedHeight(120)
         left_layout.addWidget(self._drop_zone)
 
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.Shape.HLine)
-        left_layout.addWidget(sep1)
-
-        left_layout.addWidget(QLabel("Target Format"))
+        _tf = QLabel("TARGET FORMAT")
+        _tf.setStyleSheet(SECTION_HEADER)
+        left_layout.addWidget(_tf)
         self._format_grid = FormatGrid()
         left_layout.addWidget(self._format_grid, stretch=1)
 
@@ -132,16 +130,16 @@ class MainWindow(QMainWindow):
         right_layout.setContentsMargins(4, 8, 8, 8)
         right_layout.setSpacing(8)
 
-        right_layout.addWidget(QLabel("Options"))
+        _oh = QLabel("OPTIONS")
+        _oh.setStyleSheet(SECTION_HEADER)
+        right_layout.addWidget(_oh)
         self._options_panel = OptionsPanel()
         self._options_panel.setFixedHeight(240)
         right_layout.addWidget(self._options_panel)
 
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.Shape.HLine)
-        right_layout.addWidget(sep2)
-
-        right_layout.addWidget(QLabel("Dependencies"))
+        _dh = QLabel("DEPENDENCIES")
+        _dh.setStyleSheet(SECTION_HEADER)
+        right_layout.addWidget(_dh)
         self._dep_panel = DependencyPanel()
         self._dep_panel.setFixedHeight(160)
         right_layout.addWidget(self._dep_panel)
@@ -149,15 +147,17 @@ class MainWindow(QMainWindow):
         self._queue_panel = QueuePanel()
         right_layout.addWidget(self._queue_panel)
 
-        sep3 = QFrame()
-        sep3.setFrameShape(QFrame.Shape.HLine)
-        right_layout.addWidget(sep3)
-
         # Action buttons
         btn_row = QHBoxLayout()
         self._convert_btn = QPushButton("Convert")
         self._convert_btn.setEnabled(False)
         self._convert_btn.setFixedHeight(32)
+        self._convert_btn.setStyleSheet(
+            f"QPushButton {{ background: {ACCENT}; color: white; font-weight: bold; "
+            f"border: none; border-radius: {RADIUS}px; }}"
+            f"QPushButton:disabled {{ background: #333; color: {TEXT_DIM}; }}"
+            f"QPushButton:hover:enabled {{ background: #3498db; }}"
+        )
         btn_row.addWidget(self._convert_btn)
 
         self._add_queue_btn = QPushButton("Add to Queue")
@@ -168,6 +168,9 @@ class MainWindow(QMainWindow):
         self._cancel_btn = QPushButton("Cancel")
         self._cancel_btn.setEnabled(False)
         self._cancel_btn.setFixedHeight(32)
+        self._cancel_btn.setStyleSheet(
+            f"QPushButton:enabled {{ color: {RED}; }}"
+        )
         btn_row.addWidget(self._cancel_btn)
 
         self._open_btn = QPushButton("Open Output Folder")
@@ -179,17 +182,21 @@ class MainWindow(QMainWindow):
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(0)
+        self._progress_bar.setFixedHeight(6)
+        self._progress_bar.setTextVisible(False)
+        self._progress_bar.setStyleSheet(
+            f"QProgressBar {{ border: none; background: #333; border-radius: 3px; }}"
+            f"QProgressBar::chunk {{ background: {ACCENT}; border-radius: 3px; }}"
+        )
         right_layout.addWidget(self._progress_bar)
 
         self._artifact_label = QLabel("")
         self._artifact_label.setVisible(False)
         right_layout.addWidget(self._artifact_label)
 
-        sep4 = QFrame()
-        sep4.setFrameShape(QFrame.Shape.HLine)
-        right_layout.addWidget(sep4)
-
-        right_layout.addWidget(QLabel("Log"))
+        _lh = QLabel("LOG")
+        _lh.setStyleSheet(SECTION_HEADER)
+        right_layout.addWidget(_lh)
         self._log_viewer = LogViewer()
         right_layout.addWidget(self._log_viewer, stretch=1)
 

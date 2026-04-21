@@ -125,14 +125,14 @@ class _CheckRow(QWidget):
         layout.setSpacing(6)
 
         if check.ok:
-            icon_text, icon_color = "[OK]", "#27ae60"
+            icon_text, icon_color = "●", "#27ae60"
         elif check.status == "warning":
-            icon_text, icon_color = "[!]", "#f39c12"
+            icon_text, icon_color = "●", "#f39c12"
         else:
-            icon_text, icon_color = "[x]", "#c0392b"
+            icon_text, icon_color = "●", "#c0392b"
 
         icon_label = QLabel(icon_text)
-        icon_label.setStyleSheet(f"color: {icon_color}; font-weight: bold; min-width: 32px;")
+        icon_label.setStyleSheet(f"color: {icon_color}; font-size: 14px; min-width: 16px;")
         layout.addWidget(icon_label)
 
         text = check.item
