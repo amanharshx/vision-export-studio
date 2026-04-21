@@ -30,6 +30,7 @@ export interface RouteSpec {
   supportsInt8: boolean;
   supportsDynamic: boolean;
   needsCalibration: boolean;
+  calibrationMode?: "never" | "when_int8" | "always";
   oneWay: boolean;
   lossy: boolean;
   notes: string;

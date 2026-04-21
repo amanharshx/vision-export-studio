@@ -74,34 +74,39 @@ export function OptionsPanel({ route, options, onOptionsChange }: OptionsPanelPr
         ))}
       </div>
 
-      {route.needsCalibration && (!route.supportsInt8 || options.int8) && (
-        <div className="grid gap-2">
-          <Label>Calibration dataset</Label>
-          <div className="flex gap-2">
-            <Input
-              readOnly
-              value={options.data || ""}
-              placeholder="No dataset selected"
-              className="flex-1"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              onClick={async () => {
-                const result = await openCalibrationDataPicker();
-                if (result !== null) set("data", result);
-              }}
-            >
-              Browse
-            </Button>
+      {(() => {
+        const showCalibration =
+          route.calibrationMode === "always" ||
+          (route.calibrationMode === "when_int8" && options.int8);
+        return showCalibration ? (
+          <div className="grid gap-2">
+            <Label>Calibration dataset</Label>
+            <div className="flex gap-2">
+              <Input
+                readOnly
+                value={options.data || ""}
+                placeholder="No dataset selected"
+                className="flex-1"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={async () => {
+                  const result = await openCalibrationDataPicker();
+                  if (result !== null) set("data", result);
+                }}
+              >
+                Browse
+              </Button>
+            </div>
+            {!options.data && (
+              <p className="text-xs text-destructive">
+                Calibration dataset required for this export route.
+              </p>
+            )}
           </div>
-          {!options.data && (
-            <p className="text-xs text-destructive">
-              Calibration dataset required for this export route.
-            </p>
-          )}
-        </div>
-      )}
+        ) : null;
+      })()}
     </div>
   );
 }

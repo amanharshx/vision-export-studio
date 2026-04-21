@@ -235,6 +235,7 @@ export const ultralyticsRoutes: RouteSpec[] = [
     supportsInt8: true,
     supportsDynamic: true,
     needsCalibration: true,
+    calibrationMode: "when_int8",
     notes: "Direct PyTorch → OpenVINO IR. INT8 requires nncf + calibration data.",
   }),
   route({
@@ -295,6 +296,7 @@ export const ultralyticsRoutes: RouteSpec[] = [
     oneWay: true,
     lossy: true,
     needsCalibration: true,
+    calibrationMode: "when_int8",
     notes: "EdgeTPU / mobile deployment. Multi-step pipeline. One-way, lossy. INT8 requires calibration data.",
   }),
   route({
@@ -310,6 +312,7 @@ export const ultralyticsRoutes: RouteSpec[] = [
     oneWay: true,
     lossy: true,
     needsCalibration: true,
+    calibrationMode: "when_int8",
     notes: "TensorRT engine. NVIDIA GPU required. One-way, platform-locked at runtime. INT8 requires calibration dataset.",
   }),
   route({
@@ -352,6 +355,7 @@ export const ultralyticsRoutes: RouteSpec[] = [
     oneWay: true,
     lossy: true,
     needsCalibration: true,
+    calibrationMode: "always",
     notes: "Google Coral hardware only. Full-integer quantisation forced. Linux x86_64 and edgetpu_compiler binary required.",
   }),
   route({
@@ -371,6 +375,7 @@ export const ultralyticsRoutes: RouteSpec[] = [
     supportsHalf: true,
     supportsInt8: true,
     needsCalibration: true,
+    calibrationMode: "when_int8",
     notes: "Browser/Node.js deployment. tensorflowjs_converter binary installed via pip install tensorflowjs. INT8 requires calibration data.",
   }),
   route({
@@ -404,6 +409,7 @@ export const ultralyticsRoutes: RouteSpec[] = [
     oneWay: true,
     lossy: true,
     needsCalibration: true,
+    calibrationMode: "always",
     notes: "Sony IMX500 AI sensor. Linux only. int8 forced True. Java >= 17 required. Calibration always required.",
   }),
   route({
@@ -417,6 +423,7 @@ export const ultralyticsRoutes: RouteSpec[] = [
     oneWay: true,
     lossy: true,
     needsCalibration: true,
+    calibrationMode: "always",
     notes: "Axelera Metis AIPU binary. Linux only. Calibration required. Requires torch >= 2.8.",
   }),
 ];
