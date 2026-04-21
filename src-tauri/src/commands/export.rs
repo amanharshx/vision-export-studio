@@ -73,9 +73,32 @@ pub async fn start_export(
         return Err("source path must not contain '='".to_string());
     }
 
-    if route_id != "ultralytics.pt.onnx" {
+    const VALID_ROUTE_IDS: &[&str] = &[
+        "ultralytics.pt.torchscript",
+        "ultralytics.pt.onnx",
+        "ultralytics.pt.openvino",
+        "ultralytics.pt.coreml",
+        "ultralytics.pt.ncnn",
+        "ultralytics.pt.mnn",
+        "ultralytics.pt.tflite",
+        "ultralytics.pt.engine",
+        "ultralytics.pt.rknn",
+        "ultralytics.pt.executorch",
+        "ultralytics.pt.edgetpu",
+        "ultralytics.pt.tfjs",
+        "ultralytics.pt.paddle",
+        "ultralytics.pt.imx",
+        "ultralytics.pt.axelera",
+    ];
+
+    if !VALID_ROUTE_IDS.contains(&route_id.as_str()) {
         return Err(format!("route not supported in this build: {}", route_id));
     }
+
+    let yolo_format = route_id
+        .strip_prefix("ultralytics.pt.")
+        .expect("route_id prefix validated above")
+        .to_string();
 
     if yolo_path.is_empty() || !Path::new(&yolo_path).exists() {
         return Err(format!("yolo not found at: {}", yolo_path));
@@ -101,7 +124,7 @@ pub async fn start_export(
     let mut cmd = Command::new(&yolo_path);
     cmd.arg("export");
     cmd.arg(format!("model={}", source_path));
-    cmd.arg("format=onnx");
+    cmd.arg(format!("format={}", yolo_format));
     cmd.arg(format!("imgsz={}", imgsz));
     cmd.arg(format!("batch={}", batch));
     if half {
