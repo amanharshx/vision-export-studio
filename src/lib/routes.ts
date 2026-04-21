@@ -369,7 +369,7 @@ export const ultralyticsRoutes: RouteSpec[] = [
     intermediates: ["onnx", "saved_model", "pb"],
     supportsHalf: true,
     supportsInt8: true,
-    notes: "Browser/Node.js deployment. tensorflowjs_converter binary installed via pip.",
+    notes: "Browser/Node.js deployment. tensorflowjs_converter binary installed via pip install tensorflowjs.",
   }),
   route({
     id: "ultralytics.pt.paddle",
