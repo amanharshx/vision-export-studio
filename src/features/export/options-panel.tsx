@@ -51,6 +51,7 @@ export function OptionsPanel({ route, options, onOptionsChange }: OptionsPanelPr
         {(
           [
             ["FP16", "half", route.supportsHalf],
+            ["INT8", "int8", route.supportsInt8],
             ["Dynamic axes", "dynamic", route.supportsDynamic],
             ["Simplify graph", "simplify", route.targetFormat === "onnx"],
           ] as [string, keyof ExportOptions, boolean][]

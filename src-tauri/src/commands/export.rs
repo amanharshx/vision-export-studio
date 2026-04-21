@@ -58,6 +58,7 @@ pub async fn start_export(
     imgsz: u32,
     batch: u32,
     half: bool,
+    int8: bool,
     dynamic: bool,
     simplify: bool,
 ) -> Result<String, String> {
@@ -105,6 +106,9 @@ pub async fn start_export(
     cmd.arg(format!("batch={}", batch));
     if half {
         cmd.arg("half=True");
+    }
+    if int8 {
+        cmd.arg("int8=True");
     }
     if dynamic {
         cmd.arg("dynamic=True");

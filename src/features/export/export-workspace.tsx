@@ -173,6 +173,7 @@ export function ExportWorkspace() {
         imgsz: options.imgsz,
         batch: options.batch,
         half: options.half,
+        int8: options.int8,
         dynamic: options.dynamic,
         simplify: options.simplify,
       });

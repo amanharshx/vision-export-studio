@@ -8,6 +8,7 @@ export interface StartExportInput {
   imgsz: number;
   batch: number;
   half: boolean;
+  int8: boolean;
   dynamic: boolean;
   simplify: boolean;
 }
