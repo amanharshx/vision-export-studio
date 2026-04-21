@@ -89,7 +89,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(browse_interp_btn)
 
         # --- Splitter ---
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Left panel
         left = QWidget()
@@ -106,11 +106,11 @@ class MainWindow(QMainWindow):
         self._format_grid = FormatGrid()
         left_layout.addWidget(self._format_grid, stretch=1)
 
-        splitter.addWidget(left)
+        self._splitter.addWidget(left)
 
         # Right panel
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
+        self._right_panel = QWidget()
+        right_layout = QVBoxLayout(self._right_panel)
         right_layout.setContentsMargins(4, 8, 8, 8)
         right_layout.setSpacing(8)
 
@@ -184,8 +184,9 @@ class MainWindow(QMainWindow):
         self._log_viewer = LogViewer()
         right_layout.addWidget(self._log_viewer, stretch=1)
 
-        splitter.addWidget(right)
-        splitter.setSizes([480, 720])
+        self._splitter.addWidget(self._right_panel)
+        self._splitter.setSizes([480, 720])
+        self._right_panel.setVisible(False)
 
         # --- Central widget ---
         central = QWidget()
@@ -198,7 +199,7 @@ class MainWindow(QMainWindow):
         sep_top.setFrameShape(QFrame.Shape.HLine)
         main_layout.addWidget(sep_top)
 
-        main_layout.addWidget(splitter, stretch=1)
+        main_layout.addWidget(self._splitter, stretch=1)
         self.setCentralWidget(central)
 
         QApplication.instance().setStyleSheet(
@@ -256,8 +257,12 @@ class MainWindow(QMainWindow):
         self._convert_btn.setEnabled(False)
         self._add_queue_btn.setEnabled(False)
         self._open_btn.setEnabled(False)
+        self._right_panel.setVisible(False)
 
     def _on_route_selected(self, route: Route) -> None:
+        if not self._right_panel.isVisible():
+            self._right_panel.setVisible(True)
+            self._splitter.setSizes([480, 720])
         self._selected_route = route
         self._options_panel.set_route(route)
         checks = self._provider.preflight(route, self._options_panel.get_options())
