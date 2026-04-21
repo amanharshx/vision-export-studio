@@ -1,6 +1,8 @@
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { openCalibrationDataPicker } from "@/lib/tauri/dialog";
 import type { ExportOptions, RouteSpec } from "@/lib/types";
 
 interface OptionsPanelProps {
@@ -71,6 +73,35 @@ export function OptionsPanel({ route, options, onOptionsChange }: OptionsPanelPr
           </div>
         ))}
       </div>
+
+      {route.needsCalibration && options.int8 && (
+        <div className="grid gap-2">
+          <Label>Calibration dataset</Label>
+          <div className="flex gap-2">
+            <Input
+              readOnly
+              value={options.data || ""}
+              placeholder="No dataset selected"
+              className="flex-1"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={async () => {
+                const result = await openCalibrationDataPicker();
+                if (result !== null) set("data", result);
+              }}
+            >
+              Browse
+            </Button>
+          </div>
+          {!options.data && (
+            <p className="text-xs text-destructive">
+              Calibration dataset required to export with INT8.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

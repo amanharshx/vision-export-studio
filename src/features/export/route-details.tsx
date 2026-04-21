@@ -40,7 +40,8 @@ export function RouteDetails({
 }: RouteDetailsProps) {
   const format = formats[route.targetFormat];
 
-  const exportDisabled = exportStatus === "running" || !sourcePath;
+  const calibrationRequired = route.needsCalibration && options.int8 && !options.data;
+  const exportDisabled = exportStatus === "running" || !sourcePath || calibrationRequired;
   const cancelDisabled = exportStatus !== "running";
 
   return (

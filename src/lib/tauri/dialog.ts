@@ -10,3 +10,12 @@ export async function openModelFilePicker(): Promise<string | null> {
   if (typeof result === "string") return result;
   return null;
 }
+
+export async function openCalibrationDataPicker(): Promise<string | null> {
+  const result = await open({
+    multiple: false,
+    directory: false,
+    filters: [{ name: "Dataset YAML", extensions: ["yaml", "yml"] }],
+  });
+  return typeof result === "string" ? result : null;
+}

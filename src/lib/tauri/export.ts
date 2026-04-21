@@ -11,6 +11,7 @@ export interface StartExportInput {
   int8: boolean;
   dynamic: boolean;
   simplify: boolean;
+  data?: string;
 }
 
 export async function startExport(input: StartExportInput): Promise<string> {

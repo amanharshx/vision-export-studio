@@ -61,6 +61,7 @@ pub async fn start_export(
     int8: bool,
     dynamic: bool,
     simplify: bool,
+    data: String,
 ) -> Result<String, String> {
     // ------------------------------------------------------------------
     // Validation
@@ -72,6 +73,15 @@ pub async fn start_export(
     if source_path.contains('=') {
         return Err("source path must not contain '='".to_string());
     }
+
+    const CALIBRATION_ROUTES: &[&str] = &[
+        "ultralytics.pt.openvino",
+        "ultralytics.pt.tflite",
+        "ultralytics.pt.engine",
+        "ultralytics.pt.tfjs",
+        "ultralytics.pt.imx",
+        "ultralytics.pt.axelera",
+    ];
 
     const VALID_ROUTE_IDS: &[&str] = &[
         "ultralytics.pt.torchscript",
@@ -113,6 +123,13 @@ pub async fn start_export(
         }
     }
 
+    if int8 && data.trim().is_empty() && CALIBRATION_ROUTES.contains(&route_id.as_str()) {
+        return Err("INT8 quantisation requires a calibration dataset (data= path)".to_string());
+    }
+    if !data.is_empty() && data.contains('=') {
+        return Err("calibration data path must not contain '='".to_string());
+    }
+
     // ------------------------------------------------------------------
     // Assign session id
     // ------------------------------------------------------------------
@@ -138,6 +155,9 @@ pub async fn start_export(
     }
     if simplify {
         cmd.arg("simplify=True");
+    }
+    if !data.trim().is_empty() {
+        cmd.arg(format!("data={}", data.trim()));
     }
     if !output_dir.is_empty() {
         cmd.arg(format!("project={}", output_dir));

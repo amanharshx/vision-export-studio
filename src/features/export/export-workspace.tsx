@@ -176,6 +176,7 @@ export function ExportWorkspace() {
         int8: options.int8,
         dynamic: options.dynamic,
         simplify: options.simplify,
+        data: options.data,
       });
       setSessionId(id);
       setExportStatus("running");
