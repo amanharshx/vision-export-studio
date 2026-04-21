@@ -120,6 +120,7 @@ class FormatChip(QWidget):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("fchip")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._route = route
         self._state: Literal["available", "unavailable", "unavailable_selected", "selected"] = "available"
         self._unavailable_reason: str = ""
