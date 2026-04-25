@@ -6,7 +6,7 @@ export function checkDependencies(
   pythonPath: string,
 ): Promise<DepCheckResponse> {
   return invoke<DepCheckResponse>("check_dependencies", {
-    route_id: routeId,
-    python_path: pythonPath,
+    routeId,
+    pythonPath,
   });
 }

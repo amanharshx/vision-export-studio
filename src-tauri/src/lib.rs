@@ -22,6 +22,7 @@ pub fn run() {
             commands::environment::detect_environment,
             commands::export::start_export,
             commands::export::cancel_export,
+            commands::gpu::list_gpus,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

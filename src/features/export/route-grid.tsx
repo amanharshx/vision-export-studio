@@ -1,28 +1,38 @@
 import { ultralyticsRoutes } from "@/lib/routes";
-import { RouteCard } from "./route-card";
+import { getOS, isCompatible, OS_LABEL } from "@/lib/platform";
+import { RouteRow } from "./route-card";
+
+const os = getOS();
 
 interface RouteGridProps {
-  selectedRouteId: string;
   onSelectRoute: (routeId: string) => void;
 }
 
-export function RouteGrid({ selectedRouteId, onSelectRoute }: RouteGridProps) {
+export function RouteGrid({ onSelectRoute }: RouteGridProps) {
+  const compatible = ultralyticsRoutes.filter((r) => isCompatible(r.platformLock, os));
+  const incompatible = ultralyticsRoutes.filter((r) => !isCompatible(r.platformLock, os));
+
   return (
-    <section className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-xl font-semibold text-zinc-950">Targets</h2>
-        <span className="text-sm text-zinc-600">{ultralyticsRoutes.length} routes</span>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {ultralyticsRoutes.map((route) => (
-          <RouteCard
-            key={route.id}
-            route={route}
-            active={route.id === selectedRouteId}
-            onSelect={() => onSelectRoute(route.id)}
-          />
-        ))}
-      </div>
-    </section>
+    <div className="space-y-2">
+      {compatible.map((route) => (
+        <RouteRow
+          key={route.id}
+          route={route}
+          onSelect={() => onSelectRoute(route.id)}
+        />
+      ))}
+      {incompatible.length > 0 && (
+        <>
+          <p className="pt-2 text-sm font-medium text-zinc-400">Unsupported on {OS_LABEL[os]}</p>
+          {incompatible.map((route) => (
+            <RouteRow
+              key={route.id}
+              route={route}
+              onSelect={() => onSelectRoute(route.id)}
+            />
+          ))}
+        </>
+      )}
+    </div>
   );
 }

@@ -28,9 +28,9 @@
   --popover-foreground:
     oklch(0.145 0 0);
   --primary:
-    oklch(0.205 0 0);
+    oklch(0.723 0.219 142.5);
   --primary-foreground:
-    oklch(0.985 0 0);
+    oklch(1 0 0);
   --secondary:
     oklch(0.97 0 0);
   --secondary-foreground:
@@ -50,7 +50,7 @@
   --input:
     oklch(0.922 0 0);
   --ring:
-    oklch(0.708 0 0);
+    oklch(0.723 0.219 142.5);
   --chart-1:
     oklch(0.87 0 0);
   --chart-2:
@@ -95,14 +95,31 @@ body,
 body {
   min-width: 320px;
   background:
-    linear-gradient(135deg, rgba(18, 115, 93, 0.14), transparent 34%),
-    linear-gradient(225deg, rgba(226, 94, 62, 0.12), transparent 30%),
-    linear-gradient(180deg, #f3f7f5, #eceff3);
+    #ffffff;
 }
 
 button,
 input {
   font: inherit;
+}
+
+button:not(:disabled),
+a,
+[role="button"],
+[role="tab"],
+[role="checkbox"],
+[role="radio"],
+[role="switch"],
+[role="menuitem"],
+[role="option"],
+select,
+summary {
+  cursor: pointer;
+}
+
+button:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
 }
 
 @theme inline {

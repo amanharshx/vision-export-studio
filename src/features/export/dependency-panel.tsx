@@ -1,4 +1,3 @@
-import { Badge } from "@/components/ui/badge";
 import type { DepCheckResult, RouteSpec } from "@/lib/types";
 import { AlertTriangle, CheckCircle2, HelpCircle, Loader2, PackageCheck, TerminalSquare, XCircle } from "lucide-react";
 
@@ -63,7 +62,7 @@ export function DependencyPanel({
               )}
               {dep.packageName}
             </span>
-            <span className="truncate text-zinc-500">{dep.installHint}</span>
+            <span className="min-w-0 truncate text-zinc-500">{dep.installHint}</span>
           </div>
         );
       })}
@@ -84,15 +83,10 @@ export function DependencyPanel({
               )}
               {dep.binaryName}
             </span>
-            <span className="truncate">{dep.installHint}</span>
+            <span className="min-w-0 truncate">{dep.installHint}</span>
           </div>
         );
       })}
-      {route.pipDeps.length === 0 && route.sysDeps.length === 0 ? (
-        <Badge variant="outline" className="rounded-md border-teal-200 bg-teal-50 text-teal-800">
-          Base Ultralytics stack only
-        </Badge>
-      ) : null}
     </div>
   );
 }

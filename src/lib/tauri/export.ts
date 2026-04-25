@@ -1,17 +1,22 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export interface StartExportInput {
-  source_path: string;
-  route_id: string;
-  output_dir: string;
-  yolo_path: string;
+  sourcePath: string;
+  routeId: string;
+  outputDir: string;
+  yoloPath: string;
   imgsz: number;
   batch: number;
   half: boolean;
   int8: boolean;
   dynamic: boolean;
   simplify: boolean;
-  data: string;
+  optimize: boolean;
+  nms: boolean;
+  endToEnd: boolean;
+  opset: number | null;
+  workspace: number | null;
+  chip: string;
 }
 
 export async function startExport(input: StartExportInput): Promise<string> {
@@ -19,5 +24,5 @@ export async function startExport(input: StartExportInput): Promise<string> {
 }
 
 export async function cancelExport(sessionId: string): Promise<boolean> {
-  return invoke<boolean>("cancel_export", { session_id: sessionId });
+  return invoke<boolean>("cancel_export", { sessionId });
 }

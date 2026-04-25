@@ -1,7 +1,7 @@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ExportStatus, RouteSpec } from "@/lib/types";
-import { Loader2 } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { Check, Copy, Loader2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 interface ExportLogProps {
   lines: string[];
@@ -19,9 +19,9 @@ function StatusBadge({ status }: { status: ExportStatus }) {
         </span>
       );
     case "finished":
-      return <span className="text-xs text-emerald-400">finished</span>;
+      return <span className="text-xs text-emerald-400">Success ✅</span>;
     case "failed":
-      return <span className="text-xs text-red-400">failed</span>;
+      return <span className="text-xs text-red-400">Failed ❌</span>;
     case "cancelled":
       return <span className="text-xs text-amber-400">cancelled</span>;
     case "idle":
@@ -32,10 +32,18 @@ function StatusBadge({ status }: { status: ExportStatus }) {
 
 export function ExportLog({ lines, status, route }: ExportLogProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [lines]);
+
+  function handleCopy() {
+    navigator.clipboard.writeText(lines.join("\n")).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
 
   return (
     <div className="space-y-4">
@@ -51,6 +59,18 @@ export function ExportLog({ lines, status, route }: ExportLogProps) {
           <div ref={bottomRef} />
         </pre>
       </ScrollArea>
+      {lines.length > 0 && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+          >
+            {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
