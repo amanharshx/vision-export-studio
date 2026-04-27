@@ -439,7 +439,7 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
                       <TooltipTrigger asChild>
                         <CircleHelp className="h-3 w-3 text-zinc-300 transition-colors hover:text-zinc-500" />
                       </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-[200px]">
+                      <TooltipContent side="top" className="whitespace-nowrap">
                         Recommended: Python 3.8 &ndash; 3.12
                       </TooltipContent>
                     </Tooltip>
