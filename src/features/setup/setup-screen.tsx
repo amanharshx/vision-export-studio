@@ -49,7 +49,10 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
   const bottomRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(true);
 
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // Auto-scroll log to bottom whenever lines update.
   useEffect(() => {
