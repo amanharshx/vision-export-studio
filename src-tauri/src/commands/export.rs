@@ -133,9 +133,8 @@ pub async fn start_export(
         if output_dir.contains('=') {
             return Err("output dir must not contain '='".to_string());
         }
-        if !Path::new(&output_dir).exists() {
-            return Err(format!("output dir does not exist: {}", output_dir));
-        }
+        std::fs::create_dir_all(&output_dir)
+            .map_err(|e| format!("failed to create output dir: {}", e))?;
     }
 
     // ------------------------------------------------------------------
