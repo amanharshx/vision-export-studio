@@ -14,6 +14,7 @@ export interface StartExportInput {
   optimize: boolean;
   nms: boolean;
   endToEnd: boolean;
+  keras: boolean;
   opset: number | null;
   workspace: number | null;
   chip: string;

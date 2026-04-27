@@ -130,6 +130,8 @@ export const formatIconMap: Record<string, React.ComponentType<{ className?: str
   ncnn: NcnnIcon,
   mnn: MnnIcon,
   tflite: TfLiteIcon,
+  saved_model: TfLiteIcon,
+  pb: TfLiteIcon,
   rknn: RknnIcon,
   executorch: TorchScriptIcon,
   edgetpu: TfLiteIcon,

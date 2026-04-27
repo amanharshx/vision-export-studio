@@ -64,6 +64,7 @@ pub async fn start_export(
     optimize: bool,
     nms: bool,
     end_to_end: bool,
+    keras: bool,
     opset: Option<u32>,
     workspace: Option<u32>,
     chip: String,
@@ -95,6 +96,8 @@ pub async fn start_export(
         "ultralytics.pt.paddle",
         "ultralytics.pt.imx",
         "ultralytics.pt.axelera",
+        "ultralytics.pt.saved_model",
+        "ultralytics.pt.pb",
     ];
 
     if !VALID_ROUTE_IDS.contains(&route_id.as_str()) {
@@ -169,6 +172,9 @@ pub async fn start_export(
     }
     if end_to_end {
         cmd.arg("end2end=True");
+    }
+    if keras {
+        cmd.arg("keras=True");
     }
     if let Some(v) = opset {
         cmd.arg(format!("opset={}", v));

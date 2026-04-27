@@ -14,6 +14,8 @@ import { PaddleOptions } from "./options/paddle";
 import { RknnOptions } from "./options/rknn";
 import { TensorRtOptions } from "./options/tensorrt";
 import { TorchScriptOptions } from "./options/torchscript";
+import { SavedModelOptions } from "./options/saved-model";
+import { GraphDefOptions } from "./options/graphdef";
 
 const panelMap: Record<string, React.ComponentType<OptionsPanelProps>> = {
   onnx: OnnxOptions,
@@ -31,6 +33,8 @@ const panelMap: Record<string, React.ComponentType<OptionsPanelProps>> = {
   paddle: PaddleOptions,
   imx: ImxOptions,
   axelera: AxeleraOptions,
+  saved_model: SavedModelOptions,
+  pb: GraphDefOptions,
 };
 
 export function OptionsPanel(props: OptionsPanelProps) {
