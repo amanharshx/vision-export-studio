@@ -20,33 +20,37 @@ const TitleBarFill = () => (
   />
 );
 
-type AppState = "booting" | "setup" | "ready";
+type AppState = "landing" | "setup" | "export";
 
 function App() {
-  const [appState, setAppState] = useState<AppState>("booting");
+  const [appState, setAppState] = useState<AppState>("landing");
   const [runtimeDir, setRuntimeDir] = useState<string>("");
-  const [started, setStarted] = useState(false);
+  const [setupComplete, setSetupComplete] = useState(false);
 
   useEffect(() => {
     loadSettings()
       .then((settings) => {
         setRuntimeDir(settings.runtime_dir);
-        if (settings.setup_complete) {
-          setAppState("ready");
-        } else {
-          setAppState("setup");
-        }
+        setSetupComplete(settings.setup_complete);
       })
-      .catch(() => {
-        // If settings cannot be loaded at all, fall through to setup
-        // so the user can configure the runtime directory.
-        setAppState("setup");
-      });
+      .catch(() => {});
   }, []);
 
-  if (appState === "booting") {
-    // Minimal blank loading state while reading settings.
-    return <div className="min-h-screen bg-background" />;
+  const handleGetStarted = () => {
+    if (setupComplete) {
+      setAppState("export");
+    } else {
+      setAppState("setup");
+    }
+  };
+
+  if (appState === "landing") {
+    return (
+      <>
+        <TitleBarFill />
+        <LandingScreen onGetStarted={handleGetStarted} />
+      </>
+    );
   }
 
   if (appState === "setup") {
@@ -55,18 +59,8 @@ function App() {
         <TitleBarFill />
         <SetupScreen
           defaultRuntimeDir={runtimeDir}
-          onComplete={() => setAppState("ready")}
+          onComplete={() => setAppState("export")}
         />
-      </>
-    );
-  }
-
-  // appState === "ready"
-  if (!started) {
-    return (
-      <>
-        <TitleBarFill />
-        <LandingScreen onGetStarted={() => setStarted(true)} />
       </>
     );
   }
@@ -74,7 +68,7 @@ function App() {
   return (
     <>
       <TitleBarFill />
-      <ExportWorkspace onBack={() => setStarted(false)} />
+      <ExportWorkspace onBack={() => setAppState("landing")} />
     </>
   );
 }
