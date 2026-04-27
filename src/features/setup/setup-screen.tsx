@@ -4,7 +4,6 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Box, FolderOpen, Loader2 } from "lucide-react";
 import {
   createRuntimeVenv,
@@ -44,10 +43,8 @@ interface SetupScreenProps {
 export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps) {
   const [runtimeDir, setRuntimeDir] = useState(defaultRuntimeDir);
   const [phase, setPhase] = useState<SetupPhase>("idle");
-  const [lines, setLines] = useState<string[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -63,15 +60,6 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
     return () => clearTimeout(t);
   }, [countdown, onComplete]);
 
-  // Auto-scroll log to bottom whenever lines update.
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [lines]);
-
-  function appendLine(line: string) {
-    if (!mountedRef.current) return;
-    setLines((prev) => [...prev, line]);
-  }
 
   async function browseDirPicker() {
     const result = await open({ directory: true, multiple: false });
@@ -82,7 +70,6 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
 
   async function runSetup() {
     if (!mountedRef.current) return;
-    setLines([]);
     setErrorMessage(null);
     setPhase("venv");
 
@@ -99,12 +86,8 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
     const venvResultPromise = new Promise<"ok" | string>((r) => { venvResolve = r; });
 
     const [unVenvOut, unVenvErr, unVenvDone, unVenvFail] = await Promise.all([
-      listen<SetupLinePayload>("setup:stdout", (ev) => {
-        if (venvSessionId && ev.payload.session_id === venvSessionId) appendLine(ev.payload.line);
-      }),
-      listen<SetupLinePayload>("setup:stderr", (ev) => {
-        if (venvSessionId && ev.payload.session_id === venvSessionId) appendLine(ev.payload.line);
-      }),
+      listen<SetupLinePayload>("setup:stdout", () => {}),
+      listen<SetupLinePayload>("setup:stderr", () => {}),
       listen<SetupFinishedPayload>("setup:finished", (ev) => {
         if (venvSessionId && ev.payload.session_id === venvSessionId) {
           cleanupVenv(); venvResolve("ok");
@@ -148,12 +131,8 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
     const pipResultPromise = new Promise<"ok" | string>((r) => { pipResolve = r; });
 
     const [unPipOut, unPipErr, unPipDone, unPipFail] = await Promise.all([
-      listen<SetupLinePayload>("setup:stdout", (ev) => {
-        if (pipSessionId && ev.payload.session_id === pipSessionId) appendLine(ev.payload.line);
-      }),
-      listen<SetupLinePayload>("setup:stderr", (ev) => {
-        if (pipSessionId && ev.payload.session_id === pipSessionId) appendLine(ev.payload.line);
-      }),
+      listen<SetupLinePayload>("setup:stdout", () => {}),
+      listen<SetupLinePayload>("setup:stderr", () => {}),
       listen<SetupFinishedPayload>("setup:finished", (ev) => {
         if (pipSessionId && ev.payload.session_id === pipSessionId) {
           cleanupPip(); pipResolve("ok");
@@ -287,34 +266,6 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
           </Button>
         )}
 
-        {/* Log — visible as soon as setup starts so the panel never pops in mid-flow */}
-        {(isRunning || lines.length > 0) && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-zinc-500">Output</span>
-              {isRunning && (
-                <span className="flex items-center gap-1 text-xs text-teal-500">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  {phaseLabel[phase]}
-                </span>
-              )}
-              {phase === "done" && (
-                <span className="text-xs text-emerald-500">Done</span>
-              )}
-              {phase === "error" && (
-                <span className="text-xs text-red-500">Failed</span>
-              )}
-            </div>
-            <ScrollArea className="h-48 rounded-md bg-black/30">
-              <pre className="p-3 text-xs leading-6 text-zinc-300">
-                {lines.length === 0
-                  ? <span className="text-zinc-600">waiting for output…</span>
-                  : lines.join("\n")}
-                <div ref={bottomRef} />
-              </pre>
-            </ScrollArea>
-          </div>
-        )}
 
         {/* Error message */}
         {phase === "error" && errorMessage && (
