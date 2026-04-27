@@ -46,6 +46,7 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
   const [phase, setPhase] = useState<SetupPhase>("idle");
   const [lines, setLines] = useState<string[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [countdown, setCountdown] = useState<number | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(true);
 
@@ -53,6 +54,14 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
+
+  // Countdown → auto-redirect after setup completes.
+  useEffect(() => {
+    if (countdown === null) return;
+    if (countdown === 0) { onComplete(); return; }
+    const t = setTimeout(() => setCountdown((c) => (c !== null ? c - 1 : null)), 1000);
+    return () => clearTimeout(t);
+  }, [countdown, onComplete]);
 
   // Auto-scroll log to bottom whenever lines update.
   useEffect(() => {
@@ -191,7 +200,7 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
 
     if (!mountedRef.current) return;
     setPhase("done");
-    onComplete();
+    setCountdown(3);
   }
 
   const isRunning = phase === "venv" || phase === "pip";
@@ -253,24 +262,30 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
           </p>
         </div>
 
-        {/* Set Up button */}
-        <Button
-          type="button"
-          className="w-full"
-          onClick={runSetup}
-          disabled={isRunning || runtimeDir.trim().length === 0}
-        >
-          {isRunning ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              {phaseLabel[phase]}
-            </>
-          ) : phase === "error" ? (
-            "Retry"
-          ) : (
-            "Set Up"
-          )}
-        </Button>
+        {/* Set Up button / countdown */}
+        {phase === "done" && countdown !== null ? (
+          <div className="flex w-full items-center justify-center gap-2 rounded-md bg-emerald-50 py-3 text-sm font-medium text-emerald-700">
+            <span>✓ Setup complete — redirecting in {countdown}…</span>
+          </div>
+        ) : (
+          <Button
+            type="button"
+            className="w-full"
+            onClick={runSetup}
+            disabled={isRunning || runtimeDir.trim().length === 0}
+          >
+            {isRunning ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                {phaseLabel[phase]}
+              </>
+            ) : phase === "error" ? (
+              "Retry"
+            ) : (
+              "Set Up"
+            )}
+          </Button>
+        )}
 
         {/* Log — visible as soon as setup starts so the panel never pops in mid-flow */}
         {(isRunning || lines.length > 0) && (
