@@ -76,46 +76,47 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
 
     // ------------------------------------------------------------------
     // Step 1: create venv
+    // Register listeners BEFORE spawning so setup:finished cannot arrive
+    // before anyone is listening. sessionId starts empty; callbacks ignore
+    // events until it is set (JS assignment is synchronous after await, so
+    // setup:finished can only be dispatched as a macrotask — after sessionId
+    // is already set).
     // ------------------------------------------------------------------
-    let venvSessionId: string;
+    let venvSessionId = "";
+    let venvResolve!: (v: "ok" | string) => void;
+    const venvResultPromise = new Promise<"ok" | string>((r) => { venvResolve = r; });
+
+    const [unVenvOut, unVenvErr, unVenvDone, unVenvFail] = await Promise.all([
+      listen<SetupLinePayload>("setup:stdout", (ev) => {
+        if (venvSessionId && ev.payload.session_id === venvSessionId) appendLine(ev.payload.line);
+      }),
+      listen<SetupLinePayload>("setup:stderr", (ev) => {
+        if (venvSessionId && ev.payload.session_id === venvSessionId) appendLine(ev.payload.line);
+      }),
+      listen<SetupFinishedPayload>("setup:finished", (ev) => {
+        if (venvSessionId && ev.payload.session_id === venvSessionId) {
+          cleanupVenv(); venvResolve("ok");
+        }
+      }),
+      listen<SetupFailedPayload>("setup:failed", (ev) => {
+        if (venvSessionId && ev.payload.session_id === venvSessionId) {
+          cleanupVenv(); venvResolve(ev.payload.error);
+        }
+      }),
+    ]);
+    const cleanupVenv = () => { unVenvOut(); unVenvErr(); unVenvDone(); unVenvFail(); };
+
     try {
       venvSessionId = await createRuntimeVenv(runtimeDir);
     } catch (e: unknown) {
+      cleanupVenv();
       if (!mountedRef.current) return;
       setPhase("error");
       setErrorMessage(String(e));
       return;
     }
 
-    // Register all four listeners atomically before waiting, so a fast
-    // setup:finished cannot arrive before any listener is attached.
-    const venvResult = await new Promise<"ok" | string>(async (resolve) => {
-      const [unStdout, unStderr, unFinished, unFailed] = await Promise.all([
-        listen<SetupLinePayload>("setup:stdout", (ev) => {
-          if (ev.payload.session_id === venvSessionId) {
-            appendLine(ev.payload.line);
-          }
-        }),
-        listen<SetupLinePayload>("setup:stderr", (ev) => {
-          if (ev.payload.session_id === venvSessionId) {
-            appendLine(ev.payload.line);
-          }
-        }),
-        listen<SetupFinishedPayload>("setup:finished", (ev) => {
-          if (ev.payload.session_id === venvSessionId) {
-            cleanup();
-            resolve("ok");
-          }
-        }),
-        listen<SetupFailedPayload>("setup:failed", (ev) => {
-          if (ev.payload.session_id === venvSessionId) {
-            cleanup();
-            resolve(ev.payload.error);
-          }
-        }),
-      ]);
-      const cleanup = () => { unStdout(); unStderr(); unFinished(); unFailed(); };
-    });
+    const venvResult = await venvResultPromise;
 
     if (venvResult !== "ok") {
       if (!mountedRef.current) return;
@@ -131,43 +132,41 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
     setPhase("pip");
     appendLine("--- installing ultralytics ---");
 
-    let pipSessionId: string;
+    let pipSessionId = "";
+    let pipResolve!: (v: "ok" | string) => void;
+    const pipResultPromise = new Promise<"ok" | string>((r) => { pipResolve = r; });
+
+    const [unPipOut, unPipErr, unPipDone, unPipFail] = await Promise.all([
+      listen<SetupLinePayload>("setup:stdout", (ev) => {
+        if (pipSessionId && ev.payload.session_id === pipSessionId) appendLine(ev.payload.line);
+      }),
+      listen<SetupLinePayload>("setup:stderr", (ev) => {
+        if (pipSessionId && ev.payload.session_id === pipSessionId) appendLine(ev.payload.line);
+      }),
+      listen<SetupFinishedPayload>("setup:finished", (ev) => {
+        if (pipSessionId && ev.payload.session_id === pipSessionId) {
+          cleanupPip(); pipResolve("ok");
+        }
+      }),
+      listen<SetupFailedPayload>("setup:failed", (ev) => {
+        if (pipSessionId && ev.payload.session_id === pipSessionId) {
+          cleanupPip(); pipResolve(ev.payload.error);
+        }
+      }),
+    ]);
+    const cleanupPip = () => { unPipOut(); unPipErr(); unPipDone(); unPipFail(); };
+
     try {
       pipSessionId = await installUltralytics(runtimeDir);
     } catch (e: unknown) {
+      cleanupPip();
       if (!mountedRef.current) return;
       setPhase("error");
       setErrorMessage(String(e));
       return;
     }
 
-    const pipResult = await new Promise<"ok" | string>(async (resolve) => {
-      const [unStdout, unStderr, unFinished, unFailed] = await Promise.all([
-        listen<SetupLinePayload>("setup:stdout", (ev) => {
-          if (ev.payload.session_id === pipSessionId) {
-            appendLine(ev.payload.line);
-          }
-        }),
-        listen<SetupLinePayload>("setup:stderr", (ev) => {
-          if (ev.payload.session_id === pipSessionId) {
-            appendLine(ev.payload.line);
-          }
-        }),
-        listen<SetupFinishedPayload>("setup:finished", (ev) => {
-          if (ev.payload.session_id === pipSessionId) {
-            cleanup();
-            resolve("ok");
-          }
-        }),
-        listen<SetupFailedPayload>("setup:failed", (ev) => {
-          if (ev.payload.session_id === pipSessionId) {
-            cleanup();
-            resolve(ev.payload.error);
-          }
-        }),
-      ]);
-      const cleanup = () => { unStdout(); unStderr(); unFinished(); unFailed(); };
-    });
+    const pipResult = await pipResultPromise;
 
     if (pipResult !== "ok") {
       if (!mountedRef.current) return;
