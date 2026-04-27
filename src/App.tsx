@@ -59,7 +59,7 @@ function App() {
         <TitleBarFill />
         <SetupScreen
           defaultRuntimeDir={runtimeDir}
-          onComplete={() => setAppState("export")}
+          onComplete={() => { setSetupComplete(true); setAppState("export"); }}
         />
       </>
     );
