@@ -247,28 +247,30 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
             <span>✓ Setup complete — redirecting in {countdown}…</span>
           </div>
         ) : (
-          <Button
-            type="button"
-            className={`w-full${isRunning ? " animate-glow-pulse" : ""}`}
-            onClick={runSetup}
-            disabled={isRunning || runtimeDir.trim().length === 0}
-          >
-            {isRunning ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                {phaseLabel[phase]}
-              </>
-            ) : phase === "error" ? (
-              "Retry"
-            ) : (
-              "Set Up"
+          <>
+            <Button
+              type="button"
+              className={`w-full${isRunning ? " animate-glow-pulse" : ""}`}
+              onClick={runSetup}
+              disabled={isRunning || runtimeDir.trim().length === 0}
+            >
+              {isRunning ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  {phaseLabel[phase]}
+                </>
+              ) : phase === "error" ? (
+                "Retry"
+              ) : (
+                "Set Up"
+              )}
+            </Button>
+            {isRunning && (
+              <p className="text-center text-xs text-muted-foreground">
+                This may take a few minutes on first install.
+              </p>
             )}
-          </Button>
-          {isRunning && (
-            <p className="text-center text-xs text-muted-foreground">
-              This may take a few minutes on first install.
-            </p>
-          )}
+          </>
         )}
 
 
