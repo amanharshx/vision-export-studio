@@ -1,3 +1,8 @@
+export interface AppSettings {
+  runtime_dir: string;
+  setup_complete: boolean;
+}
+
 export type FormatCategory = "source" | "intermediate" | "runtime" | "vendor";
 
 export type PlatformLock = "any" | "linux" | "linux_x86_64" | "linux_windows" | "macos" | "windows";

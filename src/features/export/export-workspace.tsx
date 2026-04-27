@@ -192,9 +192,9 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
     if (!sourcePath || !envInfo?.yolo_path || exportStatus === "running") return;
     setInvokeError(null);
     setLogLines([]);
-    const parentDir = sourcePath.includes("/")
-      ? sourcePath.substring(0, sourcePath.lastIndexOf("/"))
-      : "";
+    const sep = sourcePath.includes("/") ? "/" : "\\";
+    const lastSep = sourcePath.lastIndexOf(sep);
+    const parentDir = lastSep > 0 ? sourcePath.substring(0, lastSep) : "";
     const outputDir = parentDir ? `${parentDir}/yolo-export-studio-exports` : "";
     try {
       const id = await startExport({
