@@ -264,6 +264,11 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
               "Set Up"
             )}
           </Button>
+          {isRunning && (
+            <p className="text-center text-xs text-muted-foreground">
+              This may take a few minutes on first install.
+            </p>
+          )}
         )}
 
 
