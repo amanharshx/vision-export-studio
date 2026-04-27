@@ -14,7 +14,7 @@ import type {
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, FileBox, FolderOpen, Info, RefreshCw, X } from "lucide-react";
+import { ArrowLeft, FileBox, FolderOpen, Info, RefreshCw, X, CircleHelp } from "lucide-react";
 import { UpdateChecker } from "@/components/update-checker";
 import {
   Sheet,
@@ -22,6 +22,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { loadSettings, savePythonOverride } from "@/lib/tauri/setup";
@@ -72,12 +73,14 @@ function EnvCard({
   status,
   version,
   path,
+  hint,
   children,
 }: {
   title: string;
   status: EnvCardStatus;
   version: string;
   path?: string;
+  hint?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   const borderColor =
@@ -98,7 +101,10 @@ function EnvCard({
       className={`rounded-xl border border-zinc-200/80 border-l-[3px] bg-white p-4 shadow-sm ${borderColor}`}
     >
       <div className="flex items-center justify-between gap-3">
-        <span className="text-[13px] font-semibold text-zinc-800">{title}</span>
+        <span className="flex items-center gap-1.5 text-[13px] font-semibold text-zinc-800">
+          {title}
+          {hint}
+        </span>
         <span
           className={`rounded-md px-2 py-0.5 font-mono text-[11px] font-medium ${badgeBg} ${status === "loading" ? "animate-pulse" : ""}`}
         >
@@ -427,6 +433,18 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
                 }
                 version={envInfo?.python_version || (envError ? "Error" : "...")}
                 path={envInfo?.python_path}
+                hint={
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <CircleHelp className="h-3 w-3 text-zinc-300 transition-colors hover:text-zinc-500" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-[200px]">
+                        Recommended: Python 3.8 &ndash; 3.12
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                }
               />
 
               <EnvCard
