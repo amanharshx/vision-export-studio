@@ -16,6 +16,12 @@ import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, FileBox, Info, X } from "lucide-react";
 import { UpdateChecker } from "@/components/update-checker";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { DropZone } from "./drop-zone";
 import { ExportModal } from "./export-modal";
 import { RouteGrid } from "./route-grid";
@@ -53,6 +59,17 @@ const routeDefaults: Partial<Record<string, Partial<ExportOptions>>> = {
 
 function optionsForRoute(routeId: string): ExportOptions {
   return { ...defaultOptions, ...(routeDefaults[routeId] ?? {}) };
+}
+
+function InfoRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-xs text-zinc-400">{label}</span>
+      <span className={`break-all text-xs font-medium text-zinc-900 ${mono ? "font-mono" : ""}`}>
+        {value || "—"}
+      </span>
+    </div>
+  );
 }
 
 interface ExportWorkspaceProps {
@@ -278,48 +295,60 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
       </button>
 
       <div className="flex items-center gap-4">
-        {/* (i) env info popover */}
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setInfoOpen((v) => !v)}
-            className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-            title="Environment info"
-          >
-            <Info className="h-3.5 w-3.5" />
-          </button>
-          {infoOpen && (
-            <>
-              {/* backdrop to close */}
-              <div
-                className="fixed inset-0 z-10"
-                onClick={() => setInfoOpen(false)}
-              />
-              <div className="absolute right-0 top-6 z-20 w-64 rounded-md border border-zinc-200 bg-white p-3 shadow-md">
-                <p className="mb-2 text-xs font-medium text-zinc-400 uppercase tracking-wide">
-                  Environment
-                </p>
-                <div className="space-y-2">
-                  <div className="flex justify-between gap-2">
-                    <span className="text-xs text-zinc-500">Python</span>
-                    <span className="max-w-[150px] truncate text-xs font-medium text-zinc-900 text-right">
-                      {pythonLabel}
-                    </span>
-                  </div>
-                  <div className="flex justify-between gap-2">
-                    <span className="text-xs text-zinc-500">YOLO CLI</span>
-                    <span className="max-w-[150px] truncate text-xs font-medium text-zinc-900 text-right" title={yoloLabel}>
-                      {yoloLabel}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
+        {/* (i) settings panel trigger */}
+        <button
+          type="button"
+          onClick={() => setInfoOpen(true)}
+          className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          title="Environment & settings"
+        >
+          <Info className="h-3.5 w-3.5" />
+        </button>
 
         <UpdateChecker />
       </div>
+
+      {/* Settings slide-in panel */}
+      <Sheet open={infoOpen} onOpenChange={setInfoOpen}>
+        <SheetContent side="right" className="w-80">
+          <SheetHeader>
+            <SheetTitle>Environment</SheetTitle>
+          </SheetHeader>
+
+          <div className="mt-6 space-y-6 px-1">
+            {/* Python info */}
+            <div className="space-y-3">
+              <p className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                Python
+              </p>
+              <InfoRow label="Version" value={envInfo?.python_version ?? (envError ? "Error" : "Detecting…")} />
+              <InfoRow label="Path" value={envInfo?.python_path ?? "—"} mono />
+            </div>
+
+            <div className="border-t border-zinc-100" />
+
+            {/* YOLO / ultralytics */}
+            <div className="space-y-3">
+              <p className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                Ultralytics
+              </p>
+              <InfoRow label="Version" value={envInfo?.ultralytics_version || "—"} />
+              <InfoRow label="YOLO CLI" value={envInfo?.yolo_path || "—"} mono />
+            </div>
+
+            {envInfo?.warnings && envInfo.warnings.length > 0 && (
+              <>
+                <div className="border-t border-zinc-100" />
+                <div className="space-y-1.5">
+                  {envInfo.warnings.map((w, i) => (
+                    <p key={i} className="text-xs text-amber-600">{w}</p>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
     </header>
   );
 
