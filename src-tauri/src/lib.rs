@@ -29,6 +29,7 @@ pub fn run() {
             commands::setup::create_runtime_venv,
             commands::setup::install_ultralytics,
             commands::setup::mark_setup_complete,
+            commands::setup::save_python_override,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

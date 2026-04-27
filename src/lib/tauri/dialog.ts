@@ -19,3 +19,11 @@ export async function openCalibrationDataPicker(): Promise<string | null> {
   });
   return typeof result === "string" ? result : null;
 }
+
+export async function openPythonExecutablePicker(): Promise<string | null> {
+  const result = await open({
+    multiple: false,
+    directory: false,
+  });
+  return typeof result === "string" ? result : null;
+}

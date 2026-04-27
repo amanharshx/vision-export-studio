@@ -17,3 +17,7 @@ export function markSetupComplete(runtimeDir: string): Promise<void> {
   return invoke<void>("mark_setup_complete", { runtimeDir });
 }
 
+export function savePythonOverride(pythonPathOverride: string | null): Promise<void> {
+  return invoke<void>("save_python_override", { pythonPathOverride });
+}
+

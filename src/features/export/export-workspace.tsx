@@ -14,7 +14,7 @@ import type {
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, FileBox, Info, X } from "lucide-react";
+import { ArrowLeft, FileBox, FolderOpen, Info, RefreshCw, X } from "lucide-react";
 import { UpdateChecker } from "@/components/update-checker";
 import {
   Sheet,
@@ -22,6 +22,10 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { loadSettings, savePythonOverride } from "@/lib/tauri/setup";
+import { openPythonExecutablePicker } from "@/lib/tauri/dialog";
 import { DropZone } from "./drop-zone";
 import { ExportModal } from "./export-modal";
 import { RouteGrid } from "./route-grid";
@@ -61,13 +65,52 @@ function optionsForRoute(routeId: string): ExportOptions {
   return { ...defaultOptions, ...(routeDefaults[routeId] ?? {}) };
 }
 
-function InfoRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+type EnvCardStatus = "ok" | "error" | "loading";
+
+function EnvCard({
+  title,
+  status,
+  version,
+  path,
+  children,
+}: {
+  title: string;
+  status: EnvCardStatus;
+  version: string;
+  path?: string;
+  children?: React.ReactNode;
+}) {
+  const borderColor =
+    status === "ok"
+      ? "border-l-emerald-500"
+      : status === "error"
+        ? "border-l-red-400"
+        : "border-l-zinc-300";
+  const badgeBg =
+    status === "ok"
+      ? "bg-emerald-50 text-emerald-700"
+      : status === "error"
+        ? "bg-red-50 text-red-600"
+        : "bg-zinc-100 text-zinc-400";
+
   return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-xs text-zinc-400">{label}</span>
-      <span className={`break-all text-xs font-medium text-zinc-900 ${mono ? "font-mono" : ""}`}>
-        {value || "—"}
-      </span>
+    <div
+      className={`rounded-xl border border-zinc-200/80 border-l-[3px] bg-white p-4 shadow-sm ${borderColor}`}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[13px] font-semibold text-zinc-800">{title}</span>
+        <span
+          className={`rounded-md px-2 py-0.5 font-mono text-[11px] font-medium ${badgeBg} ${status === "loading" ? "animate-pulse" : ""}`}
+        >
+          {version}
+        </span>
+      </div>
+      {path && (
+        <p className="mt-1.5 truncate font-mono text-[11px] text-zinc-400" title={path}>
+          {path}
+        </p>
+      )}
+      {children}
     </div>
   );
 }
@@ -90,6 +133,8 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
   // Environment
   const [envInfo, setEnvInfo] = useState<EnvironmentInfo | null>(null);
   const [envError, setEnvError] = useState<string | null>(null);
+  const [pythonOverride, setPythonOverride] = useState("");
+  const [redetecting, setRedetecting] = useState(false);
 
   // Source model path
   const [sourcePath, setSourcePath] = useState("");
@@ -112,9 +157,14 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
   const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = sessionId;
 
-  // Detect environment on mount
+  // Load settings + detect environment on mount
   useEffect(() => {
-    detectEnvironment()
+    loadSettings()
+      .then((settings) => {
+        const override = settings.python_path_override || "";
+        if (override) setPythonOverride(override);
+        return detectEnvironment(override || undefined);
+      })
       .then(setEnvInfo)
       .catch((e: unknown) => setEnvError(String(e)));
   }, []);
@@ -271,6 +321,41 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
     setView("drop");
   };
 
+  // Re-detect environment with current override
+  const handleRedetect = useCallback(async (overridePath?: string) => {
+    setRedetecting(true);
+    setEnvInfo(null);
+    setEnvError(null);
+    try {
+      const info = await detectEnvironment(overridePath || undefined);
+      setEnvInfo(info);
+    } catch (e: unknown) {
+      setEnvError(String(e));
+    } finally {
+      setRedetecting(false);
+    }
+  }, []);
+
+  // Save python path override and re-detect
+  const handleSaveAndRedetect = useCallback(async () => {
+    const val = pythonOverride.trim();
+    await savePythonOverride(val || null);
+    handleRedetect(val);
+  }, [pythonOverride, handleRedetect]);
+
+  // Browse for python executable
+  const handleBrowsePython = useCallback(async () => {
+    const path = await openPythonExecutablePicker();
+    if (path) setPythonOverride(path);
+  }, []);
+
+  // Clear python override
+  const handleClearOverride = useCallback(async () => {
+    setPythonOverride("");
+    await savePythonOverride(null);
+    handleRedetect();
+  }, [handleRedetect]);
+
   // Back button per view
   const handleBack = () => {
     if (view === "drop") onBack();
@@ -279,9 +364,6 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
 
   const backLabel = "Back";
   const baseName = sourcePath.split(/[\\/]/).pop() ?? sourcePath;
-
-  const pythonLabel = envInfo?.python_version ?? (envError ? "Error" : "Detecting…");
-  const yoloLabel = envInfo?.yolo_path ?? (envError ? "Error" : "Detecting…");
 
   const header = (
     <header className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-zinc-900/10 bg-white px-5 py-3">
@@ -310,41 +392,115 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
 
       {/* Settings slide-in panel */}
       <Sheet open={infoOpen} onOpenChange={setInfoOpen}>
-        <SheetContent side="right" className="w-80">
-          <SheetHeader>
-            <SheetTitle>Environment</SheetTitle>
-          </SheetHeader>
+        <SheetContent side="right" className="w-[340px] bg-zinc-50/80 p-0">
+          {/* Panel header */}
+          <div className="flex items-center justify-between border-b border-zinc-200/60 px-5 py-4">
+            <SheetHeader className="p-0">
+              <SheetTitle className="text-[15px]">Environment</SheetTitle>
+            </SheetHeader>
+            <button
+              type="button"
+              onClick={() => handleRedetect(pythonOverride.trim())}
+              disabled={redetecting}
+              className="rounded-lg p-1.5 text-zinc-400 transition-colors hover:bg-zinc-200/60 hover:text-zinc-700 disabled:opacity-50"
+              title="Re-detect environment"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${redetecting ? "animate-spin" : ""}`} />
+            </button>
+          </div>
 
-          <div className="mt-6 space-y-6 px-1">
-            {/* Python info */}
+          <div className="space-y-5 px-5 py-5">
+            {/* Status cards */}
             <div className="space-y-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-zinc-400">
-                Python
+              <p className="text-[11px] font-medium uppercase tracking-wider text-zinc-400">
+                Status
               </p>
-              <InfoRow label="Version" value={envInfo?.python_version ?? (envError ? "Error" : "Detecting…")} />
-              <InfoRow label="Path" value={envInfo?.python_path ?? "—"} mono />
+
+              <EnvCard
+                title="Python"
+                status={
+                  redetecting || (!envInfo && !envError)
+                    ? "loading"
+                    : envError || !envInfo?.python_version
+                      ? "error"
+                      : "ok"
+                }
+                version={envInfo?.python_version || (envError ? "Error" : "...")}
+                path={envInfo?.python_path}
+              />
+
+              <EnvCard
+                title="Ultralytics"
+                status={
+                  redetecting || (!envInfo && !envError)
+                    ? "loading"
+                    : envInfo?.ultralytics_version
+                      ? "ok"
+                      : "error"
+                }
+                version={envInfo?.ultralytics_version || (redetecting ? "..." : "Not found")}
+                path={envInfo?.yolo_path || undefined}
+              />
             </div>
 
-            <div className="border-t border-zinc-100" />
-
-            {/* YOLO / ultralytics */}
+            {/* Configuration */}
             <div className="space-y-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-zinc-400">
-                Ultralytics
+              <p className="text-[11px] font-medium uppercase tracking-wider text-zinc-400">
+                Configuration
               </p>
-              <InfoRow label="Version" value={envInfo?.ultralytics_version || "—"} />
-              <InfoRow label="YOLO CLI" value={envInfo?.yolo_path || "—"} mono />
+
+              <div className="rounded-xl border border-zinc-200/80 bg-white p-4 shadow-sm">
+                <p className="mb-2.5 text-[13px] font-semibold text-zinc-800">Python path</p>
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    value={pythonOverride}
+                    onChange={(e) => setPythonOverride(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") handleSaveAndRedetect(); }}
+                    placeholder="Auto-detect"
+                    className="h-8 flex-1 min-w-0 rounded-lg border-zinc-200 bg-zinc-50 font-mono text-[12px] placeholder:text-zinc-300 focus-visible:bg-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleBrowsePython}
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-zinc-200 bg-zinc-50 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600"
+                    title="Browse for Python executable"
+                  >
+                    <FolderOpen className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div className="mt-2.5 flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    className="h-7 rounded-lg px-3 text-[12px]"
+                    onClick={handleSaveAndRedetect}
+                  >
+                    Apply
+                  </Button>
+                  {pythonOverride && (
+                    <button
+                      type="button"
+                      className="text-[12px] text-zinc-400 transition-colors hover:text-zinc-600"
+                      onClick={handleClearOverride}
+                    >
+                      Reset to auto
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
 
+            {/* Warnings */}
             {envInfo?.warnings && envInfo.warnings.length > 0 && (
-              <>
-                <div className="border-t border-zinc-100" />
+              <div className="rounded-xl border border-amber-200/60 bg-amber-50/50 p-4">
+                <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-amber-600/80">
+                  Warnings
+                </p>
                 <div className="space-y-1.5">
                   {envInfo.warnings.map((w, i) => (
-                    <p key={i} className="text-xs text-amber-600">{w}</p>
+                    <p key={i} className="text-[12px] leading-relaxed text-amber-700">{w}</p>
                   ))}
                 </div>
-              </>
+              </div>
             )}
           </div>
         </SheetContent>
