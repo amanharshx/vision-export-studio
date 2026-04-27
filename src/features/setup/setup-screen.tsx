@@ -249,7 +249,7 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
         ) : (
           <Button
             type="button"
-            className="w-full"
+            className={`w-full${isRunning ? " animate-glow-pulse" : ""}`}
             onClick={runSetup}
             disabled={isRunning || runtimeDir.trim().length === 0}
           >
