@@ -133,7 +133,6 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
     // ------------------------------------------------------------------
     if (!mountedRef.current) return;
     setPhase("pip");
-    appendLine("--- installing ultralytics ---");
 
     let pipSessionId = "";
     let pipResolve!: (v: "ok" | string) => void;
@@ -270,8 +269,8 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
           )}
         </Button>
 
-        {/* Log */}
-        {lines.length > 0 && (
+        {/* Log — visible as soon as setup starts so the panel never pops in mid-flow */}
+        {(isRunning || lines.length > 0) && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-zinc-500">Output</span>
@@ -290,7 +289,9 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
             </div>
             <ScrollArea className="h-48 rounded-md bg-black/30">
               <pre className="p-3 text-xs leading-6 text-zinc-300">
-                {lines.join("\n")}
+                {lines.length === 0
+                  ? <span className="text-zinc-600">waiting for output…</span>
+                  : lines.join("\n")}
                 <div ref={bottomRef} />
               </pre>
             </ScrollArea>
