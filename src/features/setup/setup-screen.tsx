@@ -219,6 +219,9 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
             <p className="mt-1 text-sm text-muted-foreground">
               Choose where YOLO Export Studio will install Python packages.
             </p>
+            <span className="mt-3 inline-block rounded-full bg-zinc-100 px-3 py-0.5 text-xs text-zinc-500">
+              One-time setup · can be changed later in settings
+            </span>
           </div>
         </div>
 
