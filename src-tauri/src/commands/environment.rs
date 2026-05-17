@@ -1,3 +1,4 @@
+use crate::commands::setup::{load_settings, venv_python, venv_yolo};
 use std::path::Path;
 use std::process::Command;
 
@@ -17,6 +18,13 @@ pub struct EnvironmentInfo {
     pub yolo_path: String,
     pub status: DetectionStatus,
     pub warnings: Vec<String>,
+}
+
+fn first_line(text: &str) -> Option<&str> {
+    text.lines()
+        .next()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
 }
 
 /// Run a command and return (stdout, stderr, success).
@@ -64,12 +72,72 @@ pub(crate) fn resolve_python(python_path: Option<&str>) -> Result<String, String
     Err("no Python executable found; install Python 3 and ensure it is on PATH".to_string())
 }
 
+fn pick_python_candidate(
+    explicit_override: Option<String>,
+    setup_complete: bool,
+    managed_python: Option<String>,
+) -> Option<String> {
+    if let Some(path) = explicit_override {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    if setup_complete {
+        return managed_python.filter(|path| !path.trim().is_empty());
+    }
+
+    None
+}
+
+fn resolve_effective_python(
+    app_handle: &tauri::AppHandle,
+    explicit_override: Option<String>,
+) -> Result<String, String> {
+    let settings = load_settings(app_handle.clone())?;
+    let managed_python = if settings.setup_complete {
+        let candidate = venv_python(&settings.runtime_dir);
+        Path::new(&candidate).exists().then_some(candidate)
+    } else {
+        None
+    };
+
+    match pick_python_candidate(explicit_override, settings.setup_complete, managed_python) {
+        Some(candidate) => resolve_python(Some(candidate.as_str())),
+        None => resolve_python(None),
+    }
+}
+
+fn detect_yolo_path(
+    python_path: &str,
+    managed_runtime_dir: Option<&str>,
+) -> Result<String, String> {
+    if let Some(runtime_dir) = managed_runtime_dir {
+        let managed_python = venv_python(runtime_dir);
+        if python_path == managed_python {
+            let managed_yolo = venv_yolo(runtime_dir);
+            if Path::new(&managed_yolo).exists() {
+                return Ok(managed_yolo);
+            }
+        }
+    }
+
+    let script = "import os, shutil, sysconfig; scripts = sysconfig.get_path('scripts') or ''; name = 'yolo.exe' if os.name == 'nt' else 'yolo'; candidate = os.path.join(scripts, name) if scripts else ''; print(candidate if candidate and os.path.exists(candidate) else (shutil.which('yolo') or ''))";
+    let (stdout, _, _) = run(&[python_path, "-c", script])?;
+    Ok(stdout)
+}
+
 #[tauri::command]
-pub async fn detect_environment(python_path: Option<String>) -> Result<EnvironmentInfo, String> {
+pub async fn detect_environment(
+    app_handle: tauri::AppHandle,
+    python_path: Option<String>,
+) -> Result<EnvironmentInfo, String> {
     let mut warnings: Vec<String> = Vec::new();
+    let settings = load_settings(app_handle.clone())?;
 
     // Step 1: resolve the Python executable.
-    let resolved = resolve_python(python_path.as_deref())?;
+    let resolved = resolve_effective_python(&app_handle, python_path)?;
 
     // Step 2: python_version — Python 2 prints to stderr, Python 3 to stdout.
     let python_version = {
@@ -90,13 +158,11 @@ pub async fn detect_environment(python_path: Option<String>) -> Result<Environme
         ]) {
             Ok((stdout, _, true)) if !stdout.is_empty() => stdout,
             Ok((_, stderr, _)) => {
-                let hint = if !stderr.is_empty() {
-                    format!(" ({})", stderr.lines().next().unwrap_or(""))
-                } else {
-                    String::new()
-                };
+                let hint = first_line(&stderr)
+                    .map(|line| format!(" ({})", line))
+                    .unwrap_or_default();
                 warnings.push(format!(
-                    "ultralytics not importable{}; install with: pip install ultralytics",
+                    "Ultralytics import missing in selected Python environment{}",
                     hint
                 ));
                 String::new()
@@ -108,17 +174,12 @@ pub async fn detect_environment(python_path: Option<String>) -> Result<Environme
         }
     };
 
-    // Step 4: yolo_path via shutil.which inside the resolved Python.
+    // Step 4: yolo_path derived from the selected Python environment.
     let yolo_path = {
-        match run(&[
-            &resolved,
-            "-c",
-            "import shutil; p = shutil.which('yolo'); print(p if p else '')",
-        ]) {
-            Ok((stdout, _, _)) if !stdout.is_empty() => stdout,
+        match detect_yolo_path(&resolved, Some(settings.runtime_dir.as_str())) {
+            Ok(stdout) if !stdout.is_empty() => stdout,
             Ok(_) => {
-                warnings
-                    .push("yolo CLI not found on PATH; install ultralytics to get it".to_string());
+                warnings.push("yolo executable missing in selected Python environment".to_string());
                 String::new()
             }
             Err(e) => {
@@ -145,4 +206,43 @@ pub async fn detect_environment(python_path: Option<String>) -> Result<Environme
         status,
         warnings,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_override_wins_when_present() {
+        let selected = pick_python_candidate(
+            Some("/custom/python".to_string()),
+            true,
+            Some("/managed/.venv/bin/python".to_string()),
+        );
+        assert_eq!(selected, Some("/custom/python".to_string()));
+    }
+
+    #[test]
+    fn managed_runtime_used_when_setup_complete_and_no_override() {
+        let selected =
+            pick_python_candidate(None, true, Some("/managed/.venv/bin/python".to_string()));
+        assert_eq!(selected, Some("/managed/.venv/bin/python".to_string()));
+    }
+
+    #[test]
+    fn system_python_fallback_used_before_setup() {
+        let selected =
+            pick_python_candidate(None, false, Some("/managed/.venv/bin/python".to_string()));
+        assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn blank_override_falls_back_to_managed_runtime() {
+        let selected = pick_python_candidate(
+            Some("   ".to_string()),
+            true,
+            Some("/managed/.venv/bin/python".to_string()),
+        );
+        assert_eq!(selected, Some("/managed/.venv/bin/python".to_string()));
+    }
 }

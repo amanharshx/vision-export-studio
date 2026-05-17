@@ -95,15 +95,25 @@ fn settings_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir.join("yolo-export-studio-settings.json"))
 }
 
-fn default_runtime_dir(app_handle: &tauri::AppHandle) -> Result<String, String> {
-    let data_dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("could not resolve app data dir: {}", e))?;
-    Ok(data_dir.join("runtime").to_string_lossy().into_owned())
+fn default_runtime_dir_from_home(home_dir: &str) -> Result<String, String> {
+    if home_dir.trim().is_empty() {
+        return Err("could not resolve home dir".to_string());
+    }
+    Ok(format!(
+        "{}/.yolo-export-studio",
+        home_dir.trim_end_matches(['/', '\\'])
+    ))
 }
 
-fn venv_python(runtime_dir: &str) -> String {
+fn default_runtime_dir(app_handle: &tauri::AppHandle) -> Result<String, String> {
+    let home_dir = app_handle
+        .path()
+        .home_dir()
+        .map_err(|e| format!("could not resolve home dir: {}", e))?;
+    default_runtime_dir_from_home(&home_dir.to_string_lossy())
+}
+
+pub(crate) fn venv_python(runtime_dir: &str) -> String {
     #[cfg(windows)]
     {
         format!("{}/.venv/Scripts/python.exe", runtime_dir)
@@ -111,6 +121,17 @@ fn venv_python(runtime_dir: &str) -> String {
     #[cfg(not(windows))]
     {
         format!("{}/.venv/bin/python", runtime_dir)
+    }
+}
+
+pub(crate) fn venv_yolo(runtime_dir: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("{}/.venv/Scripts/yolo.exe", runtime_dir)
+    }
+    #[cfg(not(windows))]
+    {
+        format!("{}/.venv/bin/yolo", runtime_dir)
     }
 }
 
@@ -374,4 +395,37 @@ pub fn save_output_dir_override(
     update_settings(&app_handle, &state, |settings| {
         settings.output_dir_override = output_dir_override;
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_runtime_dir_uses_yolo_export_studio_dir_in_home() {
+        let runtime_dir = default_runtime_dir_from_home("/Users/tester").unwrap();
+        assert_eq!(runtime_dir, "/Users/tester/.yolo-export-studio");
+    }
+
+    #[test]
+    fn venv_python_uses_platform_specific_location() {
+        let python = venv_python("/tmp/yolo-export-studio");
+
+        #[cfg(windows)]
+        assert_eq!(python, "/tmp/yolo_export_studio/.venv/Scripts/python.exe");
+
+        #[cfg(not(windows))]
+        assert_eq!(python, "/tmp/yolo_export_studio/.venv/bin/python");
+    }
+
+    #[test]
+    fn venv_yolo_uses_platform_specific_location() {
+        let yolo = venv_yolo("/tmp/yolo-export-studio");
+
+        #[cfg(windows)]
+        assert_eq!(yolo, "/tmp/yolo_export_studio/.venv/Scripts/yolo.exe");
+
+        #[cfg(not(windows))]
+        assert_eq!(yolo, "/tmp/yolo_export_studio/.venv/bin/yolo");
+    }
 }
