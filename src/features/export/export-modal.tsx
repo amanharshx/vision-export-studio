@@ -170,16 +170,16 @@ export function ExportModal({
             </div>
 
             {isPendingConsent && missingPackageNames.length > 0 && (
-              <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
-                <p className="mb-1 text-sm font-medium text-amber-800">
+              <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
+                <p className="mb-1 text-sm font-medium text-blue-800">
                   Missing packages
                 </p>
-                <p className="mb-2 text-xs text-amber-700">
+                <p className="mb-2 text-xs text-blue-700">
                   These will be installed into your Python environment before export:
                 </p>
                 <ul className="space-y-0.5">
                   {missingPackageNames.map((pkg) => (
-                    <li key={pkg} className="font-mono text-xs text-amber-900">
+                    <li key={pkg} className="font-mono text-xs text-blue-900">
                       • {pkg}
                     </li>
                   ))}
