@@ -1,5 +1,8 @@
+use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use tauri::Emitter;
+use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Response types
@@ -460,6 +463,182 @@ fn check_pip_dep(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// install_dependencies — payload types
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize, Clone)]
+struct InstallLinePayload {
+    session_id: String,
+    line: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct InstallFinishedPayload {
+    session_id: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct InstallFailedPayload {
+    session_id: String,
+    error: String,
+}
+
+// ---------------------------------------------------------------------------
+// Package name validation
+// ---------------------------------------------------------------------------
+
+/// Accept only characters valid in a PyPI package name.
+/// Rejects anything that could be used for argument injection.
+fn validate_package_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("package name must not be empty".to_string());
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(format!("invalid package name: {}", name));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// install_dependencies command
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn install_dependencies(
+    app_handle: tauri::AppHandle,
+    packages: Vec<String>,
+    python_path: String,
+) -> Result<String, String> {
+    if python_path.is_empty() {
+        return Err("python_path must not be empty".to_string());
+    }
+    let python_is_path = python_path.contains('/') || python_path.contains('\\');
+    if python_is_path && !Path::new(&python_path).exists() {
+        return Err(format!("python executable not found: {}", python_path));
+    }
+    if packages.is_empty() {
+        return Err("packages must not be empty".to_string());
+    }
+    for pkg in &packages {
+        validate_package_name(pkg)?;
+    }
+
+    // Build argv: python -m pip install pkg1 pkg2 ...
+    let mut cmd = Command::new(&python_path);
+    cmd.arg("-m");
+    cmd.arg("pip");
+    cmd.arg("install");
+    for pkg in &packages {
+        cmd.arg(pkg);
+    }
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("failed to spawn pip: {}", e))?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "no stdout handle".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "no stderr handle".to_string())?;
+
+    let session_id = Uuid::new_v4().to_string();
+
+    // stdout reader thread
+    let ah_stdout = app_handle.clone();
+    let sid_stdout = session_id.clone();
+    let stdout_handle = std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            match line {
+                Ok(l) => {
+                    let _ = ah_stdout.emit(
+                        "install:stdout",
+                        InstallLinePayload {
+                            session_id: sid_stdout.clone(),
+                            line: l,
+                        },
+                    );
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    // stderr reader thread
+    let ah_stderr = app_handle.clone();
+    let sid_stderr = session_id.clone();
+    let stderr_handle = std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines() {
+            match line {
+                Ok(l) => {
+                    let _ = ah_stderr.emit(
+                        "install:stderr",
+                        InstallLinePayload {
+                            session_id: sid_stderr.clone(),
+                            line: l,
+                        },
+                    );
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    // waiter thread — joins readers then waits on child
+    let ah_wait = app_handle.clone();
+    let sid_wait = session_id.clone();
+    std::thread::spawn(move || {
+        let _ = stdout_handle.join();
+        let _ = stderr_handle.join();
+
+        match child.wait() {
+            Ok(status) => {
+                if status.success() {
+                    let _ = ah_wait.emit(
+                        "install:finished",
+                        InstallFinishedPayload {
+                            session_id: sid_wait,
+                        },
+                    );
+                } else {
+                    let code = status.code().unwrap_or(-1);
+                    let _ = ah_wait.emit(
+                        "install:failed",
+                        InstallFailedPayload {
+                            session_id: sid_wait,
+                            error: format!("pip exited with code {}", code),
+                        },
+                    );
+                }
+            }
+            Err(e) => {
+                let _ = ah_wait.emit(
+                    "install:failed",
+                    InstallFailedPayload {
+                        session_id: sid_wait,
+                        error: format!("wait error: {}", e),
+                    },
+                );
+            }
+        }
+    });
+
+    Ok(session_id)
+}
+
+// ---------------------------------------------------------------------------
 
 fn check_sys_dep(python: &str, binary_name: &str, install_hint: &str) -> DepCheckResult {
     // Escape single quotes in binary_name defensively; binary names should

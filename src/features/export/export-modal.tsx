@@ -12,10 +12,11 @@ import type {
   DepCheckResult,
   ExportOptions,
   ExportStatus,
+  InstallPhase,
   RouteSpec,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { AlertTriangle, ChevronDown, Play, Square } from "lucide-react";
+import { AlertTriangle, ChevronDown, Download, Loader2, Play, Square } from "lucide-react";
 import { DependencyPanel } from "./dependency-panel";
 import { ExportLog } from "./export-log";
 import { OptionsPanel } from "./options-panel";
@@ -37,6 +38,9 @@ interface ExportModalProps {
   depResults?: DepCheckResult[];
   depCheckLoading?: boolean;
   depCheckError?: string | null;
+  installPhase: InstallPhase;
+  missingPackageNames: string[];
+  onInstallAndExport: () => void;
 }
 
 export function ExportModal({
@@ -53,6 +57,9 @@ export function ExportModal({
   depResults,
   depCheckLoading,
   depCheckError,
+  installPhase,
+  missingPackageNames,
+  onInstallAndExport,
 }: ExportModalProps) {
   const format = formats[route.targetFormat];
   const formatIcon = formatIconMap[format.id];
@@ -63,7 +70,9 @@ export function ExportModal({
   const unsupportedReason = !isCompatible(route.platformLock, os)
     ? (route.unsupportedNote ?? incompatibleReason(route.platformLock, os))
     : null;
-  const exportDisabled = exportStatus === "running" || !sourcePath;
+  const isPendingConsent = installPhase === "pending_consent";
+  const isInstalling = installPhase === "installing";
+  const exportDisabled = exportStatus === "running" || !sourcePath || isInstalling;
   const showLog = exportStatus !== "idle" || logLines.length > 0;
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
@@ -160,6 +169,24 @@ export function ExportModal({
               )}
             </div>
 
+            {isPendingConsent && missingPackageNames.length > 0 && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+                <p className="mb-1 text-sm font-medium text-amber-800">
+                  Missing packages
+                </p>
+                <p className="mb-2 text-xs text-amber-700">
+                  These will be installed into your Python environment before export:
+                </p>
+                <ul className="space-y-0.5">
+                  {missingPackageNames.map((pkg) => (
+                    <li key={pkg} className="font-mono text-xs text-amber-900">
+                      • {pkg}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {showLog && (
               <div className="rounded-md bg-zinc-950 p-4">
                 <ExportLog lines={logLines} status={exportStatus} route={route} />
@@ -176,17 +203,31 @@ export function ExportModal({
               Stop
             </Button>
           ) : (
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isInstalling}>
               Cancel
             </Button>
           )}
           <Button
             disabled={exportDisabled}
-            onClick={onExport}
+            onClick={isPendingConsent ? onInstallAndExport : onExport}
             className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
-            <Play className="mr-2 h-4 w-4" />
-            Start Export
+            {isInstalling ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Installing...
+              </>
+            ) : isPendingConsent ? (
+              <>
+                <Download className="mr-2 h-4 w-4" />
+                Install &amp; Export
+              </>
+            ) : (
+              <>
+                <Play className="mr-2 h-4 w-4" />
+                Start Export
+              </>
+            )}
           </Button>
         </div>
       </DialogContent>

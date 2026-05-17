@@ -125,3 +125,19 @@ export interface DepCheckResult {
 export interface DepCheckResponse {
   results: DepCheckResult[];
 }
+
+export type InstallPhase = "idle" | "pending_consent" | "installing" | "done" | "failed";
+
+export interface InstallLinePayload {
+  session_id: string;
+  line: string;
+}
+
+export interface InstallFinishedPayload {
+  session_id: string;
+}
+
+export interface InstallFailedPayload {
+  session_id: string;
+  error: string;
+}
