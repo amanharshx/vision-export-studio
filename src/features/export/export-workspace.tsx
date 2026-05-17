@@ -500,7 +500,19 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
               </p>
 
               <div className="rounded-xl border border-zinc-200/80 bg-white p-4 shadow-sm">
-                <p className="mb-2.5 text-[13px] font-semibold text-zinc-800">Python path</p>
+                <div className="mb-2.5 flex items-center justify-between">
+                  <p className="text-[13px] font-semibold text-zinc-800">Python path</p>
+                  {pythonOverride && (
+                    <button
+                      type="button"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 bg-zinc-50 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600"
+                      onClick={handleClearOverride}
+                      title="Reset to auto-detect"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
                 <div className="flex items-center gap-1.5">
                   <Input
                     value={pythonOverride}
@@ -518,7 +530,7 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
                     <FolderOpen className="h-3.5 w-3.5" />
                   </button>
                 </div>
-                <div className="mt-2.5 flex items-center gap-2">
+                <div className="mt-2.5 flex justify-end">
                   <Button
                     size="sm"
                     className="h-7 rounded-lg px-3 text-[12px]"
@@ -526,21 +538,23 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
                   >
                     Apply
                   </Button>
-                  {pythonOverride && (
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-zinc-200/80 bg-white p-4 shadow-sm">
+                <div className="mb-2.5 flex items-center justify-between">
+                  <p className="text-[13px] font-semibold text-zinc-800">Output directory</p>
+                  {outputDirInput && (
                     <button
                       type="button"
                       className="flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 bg-zinc-50 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600"
-                      onClick={handleClearOverride}
-                      title="Reset to auto-detect"
+                      onClick={handleClearOutputDir}
+                      title="Reset to auto"
                     >
                       <RotateCcw className="h-3.5 w-3.5" />
                     </button>
                   )}
                 </div>
-              </div>
-
-              <div className="rounded-xl border border-zinc-200/80 bg-white p-4 shadow-sm">
-                <p className="mb-2.5 text-[13px] font-semibold text-zinc-800">Output directory</p>
                 <div className="flex items-center gap-1.5">
                   <Input
                     value={outputDirInput}
@@ -558,7 +572,7 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
                     <FolderOpen className="h-3.5 w-3.5" />
                   </button>
                 </div>
-                <div className="mt-2.5 flex items-center gap-2">
+                <div className="mt-2.5 flex justify-end">
                   <Button
                     size="sm"
                     className="h-7 rounded-lg px-3 text-[12px]"
@@ -566,16 +580,6 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
                   >
                     Apply
                   </Button>
-                  {outputDirOverride && (
-                    <button
-                      type="button"
-                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 bg-zinc-50 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600"
-                      onClick={handleClearOutputDir}
-                      title="Reset to auto"
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" />
-                    </button>
-                  )}
                 </div>
               </div>
             </div>
