@@ -2,6 +2,7 @@ export interface AppSettings {
   runtime_dir: string;
   setup_complete: boolean;
   python_path_override?: string;
+  output_dir_override?: string;
 }
 
 export type FormatCategory = "source" | "intermediate" | "runtime" | "vendor";

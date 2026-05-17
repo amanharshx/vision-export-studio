@@ -25,8 +25,8 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { loadSettings, savePythonOverride } from "@/lib/tauri/setup";
-import { openPythonExecutablePicker } from "@/lib/tauri/dialog";
+import { loadSettings, savePythonOverride, saveOutputDirOverride } from "@/lib/tauri/setup";
+import { openPythonExecutablePicker, openOutputDirPicker } from "@/lib/tauri/dialog";
 import { DropZone } from "./drop-zone";
 import { ExportModal } from "./export-modal";
 import { RouteGrid } from "./route-grid";
@@ -142,6 +142,10 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
   const [pythonOverride, setPythonOverride] = useState("");
   const [redetecting, setRedetecting] = useState(false);
 
+  // Output directory
+  const [outputDirOverride, setOutputDirOverride] = useState("");
+  const [outputDirInput, setOutputDirInput] = useState("");
+
   // Source model path
   const [sourcePath, setSourcePath] = useState("");
 
@@ -169,6 +173,11 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
       .then((settings) => {
         const override = settings.python_path_override || "";
         if (override) setPythonOverride(override);
+        const outOverride = settings.output_dir_override || "";
+        if (outOverride) {
+          setOutputDirOverride(outOverride);
+          setOutputDirInput(outOverride);
+        }
         return detectEnvironment(override || undefined);
       })
       .then(setEnvInfo)
@@ -265,10 +274,13 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
     if (!sourcePath || !envInfo?.yolo_path || exportStatus === "running") return;
     setInvokeError(null);
     setLogLines([]);
-    const sep = sourcePath.includes("/") ? "/" : "\\";
-    const lastSep = sourcePath.lastIndexOf(sep);
-    const parentDir = lastSep > 0 ? sourcePath.substring(0, lastSep) : "";
-    const outputDir = parentDir ? `${parentDir}/yolo-export-studio-exports` : "";
+    let outputDir = outputDirOverride.trim();
+    if (!outputDir) {
+      const sep = sourcePath.includes("/") ? "/" : "\\";
+      const lastSep = sourcePath.lastIndexOf(sep);
+      const parentDir = lastSep > 0 ? sourcePath.substring(0, lastSep) : "";
+      outputDir = parentDir ? `${parentDir}/yolo-export-studio-exports` : "";
+    }
     try {
       const id = await startExport({
         sourcePath,
@@ -361,6 +373,26 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
     await savePythonOverride(null);
     handleRedetect();
   }, [handleRedetect]);
+
+  // Save output dir override
+  const handleSaveOutputDir = useCallback(async () => {
+    const val = outputDirInput.trim();
+    setOutputDirOverride(val);
+    await saveOutputDirOverride(val || null);
+  }, [outputDirInput]);
+
+  // Browse for output directory
+  const handleBrowseOutputDir = useCallback(async () => {
+    const path = await openOutputDirPicker();
+    if (path) setOutputDirInput(path);
+  }, []);
+
+  // Clear output dir override
+  const handleClearOutputDir = useCallback(async () => {
+    setOutputDirOverride("");
+    setOutputDirInput("");
+    await saveOutputDirOverride(null);
+  }, []);
 
   // Back button per view
   const handleBack = () => {
@@ -499,6 +531,45 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
                       type="button"
                       className="text-[12px] text-zinc-400 transition-colors hover:text-zinc-600"
                       onClick={handleClearOverride}
+                    >
+                      Reset to auto
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-zinc-200/80 bg-white p-4 shadow-sm">
+                <p className="mb-2.5 text-[13px] font-semibold text-zinc-800">Output directory</p>
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    value={outputDirInput}
+                    onChange={(e) => setOutputDirInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") handleSaveOutputDir(); }}
+                    placeholder="Auto (next to model file)"
+                    className="h-8 flex-1 min-w-0 rounded-lg border-zinc-200 bg-zinc-50 font-mono text-[12px] placeholder:text-zinc-300 focus-visible:bg-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleBrowseOutputDir}
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-zinc-200 bg-zinc-50 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600"
+                    title="Browse for output directory"
+                  >
+                    <FolderOpen className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div className="mt-2.5 flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    className="h-7 rounded-lg px-3 text-[12px]"
+                    onClick={handleSaveOutputDir}
+                  >
+                    Apply
+                  </Button>
+                  {outputDirOverride && (
+                    <button
+                      type="button"
+                      className="text-[12px] text-zinc-400 transition-colors hover:text-zinc-600"
+                      onClick={handleClearOutputDir}
                     >
                       Reset to auto
                     </button>

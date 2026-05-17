@@ -21,3 +21,7 @@ export function savePythonOverride(pythonPathOverride: string | null): Promise<v
   return invoke<void>("save_python_override", { pythonPathOverride });
 }
 
+export function saveOutputDirOverride(outputDirOverride: string | null): Promise<void> {
+  return invoke<void>("save_output_dir_override", { outputDirOverride });
+}
+

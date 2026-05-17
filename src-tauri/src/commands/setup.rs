@@ -26,6 +26,8 @@ pub struct AppSettings {
     pub setup_complete: bool,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub python_path_override: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub output_dir_override: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +245,7 @@ pub fn load_settings(app_handle: tauri::AppHandle) -> Result<AppSettings, String
             runtime_dir,
             setup_complete: false,
             python_path_override: None,
+            output_dir_override: None,
         });
     }
 
@@ -355,6 +358,26 @@ pub fn save_python_override(
 ) -> Result<(), String> {
     let mut settings = load_settings(app_handle.clone())?;
     settings.python_path_override = python_path_override;
+
+    let path = settings_path(&app_handle)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create settings dir: {}", e))?;
+    }
+
+    let json = serde_json::to_string_pretty(&settings)
+        .map_err(|e| format!("failed to serialize settings: {}", e))?;
+    std::fs::write(&path, json).map_err(|e| format!("failed to write settings: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn save_output_dir_override(
+    app_handle: tauri::AppHandle,
+    output_dir_override: Option<String>,
+) -> Result<(), String> {
+    let mut settings = load_settings(app_handle.clone())?;
+    settings.output_dir_override = output_dir_override;
 
     let path = settings_path(&app_handle)?;
     if let Some(parent) = path.parent() {
