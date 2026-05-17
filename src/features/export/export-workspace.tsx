@@ -170,13 +170,20 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
   // Install phase state
   const [installPhase, setInstallPhase] = useState<InstallPhase>("idle");
 
-  const missingPackageNames = useMemo(
-    () =>
-      (depResults ?? [])
-        .filter((r) => r.status === "missing_package")
-        .map((r) => r.item),
-    [depResults],
-  );
+  const missingPackageNames = useMemo(() => {
+    const results = depResults ?? [];
+    const pipMissing = results
+      .filter((r) => r.status === "missing_package")
+      .map((r) => r.item);
+    const binaryViaPip = results
+      .filter(
+        (r) =>
+          r.status === "missing_binary" &&
+          r.install_hint.startsWith("pip install "),
+      )
+      .map((r) => r.install_hint.replace("pip install ", "").trim());
+    return [...pipMissing, ...binaryViaPip];
+  }, [depResults]);
 
   // Ref to current sessionId for use inside event listener closures
   const sessionIdRef = useRef<string | null>(null);
@@ -329,8 +336,7 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
   const handleExport = async () => {
     if (!sourcePath || !envInfo?.yolo_path || exportStatus === "running") return;
 
-    const missingPkgs = (depResults ?? []).filter((r) => r.status === "missing_package");
-    if (missingPkgs.length > 0) {
+    if (missingPackageNames.length > 0) {
       setInstallPhase("pending_consent");
       return;
     }

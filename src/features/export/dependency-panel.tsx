@@ -68,7 +68,25 @@ export function DependencyPanel({
       })}
       {route.sysDeps.map((dep) => {
         const result = depResults?.find((r) => r.item === dep.binaryName);
-        return (
+        const isPipInstallable = dep.installHint.startsWith("pip install ");
+        return isPipInstallable ? (
+          <div
+            key={dep.binaryName}
+            className="flex items-center justify-between gap-3 rounded-md border border-zinc-900/10 bg-zinc-50 px-3 py-2 text-sm"
+          >
+            <span className="flex items-center gap-2 font-medium text-zinc-900">
+              {depCheckLoading ? (
+                <Loader2 className="size-4 shrink-0 animate-spin text-zinc-300" aria-hidden="true" />
+              ) : result ? (
+                statusIcon(result.status)
+              ) : (
+                <PackageCheck className="size-4 text-teal-700" aria-hidden="true" />
+              )}
+              {dep.binaryName}
+            </span>
+            <span className="min-w-0 truncate text-zinc-500">{dep.installHint}</span>
+          </div>
+        ) : (
           <div
             key={dep.binaryName}
             className="flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
