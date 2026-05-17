@@ -14,7 +14,7 @@ import type {
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, FileBox, FolderOpen, Info, RefreshCw, X, CircleHelp } from "lucide-react";
+import { ArrowLeft, FileBox, FolderOpen, Info, RefreshCw, RotateCcw, X, CircleHelp } from "lucide-react";
 import { UpdateChecker } from "@/components/update-checker";
 import {
   Sheet,
@@ -529,10 +529,11 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
                   {pythonOverride && (
                     <button
                       type="button"
-                      className="text-[12px] text-zinc-400 transition-colors hover:text-zinc-600"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 bg-zinc-50 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600"
                       onClick={handleClearOverride}
+                      title="Reset to auto-detect"
                     >
-                      Reset to auto
+                      <RotateCcw className="h-3.5 w-3.5" />
                     </button>
                   )}
                 </div>
@@ -568,10 +569,11 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
                   {outputDirOverride && (
                     <button
                       type="button"
-                      className="text-[12px] text-zinc-400 transition-colors hover:text-zinc-600"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 bg-zinc-50 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600"
                       onClick={handleClearOutputDir}
+                      title="Reset to auto"
                     >
-                      Reset to auto
+                      <RotateCcw className="h-3.5 w-3.5" />
                     </button>
                   )}
                 </div>
