@@ -71,10 +71,10 @@ export function DropZone({ path, onFileSelect, errorMsg }: DropZoneProps) {
       onClick={handleBrowse}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleBrowse(); }}
       className={[
-        "border-dashed shadow-sm transition-colors cursor-pointer",
+        "ring-0 border-2 border-dashed shadow-sm transition-colors cursor-pointer",
         isDragOver
           ? "border-primary bg-primary/5"
-          : "border-zinc-900/25 bg-white/75 hover:border-primary hover:bg-primary/[0.02]",
+          : "border-zinc-300 bg-white/75 hover:border-primary hover:bg-primary/[0.02]",
       ].join(" ")}
     >
       <CardContent className="flex min-h-[236px] flex-col items-center justify-center gap-5 px-6 py-9 text-center">
