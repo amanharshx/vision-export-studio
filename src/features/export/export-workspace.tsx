@@ -240,6 +240,9 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
 
       const ulFinished = await listen<ExportFinishedPayload>("export:finished", (event) => {
         if (event.payload.session_id === sessionIdRef.current) {
+          if (event.payload.artifact_warning) {
+            setLogLines((prev) => [...prev, "[warning] " + event.payload.artifact_warning]);
+          }
           setExportStatus("finished");
         }
       });
@@ -279,7 +282,7 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
       const sep = sourcePath.includes("/") ? "/" : "\\";
       const lastSep = sourcePath.lastIndexOf(sep);
       const parentDir = lastSep > 0 ? sourcePath.substring(0, lastSep) : "";
-      outputDir = parentDir ? `${parentDir}/yolo-export-studio-exports` : "";
+      outputDir = parentDir ? `${parentDir}${sep}yolo-export-studio-exports` : "";
     }
     try {
       const id = await startExport({
@@ -430,7 +433,7 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
 
       {/* Settings slide-in panel */}
       <Sheet open={infoOpen} onOpenChange={setInfoOpen}>
-        <SheetContent side="right" className="w-[340px] bg-zinc-50/80 p-0">
+        <SheetContent side="right" showCloseButton={false} className="w-[340px] bg-zinc-50/80 p-0">
           {/* Panel header */}
           <div className="flex items-center justify-between border-b border-zinc-200/60 px-5 py-4">
             <SheetHeader className="p-0">

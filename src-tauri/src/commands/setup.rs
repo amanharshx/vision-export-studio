@@ -1,9 +1,11 @@
+use crate::commands::environment::resolve_python;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
+// Manager trait provides app_handle.path().
 use tauri::Manager;
 use uuid::Uuid;
 
@@ -14,6 +16,36 @@ use uuid::Uuid;
 #[derive(Default)]
 pub struct SetupState {
     pub sessions: Arc<Mutex<HashMap<String, Child>>>,
+}
+
+#[derive(Default)]
+pub struct SettingsState {
+    lock: Mutex<()>,
+}
+
+fn update_settings<F>(
+    app_handle: &tauri::AppHandle,
+    state: &SettingsState,
+    f: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&mut AppSettings),
+{
+    let _guard = state
+        .lock
+        .lock()
+        .map_err(|_| "settings lock poisoned".to_string())?;
+    let mut settings = load_settings(app_handle.clone())?;
+    f(&mut settings);
+    let path = settings_path(app_handle)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create settings dir: {}", e))?;
+    }
+    let json = serde_json::to_string_pretty(&settings)
+        .map_err(|e| format!("failed to serialize settings: {}", e))?;
+    std::fs::write(&path, json).map_err(|e| format!("failed to write settings: {}", e))?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -256,26 +288,6 @@ pub fn load_settings(app_handle: tauri::AppHandle) -> Result<AppSettings, String
     Ok(settings)
 }
 
-#[allow(dead_code)]
-pub fn save_settings(app_handle: tauri::AppHandle, runtime_dir: String) -> Result<(), String> {
-    validate_runtime_dir(&runtime_dir)?;
-
-    let mut settings = load_settings(app_handle.clone())?;
-    settings.runtime_dir = runtime_dir;
-    settings.setup_complete = false;
-
-    let path = settings_path(&app_handle)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create settings dir: {}", e))?;
-    }
-
-    let json = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("failed to serialize settings: {}", e))?;
-    std::fs::write(&path, json).map_err(|e| format!("failed to write settings: {}", e))?;
-    Ok(())
-}
-
 #[tauri::command]
 pub async fn create_runtime_venv(
     app_handle: tauri::AppHandle,
@@ -290,8 +302,9 @@ pub async fn create_runtime_venv(
 
     let venv_path = Path::new(&runtime_dir).join(".venv");
 
-    // Build argv: python3 -m venv {runtime_dir}/.venv
-    let mut cmd = Command::new("python3");
+    // Build argv: {python} -m venv {runtime_dir}/.venv
+    let python = resolve_python(None)?;
+    let mut cmd = Command::new(&python);
     cmd.arg("-m");
     cmd.arg("venv");
     cmd.arg(&venv_path);
@@ -331,85 +344,34 @@ pub async fn install_ultralytics(
 #[tauri::command]
 pub fn mark_setup_complete(
     app_handle: tauri::AppHandle,
+    state: tauri::State<'_, SettingsState>,
     runtime_dir: String,
 ) -> Result<(), String> {
     validate_runtime_dir(&runtime_dir)?;
-
-    let mut settings = load_settings(app_handle.clone())?;
-    settings.runtime_dir = runtime_dir;
-    settings.setup_complete = true;
-
-    let path = settings_path(&app_handle)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create settings dir: {}", e))?;
-    }
-
-    let json = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("failed to serialize settings: {}", e))?;
-    std::fs::write(&path, json).map_err(|e| format!("failed to write settings: {}", e))?;
-    Ok(())
+    update_settings(&app_handle, &state, |settings| {
+        settings.runtime_dir = runtime_dir;
+        settings.setup_complete = true;
+    })
 }
 
 #[tauri::command]
 pub fn save_python_override(
     app_handle: tauri::AppHandle,
+    state: tauri::State<'_, SettingsState>,
     python_path_override: Option<String>,
 ) -> Result<(), String> {
-    let mut settings = load_settings(app_handle.clone())?;
-    settings.python_path_override = python_path_override;
-
-    let path = settings_path(&app_handle)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create settings dir: {}", e))?;
-    }
-
-    let json = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("failed to serialize settings: {}", e))?;
-    std::fs::write(&path, json).map_err(|e| format!("failed to write settings: {}", e))?;
-    Ok(())
+    update_settings(&app_handle, &state, |settings| {
+        settings.python_path_override = python_path_override;
+    })
 }
 
 #[tauri::command]
 pub fn save_output_dir_override(
     app_handle: tauri::AppHandle,
+    state: tauri::State<'_, SettingsState>,
     output_dir_override: Option<String>,
 ) -> Result<(), String> {
-    let mut settings = load_settings(app_handle.clone())?;
-    settings.output_dir_override = output_dir_override;
-
-    let path = settings_path(&app_handle)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create settings dir: {}", e))?;
-    }
-
-    let json = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("failed to serialize settings: {}", e))?;
-    std::fs::write(&path, json).map_err(|e| format!("failed to write settings: {}", e))?;
-    Ok(())
-}
-
-#[allow(dead_code)]
-pub async fn cancel_setup(
-    state: tauri::State<'_, SetupState>,
-    session_id: String,
-) -> Result<bool, String> {
-    let child_opt = {
-        let mut map = state
-            .sessions
-            .lock()
-            .map_err(|e| format!("sessions lock poisoned: {}", e))?;
-        map.remove(&session_id)
-    };
-
-    match child_opt {
-        None => Ok(false),
-        Some(mut child) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            Ok(true)
-        }
-    }
+    update_settings(&app_handle, &state, |settings| {
+        settings.output_dir_override = output_dir_override;
+    })
 }

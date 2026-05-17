@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Box, FolderOpen, Loader2 } from "lucide-react";
+import { openRuntimeDirPicker } from "@/lib/tauri/dialog";
 import {
   createRuntimeVenv,
   installUltralytics,
@@ -62,9 +62,9 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
 
 
   async function browseDirPicker() {
-    const result = await open({ directory: true, multiple: false });
-    if (typeof result === "string" && result.length > 0) {
-      setRuntimeDir(result);
+    const path = await openRuntimeDirPicker();
+    if (path) {
+      setRuntimeDir(path);
     }
   }
 
@@ -86,6 +86,8 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
     const venvResultPromise = new Promise<"ok" | string>((r) => { venvResolve = r; });
 
     const [unVenvOut, unVenvErr, unVenvDone, unVenvFail] = await Promise.all([
+      // Keep stdout/stderr listeners registered so stream events are drained even
+      // when this screen does not render setup logs.
       listen<SetupLinePayload>("setup:stdout", () => {}),
       listen<SetupLinePayload>("setup:stderr", () => {}),
       listen<SetupFinishedPayload>("setup:finished", (ev) => {
@@ -131,6 +133,8 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
     const pipResultPromise = new Promise<"ok" | string>((r) => { pipResolve = r; });
 
     const [unPipOut, unPipErr, unPipDone, unPipFail] = await Promise.all([
+      // Keep stdout/stderr listeners registered so stream events are drained even
+      // when this screen does not render setup logs.
       listen<SetupLinePayload>("setup:stdout", () => {}),
       listen<SetupLinePayload>("setup:stderr", () => {}),
       listen<SetupFinishedPayload>("setup:finished", (ev) => {

@@ -40,7 +40,7 @@ fn run(argv: &[&str]) -> Result<(String, String, bool), String> {
 /// Attempt to resolve the Python executable.
 /// If `python_path` is provided, use it directly.
 /// Otherwise try "python3" then "python", picking the first that responds to --version.
-fn resolve_python(python_path: Option<&str>) -> Result<String, String> {
+pub(crate) fn resolve_python(python_path: Option<&str>) -> Result<String, String> {
     if let Some(path) = python_path {
         // If the caller supplied an explicit filesystem path (contains a separator),
         // verify it exists before spawning — avoids misleading spawn errors.

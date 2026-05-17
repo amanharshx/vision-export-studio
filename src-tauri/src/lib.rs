@@ -1,13 +1,14 @@
 mod commands;
 
 use crate::commands::export::ExportState;
-use crate::commands::setup::SetupState;
+use crate::commands::setup::{SettingsState, SetupState};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(ExportState::default())
         .manage(SetupState::default())
+        .manage(SettingsState::default())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             if cfg!(debug_assertions) {

@@ -79,6 +79,8 @@ export interface ExportLinePayload {
 export interface ExportFinishedPayload {
   session_id: string;
   exit_code: number;
+  artifact_moved: boolean;
+  artifact_warning?: string;
 }
 
 export interface ExportFailedPayload {

@@ -5,9 +5,10 @@ import { ArrowRight, Box, Layers, Lock, Zap } from "lucide-react";
 
 interface LandingScreenProps {
   onGetStarted: () => void;
+  settingsReady: boolean;
 }
 
-export function LandingScreen({ onGetStarted }: LandingScreenProps) {
+export function LandingScreen({ onGetStarted, settingsReady }: LandingScreenProps) {
   return (
     <div className="relative flex min-h-screen">
       <div className="absolute right-4 top-4">
@@ -83,6 +84,7 @@ export function LandingScreen({ onGetStarted }: LandingScreenProps) {
 
           <Button
             onClick={onGetStarted}
+            disabled={!settingsReady}
             size="lg"
             className="w-full py-6 text-lg"
           >

@@ -26,6 +26,7 @@ function App() {
   const [appState, setAppState] = useState<AppState>("landing");
   const [runtimeDir, setRuntimeDir] = useState<string>("");
   const [setupComplete, setSetupComplete] = useState(false);
+  const [settingsReady, setSettingsReady] = useState(false);
 
   useEffect(() => {
     loadSettings()
@@ -33,7 +34,10 @@ function App() {
         setRuntimeDir(settings.runtime_dir);
         setSetupComplete(settings.setup_complete);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        setSettingsReady(true);
+      });
   }, []);
 
   const handleGetStarted = () => {
@@ -48,7 +52,7 @@ function App() {
     return (
       <>
         <TitleBarFill />
-        <LandingScreen onGetStarted={handleGetStarted} />
+        <LandingScreen onGetStarted={handleGetStarted} settingsReady={settingsReady} />
       </>
     );
   }
