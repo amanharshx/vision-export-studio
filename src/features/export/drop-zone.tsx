@@ -66,11 +66,15 @@ export function DropZone({ path, onFileSelect, errorMsg }: DropZoneProps) {
 
   return (
     <Card
+      role="button"
+      tabIndex={0}
+      onClick={handleBrowse}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleBrowse(); }}
       className={[
-        "border-dashed shadow-sm transition-colors",
+        "border-dashed shadow-sm transition-colors cursor-pointer",
         isDragOver
           ? "border-primary bg-primary/5"
-          : "border-zinc-900/25 bg-white/75",
+          : "border-zinc-900/25 bg-white/75 hover:border-primary hover:bg-primary/[0.02]",
       ].join(" ")}
     >
       <CardContent className="flex min-h-[236px] flex-col items-center justify-center gap-5 px-6 py-9 text-center">
@@ -112,7 +116,7 @@ export function DropZone({ path, onFileSelect, errorMsg }: DropZoneProps) {
 
         <button
           type="button"
-          onClick={handleBrowse}
+          onClick={(e) => { e.stopPropagation(); handleBrowse(); }}
           className="rounded-md bg-zinc-950 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-primary/40 active:bg-zinc-700"
         >
           {hasFile ? "Change file" : "Browse file"}
