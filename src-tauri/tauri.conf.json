@@ -13,12 +13,13 @@
     "windows": [
       {
         "title": "YOLO Export Studio",
-        "width": 1280,
-        "height": 840,
-        "minWidth": 980,
-        "minHeight": 680,
+        "width": 900,
+        "height": 700,
+        "minWidth": 600,
+        "minHeight": 500,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "dragDropEnabled": true
       }
     ],
     "security": {
