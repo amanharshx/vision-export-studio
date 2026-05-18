@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Button } from "@/components/ui/button";
 import { Box, Loader2 } from "lucide-react";
+import { detectEnvironment } from "@/lib/tauri/environment";
 import {
   createRuntimeVenv,
   installUltralytics,
@@ -26,11 +27,15 @@ interface SetupFailedPayload {
   error: string;
 }
 
-type SetupPhase = "idle" | "venv" | "pip" | "done" | "error";
+type SetupPhase = "idle" | "venv" | "pip" | "verify" | "done" | "error";
 
 interface SetupScreenProps {
   defaultRuntimeDir: string;
   onComplete: () => void;
+}
+
+function verifyEnvironmentReadyMessage() {
+  return "runtime verification failed after install; retry setup";
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +180,24 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
       return;
     }
 
+    // ------------------------------------------------------------------
+    // Step 4: verify environment is actually ready before redirect
+    // ------------------------------------------------------------------
+    if (!mountedRef.current) return;
+    setPhase("verify");
+
+    try {
+      const envInfo = await detectEnvironment();
+      if (!envInfo.python_path || !envInfo.ultralytics_version || !envInfo.yolo_path) {
+        throw new Error(verifyEnvironmentReadyMessage());
+      }
+    } catch (e: unknown) {
+      if (!mountedRef.current) return;
+      setPhase("error");
+      setErrorMessage(`environment verify failed: ${String(e)}`);
+      return;
+    }
+
     if (!mountedRef.current) return;
     setPhase("done");
     setCountdown(3);
@@ -200,6 +223,7 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
     idle: "Preparing managed runtime...",
     venv: "Creating Python virtual environment...",
     pip: "Installing ultralytics...",
+    verify: "Verifying managed runtime...",
     done: "Setup complete.",
     error: "Setup failed.",
   };

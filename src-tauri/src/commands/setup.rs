@@ -37,14 +37,7 @@ where
         .map_err(|_| "settings lock poisoned".to_string())?;
     let mut settings = load_settings(app_handle.clone())?;
     f(&mut settings);
-    let path = settings_path(app_handle)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create settings dir: {}", e))?;
-    }
-    let json = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("failed to serialize settings: {}", e))?;
-    std::fs::write(&path, json).map_err(|e| format!("failed to write settings: {}", e))?;
+    write_settings(app_handle, &settings)?;
     Ok(())
 }
 
@@ -95,6 +88,18 @@ fn settings_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir.join("yolo-export-studio-settings.json"))
 }
 
+fn write_settings(app_handle: &tauri::AppHandle, settings: &AppSettings) -> Result<(), String> {
+    let path = settings_path(app_handle)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create settings dir: {}", e))?;
+    }
+    let json = serde_json::to_string_pretty(settings)
+        .map_err(|e| format!("failed to serialize settings: {}", e))?;
+    std::fs::write(&path, json).map_err(|e| format!("failed to write settings: {}", e))?;
+    Ok(())
+}
+
 fn default_runtime_dir_from_home(home_dir: &str) -> Result<String, String> {
     if home_dir.trim().is_empty() {
         return Err("could not resolve home dir".to_string());
@@ -133,6 +138,68 @@ pub(crate) fn venv_yolo(runtime_dir: &str) -> String {
     {
         format!("{}/.venv/bin/yolo", runtime_dir)
     }
+}
+
+fn has_python_override(python_path_override: Option<&str>) -> bool {
+    python_path_override
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .is_some()
+}
+
+fn normalize_python_override(python_path_override: Option<String>) -> Option<String> {
+    python_path_override.and_then(|path| {
+        let trimmed = path.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
+}
+
+fn managed_runtime_is_ready(runtime_dir: &str) -> bool {
+    Path::new(&venv_python(runtime_dir)).exists() && Path::new(&venv_yolo(runtime_dir)).exists()
+}
+
+fn normalize_loaded_settings(
+    settings: AppSettings,
+    managed_runtime_dir: &str,
+    managed_runtime_ready: bool,
+) -> (AppSettings, bool) {
+    let mut normalized = settings;
+    let mut changed = false;
+
+    if normalized.runtime_dir != managed_runtime_dir {
+        normalized.runtime_dir = managed_runtime_dir.to_string();
+        changed = true;
+    }
+
+    let normalized_override = normalize_python_override(normalized.python_path_override.clone());
+    if normalized.python_path_override != normalized_override {
+        normalized.python_path_override = normalized_override;
+        changed = true;
+    }
+
+    let expected_setup_complete =
+        managed_runtime_ready || has_python_override(normalized.python_path_override.as_deref());
+    if normalized.setup_complete != expected_setup_complete {
+        normalized.setup_complete = expected_setup_complete;
+        changed = true;
+    }
+
+    (normalized, changed)
+}
+
+fn ensure_managed_runtime_dir(
+    app_handle: &tauri::AppHandle,
+    runtime_dir: &str,
+) -> Result<String, String> {
+    validate_runtime_dir(runtime_dir)?;
+    let managed_runtime_dir = default_runtime_dir(app_handle)?;
+    if runtime_dir != managed_runtime_dir {
+        return Err(format!(
+            "runtime_dir must match managed runtime root: {}",
+            managed_runtime_dir
+        ));
+    }
+    Ok(managed_runtime_dir)
 }
 
 fn validate_runtime_dir(runtime_dir: &str) -> Result<(), String> {
@@ -291,22 +358,33 @@ fn spawn_and_stream(
 #[tauri::command]
 pub fn load_settings(app_handle: tauri::AppHandle) -> Result<AppSettings, String> {
     let path = settings_path(&app_handle)?;
+    let managed_runtime_dir = default_runtime_dir(&app_handle)?;
+    let managed_runtime_ready = managed_runtime_is_ready(&managed_runtime_dir);
 
     if !path.exists() {
-        let runtime_dir = default_runtime_dir(&app_handle)?;
-        return Ok(AppSettings {
-            runtime_dir,
-            setup_complete: false,
-            python_path_override: None,
-            output_dir_override: None,
-        });
+        let (settings, _) = normalize_loaded_settings(
+            AppSettings {
+                runtime_dir: managed_runtime_dir,
+                setup_complete: false,
+                python_path_override: None,
+                output_dir_override: None,
+            },
+            default_runtime_dir(&app_handle)?.as_str(),
+            managed_runtime_ready,
+        );
+        return Ok(settings);
     }
 
     let raw =
         std::fs::read_to_string(&path).map_err(|e| format!("failed to read settings: {}", e))?;
     let settings: AppSettings =
         serde_json::from_str(&raw).map_err(|e| format!("failed to parse settings: {}", e))?;
-    Ok(settings)
+    let (normalized, changed) =
+        normalize_loaded_settings(settings, &managed_runtime_dir, managed_runtime_ready);
+    if changed {
+        write_settings(&app_handle, &normalized)?;
+    }
+    Ok(normalized)
 }
 
 #[tauri::command]
@@ -315,13 +393,13 @@ pub async fn create_runtime_venv(
     state: tauri::State<'_, SetupState>,
     runtime_dir: String,
 ) -> Result<String, String> {
-    validate_runtime_dir(&runtime_dir)?;
+    let managed_runtime_dir = ensure_managed_runtime_dir(&app_handle, &runtime_dir)?;
 
     // Create the runtime_dir if it does not exist.
-    std::fs::create_dir_all(&runtime_dir)
+    std::fs::create_dir_all(&managed_runtime_dir)
         .map_err(|e| format!("failed to create runtime dir: {}", e))?;
 
-    let venv_path = Path::new(&runtime_dir).join(".venv");
+    let venv_path = Path::new(&managed_runtime_dir).join(".venv");
 
     // Build argv: {python} -m venv {runtime_dir}/.venv
     let python = resolve_python(None)?;
@@ -340,9 +418,9 @@ pub async fn install_ultralytics(
     state: tauri::State<'_, SetupState>,
     runtime_dir: String,
 ) -> Result<String, String> {
-    validate_runtime_dir(&runtime_dir)?;
+    let managed_runtime_dir = ensure_managed_runtime_dir(&app_handle, &runtime_dir)?;
 
-    let python = venv_python(&runtime_dir);
+    let python = venv_python(&managed_runtime_dir);
 
     if !Path::new(&python).exists() {
         return Err(format!(
@@ -368,9 +446,9 @@ pub fn mark_setup_complete(
     state: tauri::State<'_, SettingsState>,
     runtime_dir: String,
 ) -> Result<(), String> {
-    validate_runtime_dir(&runtime_dir)?;
+    let managed_runtime_dir = ensure_managed_runtime_dir(&app_handle, &runtime_dir)?;
     update_settings(&app_handle, &state, |settings| {
-        settings.runtime_dir = runtime_dir;
+        settings.runtime_dir = managed_runtime_dir;
         settings.setup_complete = true;
     })
 }
@@ -381,8 +459,14 @@ pub fn save_python_override(
     state: tauri::State<'_, SettingsState>,
     python_path_override: Option<String>,
 ) -> Result<(), String> {
+    let normalized_override = normalize_python_override(python_path_override);
     update_settings(&app_handle, &state, |settings| {
-        settings.python_path_override = python_path_override;
+        settings.python_path_override = normalized_override;
+        if settings.python_path_override.is_some() {
+            settings.setup_complete = true;
+        } else {
+            settings.setup_complete = managed_runtime_is_ready(&settings.runtime_dir);
+        }
     })
 }
 
@@ -427,5 +511,55 @@ mod tests {
 
         #[cfg(not(windows))]
         assert_eq!(yolo, "/tmp/yolo_export_studio/.venv/bin/yolo");
+    }
+
+    #[test]
+    fn normalize_loaded_settings_migrates_runtime_dir_to_managed_root() {
+        let settings = AppSettings {
+            runtime_dir: "/Users/tester/Developer/oss/yolo-export-studio".to_string(),
+            setup_complete: true,
+            python_path_override: None,
+            output_dir_override: None,
+        };
+
+        let (normalized, changed) =
+            normalize_loaded_settings(settings, "/Users/tester/.yolo-export-studio", false);
+
+        assert!(changed);
+        assert_eq!(normalized.runtime_dir, "/Users/tester/.yolo-export-studio");
+        assert!(!normalized.setup_complete);
+    }
+
+    #[test]
+    fn normalize_loaded_settings_keeps_setup_complete_when_override_exists() {
+        let settings = AppSettings {
+            runtime_dir: "/Users/tester/Developer/oss/yolo-export-studio".to_string(),
+            setup_complete: false,
+            python_path_override: Some("/custom/python".to_string()),
+            output_dir_override: None,
+        };
+
+        let (normalized, changed) =
+            normalize_loaded_settings(settings, "/Users/tester/.yolo-export-studio", false);
+
+        assert!(changed);
+        assert_eq!(normalized.runtime_dir, "/Users/tester/.yolo-export-studio");
+        assert!(normalized.setup_complete);
+    }
+
+    #[test]
+    fn normalize_loaded_settings_marks_complete_when_managed_runtime_ready() {
+        let settings = AppSettings {
+            runtime_dir: "/Users/tester/.yolo-export-studio".to_string(),
+            setup_complete: false,
+            python_path_override: None,
+            output_dir_override: None,
+        };
+
+        let (normalized, changed) =
+            normalize_loaded_settings(settings, "/Users/tester/.yolo-export-studio", true);
+
+        assert!(changed);
+        assert!(normalized.setup_complete);
     }
 }
