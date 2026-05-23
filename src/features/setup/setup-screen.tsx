@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { AppIcon } from "@/components/app-icon";
 import { Button } from "@/components/ui/button";
-import { Box, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { detectEnvironment } from "@/lib/tauri/environment";
 import {
   createRuntimeVenv,
@@ -233,9 +234,7 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
       <div className="w-full max-w-lg space-y-8">
         {/* Header */}
         <div className="flex flex-col items-center gap-4">
-          <div className="flex h-16 w-16 items-center justify-center rounded-lg bg-primary shadow-lg">
-            <Box className="h-8 w-8 text-white" />
-          </div>
+          <AppIcon className="h-16 w-16 rounded-lg shadow-lg" />
           <div className="text-center">
             <h1 className="text-2xl font-bold tracking-tight text-foreground">
               Set up YOLO Export Studio

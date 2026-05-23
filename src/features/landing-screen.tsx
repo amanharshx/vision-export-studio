@@ -1,7 +1,8 @@
+import { AppIcon } from "@/components/app-icon";
 import { Button } from "@/components/ui/button";
 import { UpdateChecker } from "@/components/update-checker";
 import { ultralyticsRoutes } from "@/lib/routes";
-import { ArrowRight, Box, Layers, Lock, Zap } from "lucide-react";
+import { ArrowRight, Layers, Lock, Zap } from "lucide-react";
 
 interface LandingScreenProps {
   onGetStarted: () => void;
@@ -17,9 +18,7 @@ export function LandingScreen({ onGetStarted, settingsReady }: LandingScreenProp
       {/* Left — Branding */}
       <div className="flex flex-1 flex-col items-center justify-center bg-primary/5 px-12 py-8">
         <div className="flex w-full max-w-lg flex-col items-center">
-          <div className="mb-8 flex h-24 w-24 items-center justify-center rounded-3xl bg-primary shadow-lg">
-            <Box className="h-12 w-12 text-white" />
-          </div>
+          <AppIcon className="mb-8 h-24 w-24 rounded-3xl shadow-lg" />
           <h1 className="mb-1 text-center text-4xl font-bold tracking-tight text-foreground">
             YOLO Export Studio
           </h1>
