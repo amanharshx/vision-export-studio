@@ -234,7 +234,7 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
       <div className="w-full max-w-lg space-y-8">
         {/* Header */}
         <div className="flex flex-col items-center gap-4">
-          <AppIcon className="h-16 w-16 rounded-lg shadow-lg" />
+          <AppIcon className="h-16 w-16 drop-shadow-md" />
           <div className="text-center">
             <h1 className="text-2xl font-bold tracking-tight text-foreground">
               Set up YOLO Export Studio

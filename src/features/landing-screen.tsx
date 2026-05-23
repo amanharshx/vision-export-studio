@@ -18,7 +18,7 @@ export function LandingScreen({ onGetStarted, settingsReady }: LandingScreenProp
       {/* Left — Branding */}
       <div className="flex flex-1 flex-col items-center justify-center bg-primary/5 px-12 py-8">
         <div className="flex w-full max-w-lg flex-col items-center">
-          <AppIcon className="mb-8 h-24 w-24 rounded-3xl shadow-lg" />
+          <AppIcon className="mb-8 h-24 w-24 drop-shadow-md" />
           <h1 className="mb-1 text-center text-4xl font-bold tracking-tight text-foreground">
             YOLO Export Studio
           </h1>
