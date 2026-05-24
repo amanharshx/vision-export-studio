@@ -79,9 +79,10 @@ function buildItems(
 interface EnvironmentStatusProps {
   envInfo?: EnvironmentInfo | null;
   loadError?: string | null;
+  compact?: boolean;
 }
 
-export function EnvironmentStatus({ envInfo: envInfoProp, loadError: loadErrorProp }: EnvironmentStatusProps = {}) {
+export function EnvironmentStatus({ envInfo: envInfoProp, loadError: loadErrorProp, compact = false }: EnvironmentStatusProps = {}) {
   const [envInfoInternal, setEnvInfoInternal] = useState<EnvironmentInfo | null>(null);
   const [loadErrorInternal, setLoadErrorInternal] = useState<string | null>(null);
 
@@ -98,6 +99,33 @@ export function EnvironmentStatus({ envInfo: envInfoProp, loadError: loadErrorPr
   const loadError = controlled ? (loadErrorProp ?? null) : loadErrorInternal;
 
   const items = buildItems(envInfo, loadError);
+
+  if (compact) {
+    return (
+      <div className="flex items-center gap-4">
+        {items.map((item) => {
+          const Icon = statusIcon(item.status);
+          const iconColor =
+            item.status === "ok"
+              ? "text-primary"
+              : item.status === "partial"
+                ? "text-amber-500"
+                : item.status === "error" || item.status === "missing"
+                  ? "text-red-500"
+                  : "text-zinc-400";
+          return (
+            <div key={item.label} className="flex items-center gap-1.5">
+              <Icon className={`h-3.5 w-3.5 ${iconColor}`} aria-hidden="true" />
+              <span className="text-xs text-zinc-400">{item.label}</span>
+              <span className="max-w-[140px] truncate text-xs font-medium text-zinc-700">
+                {item.value}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
 
   return (
     <div>

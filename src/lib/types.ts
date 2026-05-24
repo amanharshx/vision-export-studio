@@ -1,6 +1,6 @@
 export type FormatCategory = "source" | "intermediate" | "runtime" | "vendor";
 
-export type PlatformLock = "any" | "linux" | "linux_x86_64" | "not_windows" | "macos";
+export type PlatformLock = "any" | "linux" | "linux_x86_64" | "linux_windows" | "macos" | "windows";
 
 export interface FormatSpec {
   id: string;
@@ -29,11 +29,10 @@ export interface RouteSpec {
   supportsHalf: boolean;
   supportsInt8: boolean;
   supportsDynamic: boolean;
-  needsCalibration: boolean;
-  calibrationMode?: "never" | "when_int8" | "always";
   oneWay: boolean;
   lossy: boolean;
   notes: string;
+  unsupportedNote?: string;
 }
 
 export type EnvironmentStatus = "ok" | "partial" | "missing" | "loading" | "error";
@@ -54,10 +53,12 @@ export interface ExportOptions {
   int8: boolean;
   dynamic: boolean;
   simplify: boolean;
+  optimize: boolean;
   nms: boolean;
+  endToEnd: boolean;
   opset: number | null;
-  data: string;
-  name: string;
+  workspace: number | null;
+  chip: string;
 }
 
 export type ExportStatus = "idle" | "running" | "finished" | "failed" | "cancelled";

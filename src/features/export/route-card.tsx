@@ -1,61 +1,68 @@
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { formatIconMap } from "@/components/format-icons";
 import { formats } from "@/lib/routes";
+import { getOS, isCompatible } from "@/lib/platform";
 import type { RouteSpec } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { ChevronRight, Cpu, Layers, Zap } from "lucide-react";
 
-const categoryClass: Record<string, string> = {
-  intermediate: "border-teal-200 bg-teal-50 text-teal-800",
-  runtime: "border-zinc-300 bg-zinc-100 text-zinc-800",
-  vendor: "border-rose-200 bg-rose-50 text-rose-800",
-  source: "border-zinc-200 bg-zinc-50 text-zinc-700",
+const categoryIconMap: Record<string, React.ComponentType<{ className?: string }>> = {
+  intermediate: Layers,
+  runtime: Cpu,
+  vendor: Zap,
 };
 
-export function categoryTone(category: string) {
-  return categoryClass[category] ?? categoryClass.runtime;
+const categoryBgMap: Record<string, string> = {
+  intermediate: "bg-zinc-100 text-zinc-700",
+  runtime: "bg-zinc-100 text-zinc-700",
+  vendor: "bg-rose-100 text-rose-700",
+};
+
+export function categoryIcon(category: string) {
+  return categoryIconMap[category] ?? Cpu;
 }
 
-export function routeBadges(route: RouteSpec) {
-  return [
-    route.requiresGpu ? "GPU" : null,
-    route.oneWay ? "One-way" : null,
-    route.lossy ? "Lossy" : null,
-    route.needsCalibration ? "Calibration" : null,
-    route.platformLock !== "any" ? route.platformLock : null,
-  ].filter((badge): badge is string => Boolean(badge));
+export function categoryBg(category: string) {
+  return categoryBgMap[category] ?? "bg-zinc-100 text-zinc-700";
 }
 
-interface RouteCardProps {
+const os = getOS();
+
+interface RouteRowProps {
   route: RouteSpec;
-  active: boolean;
   onSelect: () => void;
 }
 
-export function RouteCard({ route, active, onSelect }: RouteCardProps) {
+export function RouteRow({ route, onSelect }: RouteRowProps) {
   const format = formats[route.targetFormat];
+  const formatIcon = formatIconMap[format.id];
+  const Icon = formatIcon ?? categoryIcon(format.category);
+  const bg = formatIcon ? "bg-white text-zinc-800" : categoryBg(format.category);
+  const compatible = isCompatible(route.platformLock, os);
 
   return (
-    <Button
+    <button
       type="button"
-      variant="outline"
-      className={cn(
-        "h-full min-h-[172px] flex-col items-stretch justify-start gap-3 rounded-md border p-4 text-left shadow-sm",
-        active
-          ? "border-teal-700 bg-white ring-2 ring-teal-700/20"
-          : "border-zinc-900/10 bg-white/75 hover:border-teal-600/50 hover:bg-white",
-      )}
       onClick={onSelect}
+      className={cn(
+        "flex w-full items-center gap-4 rounded-lg border border-zinc-900/10 bg-white px-4 py-3 text-left transition-colors hover:bg-zinc-50",
+        !compatible && "opacity-50",
+      )}
     >
-      <span className="flex items-start justify-between gap-3">
-        <span>
-          <span className="block text-base font-semibold text-zinc-950">{route.title}</span>
-          <span className="mt-1 block text-xs leading-5 text-zinc-500">{route.displayPath}</span>
-        </span>
-        <Badge variant="outline" className={cn("rounded-md", categoryTone(format.category))}>
-          {format.category}
-        </Badge>
-      </span>
-      <span className="block text-sm leading-6 text-zinc-600">{route.notes}</span>
-    </Button>
+      <ChevronRight className="h-4 w-4 shrink-0 text-zinc-300" />
+      <div
+        className={cn(
+          "flex h-10 w-10 shrink-0 items-center justify-center rounded-md",
+          bg,
+        )}
+      >
+        <Icon className="h-5 w-5" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <span className="font-semibold text-zinc-900">{route.title}</span>
+        <p className="mt-0.5 font-mono text-xs text-zinc-400">
+          format={route.targetFormat}
+        </p>
+      </div>
+    </button>
   );
 }

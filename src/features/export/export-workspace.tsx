@@ -1,4 +1,3 @@
-import { EnvironmentStatus } from "@/features/environment/environment-status";
 import { detectEnvironment } from "@/lib/tauri/environment";
 import { checkDependencies } from "@/lib/tauri/deps";
 import { cancelExport, startExport } from "@/lib/tauri/export";
@@ -14,10 +13,14 @@ import type {
   ExportStatus,
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, FileBox, Info, X } from "lucide-react";
+import { UpdateChecker } from "@/components/update-checker";
 import { DropZone } from "./drop-zone";
-import { RouteDetails } from "./route-details";
+import { ExportModal } from "./export-modal";
 import { RouteGrid } from "./route-grid";
+
+type WorkspaceView = "drop" | "formats";
 
 const defaultOptions: ExportOptions = {
   imgsz: 640,
@@ -26,13 +29,40 @@ const defaultOptions: ExportOptions = {
   int8: false,
   dynamic: false,
   simplify: false,
+  optimize: false,
   nms: false,
+  endToEnd: false,
   opset: null,
-  data: "",
-  name: "",
+  workspace: null,
+  chip: "rk3588",
 };
 
-export function ExportWorkspace() {
+const routeDefaults: Partial<Record<string, Partial<ExportOptions>>> = {
+  "ultralytics.pt.onnx": { half: true, simplify: true },
+  "ultralytics.pt.openvino": { half: true },
+  "ultralytics.pt.engine": { half: true, simplify: true },
+  "ultralytics.pt.coreml": { half: true },
+  "ultralytics.pt.tflite": { half: true },
+  "ultralytics.pt.tfjs": { half: true },
+  "ultralytics.pt.mnn": { half: true },
+  "ultralytics.pt.ncnn": { half: true },
+  "ultralytics.pt.imx": { int8: true },
+  "ultralytics.pt.axelera": { int8: true },
+};
+
+function optionsForRoute(routeId: string): ExportOptions {
+  return { ...defaultOptions, ...(routeDefaults[routeId] ?? {}) };
+}
+
+interface ExportWorkspaceProps {
+  onBack: () => void;
+}
+
+export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
+  const [view, setView] = useState<WorkspaceView>("drop");
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
+
   const [selectedRouteId, setSelectedRouteId] = useState(defaultRoute.id);
   const selectedRoute = useMemo(
     () => ultralyticsRoutes.find((route) => route.id === selectedRouteId) ?? defaultRoute,
@@ -70,11 +100,6 @@ export function ExportWorkspace() {
       .then(setEnvInfo)
       .catch((e: unknown) => setEnvError(String(e)));
   }, []);
-
-  // Reset calibration data path when route changes
-  useEffect(() => {
-    setOptions((prev) => ({ ...prev, data: "" }));
-  }, [selectedRouteId]);
 
   // Check dependencies whenever the selected route or resolved python path changes
   useEffect(() => {
@@ -171,17 +196,22 @@ export function ExportWorkspace() {
       : "";
     try {
       const id = await startExport({
-        source_path: sourcePath,
-        route_id: selectedRoute.id,
-        output_dir: outputDir,
-        yolo_path: envInfo.yolo_path,
+        sourcePath,
+        routeId: selectedRoute.id,
+        outputDir,
+        yoloPath: envInfo.yolo_path,
         imgsz: options.imgsz,
         batch: options.batch,
         half: options.half,
         int8: options.int8,
         dynamic: options.dynamic,
         simplify: options.simplify,
-        data: options.data,
+        optimize: options.optimize,
+        nms: options.nms,
+        endToEnd: options.endToEnd,
+        opset: options.opset,
+        workspace: options.workspace,
+        chip: options.chip,
       });
       setSessionId(id);
       setExportStatus("running");
@@ -200,45 +230,163 @@ export function ExportWorkspace() {
     }
   };
 
-  return (
-    <main className="min-h-screen px-5 py-5 text-zinc-950 md:px-8 md:py-7">
-      <div className="mx-auto flex max-w-7xl flex-col gap-5">
-        <header className="flex flex-col gap-5 border-b border-zinc-900/10 pb-5 lg:flex-row lg:items-end lg:justify-between">
-          <div className="space-y-3">
-            <p className="text-xs font-semibold uppercase text-teal-700">Local export studio</p>
-            <h1 className="text-4xl font-semibold text-zinc-950 md:text-6xl">YOLO Export Studio</h1>
-            <p className="max-w-2xl text-base leading-7 text-zinc-700">
-              High-fidelity desktop wrapper for Ultralytics export routes, dependency checks,
-              and local `yolo export` runs.
-            </p>
-          </div>
-          <EnvironmentStatus envInfo={envInfo} loadError={envError} />
-        </header>
+  // File select — advance to formats view
+  const handleFileSelect = useCallback((path: string) => {
+    setSourcePath(path);
+    if (path.trim()) setView("formats");
+  }, []);
 
-        <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_390px]">
-          <div className="space-y-5">
+  // Route row clicked — open modal for that route
+  const handleActivateRoute = (routeId: string) => {
+    setSelectedRouteId(routeId);
+    setOptions(optionsForRoute(routeId));
+    setLogLines([]);
+    setExportStatus("idle");
+    setDialogOpen(true);
+  };
+
+  // Clear file — back to drop view
+  const handleClearFile = () => {
+    setSourcePath("");
+    setView("drop");
+  };
+
+  // Back button per view
+  const handleBack = () => {
+    if (view === "drop") onBack();
+    else handleClearFile();
+  };
+
+  const backLabel = "Back";
+  const baseName = sourcePath.split(/[\\/]/).pop() ?? sourcePath;
+
+  const pythonLabel = envInfo?.python_version ?? (envError ? "Error" : "Detecting…");
+  const yoloLabel = envInfo?.yolo_path ?? (envError ? "Error" : "Detecting…");
+
+  const header = (
+    <header className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-zinc-900/10 bg-white px-5 py-3">
+      <button
+        type="button"
+        onClick={handleBack}
+        className="flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-950"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        {backLabel}
+      </button>
+
+      <div className="flex items-center gap-4">
+        {/* (i) env info popover */}
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setInfoOpen((v) => !v)}
+            className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            title="Environment info"
+          >
+            <Info className="h-3.5 w-3.5" />
+          </button>
+          {infoOpen && (
+            <>
+              {/* backdrop to close */}
+              <div
+                className="fixed inset-0 z-10"
+                onClick={() => setInfoOpen(false)}
+              />
+              <div className="absolute right-0 top-6 z-20 w-64 rounded-md border border-zinc-200 bg-white p-3 shadow-md">
+                <p className="mb-2 text-xs font-medium text-zinc-400 uppercase tracking-wide">
+                  Environment
+                </p>
+                <div className="space-y-2">
+                  <div className="flex justify-between gap-2">
+                    <span className="text-xs text-zinc-500">Python</span>
+                    <span className="max-w-[150px] truncate text-xs font-medium text-zinc-900 text-right">
+                      {pythonLabel}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="text-xs text-zinc-500">YOLO CLI</span>
+                    <span className="max-w-[150px] truncate text-xs font-medium text-zinc-900 text-right" title={yoloLabel}>
+                      {yoloLabel}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        <UpdateChecker />
+      </div>
+    </header>
+  );
+
+  const filePill = (
+    <div className="flex items-center gap-3 rounded-lg border border-zinc-900/10 bg-white/85 p-4 shadow-sm">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10">
+        <FileBox className="h-5 w-5 text-primary" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-zinc-950">{baseName}</p>
+        <p className="text-xs text-zinc-500">Ready to export</p>
+      </div>
+      <button
+        type="button"
+        onClick={handleClearFile}
+        className="text-zinc-400 hover:text-zinc-950"
+      >
+        <X className="h-4 w-4" />
+      </button>
+    </div>
+  );
+
+  if (view === "drop") {
+    return (
+      <div className="flex min-h-screen flex-col">
+        {header}
+        <main className="flex flex-1 items-center justify-center px-4">
+          <div className="w-full max-w-md">
             <DropZone
               path={sourcePath}
-              onFileSelect={setSourcePath}
+              onFileSelect={handleFileSelect}
               errorMsg={invokeError}
             />
-            <RouteGrid selectedRouteId={selectedRoute.id} onSelectRoute={setSelectedRouteId} />
           </div>
-          <RouteDetails
-            route={selectedRoute}
-            sourcePath={sourcePath}
-            exportStatus={exportStatus}
-            logLines={logLines}
-            options={options}
-            onOptionsChange={setOptions}
-            onExport={handleExport}
-            onCancel={handleCancel}
-            depResults={depResults ?? undefined}
-            depCheckLoading={depCheckLoading}
-            depCheckError={depCheckError}
-          />
-        </section>
+        </main>
       </div>
-    </main>
+    );
+  }
+
+  // formats view
+  return (
+    <div className="flex h-dvh flex-col">
+      {header}
+      <div className="flex-1 overflow-y-auto">
+        <main className="mx-auto w-full max-w-2xl space-y-6 px-5 py-8">
+          {filePill}
+          <div>
+            <h2 className="mb-3 text-sm font-medium uppercase text-zinc-400">
+              Export Target
+            </h2>
+            <RouteGrid onSelectRoute={handleActivateRoute} />
+          </div>
+        </main>
+      </div>
+
+      <ExportModal
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        route={selectedRoute}
+        sourcePath={sourcePath}
+        exportStatus={exportStatus}
+        logLines={logLines}
+        options={options}
+        onOptionsChange={setOptions}
+        onExport={handleExport}
+        onStopExport={handleCancel}
+        depResults={depResults ?? undefined}
+        depCheckLoading={depCheckLoading}
+        depCheckError={depCheckError}
+      />
+    </div>
   );
 }

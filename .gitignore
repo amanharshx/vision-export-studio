@@ -28,6 +28,7 @@ dist/
 # JavaScript / Tauri
 node_modules/
 dist/
+.vite/
 src-tauri/target/
 
 # Pytest

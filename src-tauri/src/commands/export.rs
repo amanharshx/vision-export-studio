@@ -61,7 +61,12 @@ pub async fn start_export(
     int8: bool,
     dynamic: bool,
     simplify: bool,
-    data: String,
+    optimize: bool,
+    nms: bool,
+    end_to_end: bool,
+    opset: Option<u32>,
+    workspace: Option<u32>,
+    chip: String,
 ) -> Result<String, String> {
     // ------------------------------------------------------------------
     // Validation
@@ -73,16 +78,6 @@ pub async fn start_export(
     if source_path.contains('=') {
         return Err("source path must not contain '='".to_string());
     }
-
-    const CALIBRATION_ROUTES: &[&str] = &[
-        "ultralytics.pt.openvino",
-        "ultralytics.pt.tflite",
-        "ultralytics.pt.engine",
-        "ultralytics.pt.tfjs",
-        "ultralytics.pt.imx",
-        "ultralytics.pt.axelera",
-        "ultralytics.pt.edgetpu",
-    ];
 
     const VALID_ROUTE_IDS: &[&str] = &[
         "ultralytics.pt.torchscript",
@@ -106,6 +101,22 @@ pub async fn start_export(
         return Err(format!("route not supported in this build: {}", route_id));
     }
 
+    // IMX500 only supports YOLOv8n and YOLO11n (nano) models.
+    if route_id == "ultralytics.pt.imx" {
+        let basename = Path::new(&source_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if !basename.starts_with("yolov8n") && !basename.starts_with("yolo11n") {
+            return Err(
+                "IMX500 export only supports YOLOv8n and YOLO11n (nano) models. \
+                 Other architectures or sizes will fail during export."
+                    .to_string(),
+            );
+        }
+    }
+
     let yolo_format = route_id
         .strip_prefix("ultralytics.pt.")
         .expect("route_id prefix validated above")
@@ -122,19 +133,6 @@ pub async fn start_export(
         if !Path::new(&output_dir).exists() {
             return Err(format!("output dir does not exist: {}", output_dir));
         }
-    }
-
-    if data.trim().is_empty() && CALIBRATION_ROUTES.contains(&route_id.as_str()) {
-        return Err("this route requires a calibration dataset (data= path)".to_string());
-    }
-    if !data.is_empty() && data.contains('=') {
-        return Err("calibration data path must not contain '='".to_string());
-    }
-    if !data.trim().is_empty() && !std::path::Path::new(data.trim()).exists() {
-        return Err(format!(
-            "calibration data path does not exist: {}",
-            data.trim()
-        ));
     }
 
     // ------------------------------------------------------------------
@@ -163,8 +161,23 @@ pub async fn start_export(
     if simplify {
         cmd.arg("simplify=True");
     }
-    if !data.trim().is_empty() {
-        cmd.arg(format!("data={}", data.trim()));
+    if optimize {
+        cmd.arg("optimize=True");
+    }
+    if nms {
+        cmd.arg("nms=True");
+    }
+    if end_to_end {
+        cmd.arg("end2end=True");
+    }
+    if let Some(v) = opset {
+        cmd.arg(format!("opset={}", v));
+    }
+    if let Some(v) = workspace {
+        cmd.arg(format!("workspace={}", v));
+    }
+    if route_id == "ultralytics.pt.rknn" && !chip.trim().is_empty() {
+        cmd.arg(format!("name={}", chip.trim()));
     }
     if !output_dir.is_empty() {
         cmd.arg(format!("project={}", output_dir));

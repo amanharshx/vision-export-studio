@@ -69,7 +69,7 @@ export function DropZone({ path, onFileSelect, errorMsg }: DropZoneProps) {
       className={[
         "border-dashed shadow-sm transition-colors",
         isDragOver
-          ? "border-teal-500 bg-teal-50/60"
+          ? "border-primary bg-primary/5"
           : "border-zinc-900/25 bg-white/75",
       ].join(" ")}
     >
@@ -77,7 +77,7 @@ export function DropZone({ path, onFileSelect, errorMsg }: DropZoneProps) {
         <span
           className={[
             "flex size-16 items-center justify-center rounded-md shadow-sm transition-colors",
-            isDragOver ? "bg-teal-600" : "bg-zinc-950",
+            isDragOver ? "bg-primary" : "bg-zinc-950",
             "text-white",
           ].join(" ")}
         >
@@ -113,22 +113,12 @@ export function DropZone({ path, onFileSelect, errorMsg }: DropZoneProps) {
         <button
           type="button"
           onClick={handleBrowse}
-          className="rounded-md bg-zinc-950 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-teal-600/40 active:bg-zinc-700"
+          className="rounded-md bg-zinc-950 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-primary/40 active:bg-zinc-700"
         >
           {hasFile ? "Change file" : "Browse file"}
         </button>
 
-        {/* Text input kept as fallback for pasting paths directly */}
-        <div className="w-full max-w-md space-y-1">
-          <input
-            type="text"
-            placeholder="/path/to/best.pt"
-            value={path}
-            onChange={(e) => onFileSelect(e.target.value)}
-            className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-xs text-zinc-700 placeholder-zinc-400 shadow-sm focus:border-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-600/20"
-          />
-          {errorMsg && <p className="text-xs text-red-600">{errorMsg}</p>}
-        </div>
+        {errorMsg && <p className="text-xs text-red-600">{errorMsg}</p>}
       </CardContent>
     </Card>
   );
