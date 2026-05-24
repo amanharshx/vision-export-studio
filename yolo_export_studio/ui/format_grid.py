@@ -70,16 +70,24 @@ class FormatGrid(QWidget):
             card.deleteLater()
         self._cards.clear()
 
+    def _activate_card(self, card: FormatCard) -> None:
+        """Set a card to its selected variant, preserving unavailable state."""
+        target = "unavailable_selected" if card._state in ("unavailable", "unavailable_selected") else "selected"
+        card.set_state(target)
+
     def select_route_by_id(self, route_id: str) -> None:
         """Re-select a card by route id without emitting route_selected."""
         for card in self._cards:
-            if card._route.id == route_id and card._state != "unavailable":
-                card.set_state("selected")
+            if card._route.id == route_id:
+                self._activate_card(card)
 
     def _on_card_selected(self, route: Route) -> None:
         for card in self._cards:
             if card._route is route:
-                card.set_state("selected")
-            elif card._state != "unavailable":
+                self._activate_card(card)
+            elif card._state in ("available", "selected"):
                 card.set_state("available")
+            elif card._state == "unavailable_selected":
+                card.set_state("unavailable")
+            # plain "unavailable" cards: no change needed
         self.route_selected.emit(route)
