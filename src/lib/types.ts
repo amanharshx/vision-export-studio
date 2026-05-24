@@ -1,3 +1,10 @@
+export interface AppSettings {
+  runtime_dir: string;
+  setup_complete: boolean;
+  python_path_override?: string;
+  output_dir_override?: string;
+}
+
 export type FormatCategory = "source" | "intermediate" | "runtime" | "vendor";
 
 export type PlatformLock = "any" | "linux" | "linux_x86_64" | "linux_windows" | "macos" | "windows";
@@ -72,6 +79,8 @@ export interface ExportLinePayload {
 export interface ExportFinishedPayload {
   session_id: string;
   exit_code: number;
+  artifact_moved: boolean;
+  artifact_warning?: string;
 }
 
 export interface ExportFailedPayload {

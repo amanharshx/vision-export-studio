@@ -19,3 +19,27 @@ export async function openCalibrationDataPicker(): Promise<string | null> {
   });
   return typeof result === "string" ? result : null;
 }
+
+export async function openPythonExecutablePicker(): Promise<string | null> {
+  const result = await open({
+    multiple: false,
+    directory: false,
+  });
+  return typeof result === "string" ? result : null;
+}
+
+export async function openRuntimeDirPicker(): Promise<string | null> {
+  const result = await open({
+    multiple: false,
+    directory: true,
+  });
+  return typeof result === "string" ? result : null;
+}
+
+export async function openOutputDirPicker(): Promise<string | null> {
+  const result = await open({
+    multiple: false,
+    directory: true,
+  });
+  return typeof result === "string" ? result : null;
+}
