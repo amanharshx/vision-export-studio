@@ -14,7 +14,7 @@ yolo-export-studio = "yolo_export_studio.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["yolo-export-studio*"]
+include = ["yolo_export_studio*"]
 
 [tool.ruff]
 line-length = 100
