@@ -33,7 +33,7 @@ class CheckResult:
 
     @property
     def ok(self) -> bool:
-        return self.status == "ready"
+        return self.status in ("ready", "warning")
 
 
 # ---------------------------------------------------------------------------

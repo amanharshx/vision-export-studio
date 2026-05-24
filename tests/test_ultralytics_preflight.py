@@ -45,12 +45,19 @@ def test_routes_for_pt(tmp_path):
     source = _provider.detect_source(pt)
     assert source is not None
     routes = _provider.routes_for(source)
-    assert len(routes) == 3
+    assert len(routes) == 10
     ids = {r.id for r in routes}
     assert ids == {
         "ultralytics.pt.torchscript",
         "ultralytics.pt.onnx",
         "ultralytics.pt.openvino",
+        "ultralytics.pt.coreml",
+        "ultralytics.pt.ncnn",
+        "ultralytics.pt.mnn",
+        "ultralytics.pt.tflite",
+        "ultralytics.pt.engine",
+        "ultralytics.pt.rknn",
+        "ultralytics.pt.executorch",
     }
 
 
@@ -116,3 +123,168 @@ def test_preflight_openvino_nncf_required_with_int8(tmp_path):
     results = _provider.preflight(ov_route, {"int8": True})
     items = {r.item for r in results}
     assert "nncf" in items
+
+
+# ---------------------------------------------------------------------------
+# preflight — coreml
+# ---------------------------------------------------------------------------
+
+def test_preflight_coreml_checks_platform_and_coremltools(tmp_path):
+    pt = tmp_path / "best.pt"
+    pt.write_bytes(b"fake")
+    source = _provider.detect_source(pt)
+    assert source is not None
+    routes = _provider.routes_for(source)
+    route = next(r for r in routes if r.id == "ultralytics.pt.coreml")
+    results = _provider.preflight(route, {})
+    items = {r.item for r in results}
+    assert "platform" in items
+    assert "coremltools" in items
+
+
+# ---------------------------------------------------------------------------
+# preflight — ncnn
+# ---------------------------------------------------------------------------
+
+def test_preflight_ncnn_checks_ncnn_and_pnnx(tmp_path):
+    pt = tmp_path / "best.pt"
+    pt.write_bytes(b"fake")
+    source = _provider.detect_source(pt)
+    assert source is not None
+    routes = _provider.routes_for(source)
+    route = next(r for r in routes if r.id == "ultralytics.pt.ncnn")
+    results = _provider.preflight(route, {})
+    items = {r.item for r in results}
+    assert "ncnn" in items
+    assert "pnnx" in items
+
+
+# ---------------------------------------------------------------------------
+# preflight — mnn
+# ---------------------------------------------------------------------------
+
+def test_preflight_mnn_checks_mnn_and_onnx(tmp_path):
+    pt = tmp_path / "best.pt"
+    pt.write_bytes(b"fake")
+    source = _provider.detect_source(pt)
+    assert source is not None
+    routes = _provider.routes_for(source)
+    route = next(r for r in routes if r.id == "ultralytics.pt.mnn")
+    results = _provider.preflight(route, {})
+    items = {r.item for r in results}
+    assert "MNN" in items
+    assert "onnx" in items
+
+
+# ---------------------------------------------------------------------------
+# preflight — tflite
+# ---------------------------------------------------------------------------
+
+def test_preflight_tflite_checks_all_deps(tmp_path):
+    pt = tmp_path / "best.pt"
+    pt.write_bytes(b"fake")
+    source = _provider.detect_source(pt)
+    assert source is not None
+    routes = _provider.routes_for(source)
+    route = next(r for r in routes if r.id == "ultralytics.pt.tflite")
+    results = _provider.preflight(route, {})
+    items = {r.item for r in results}
+    assert "tensorflow" in items
+    assert "onnx2tf" in items
+    assert "onnx" in items
+    assert "onnxruntime" in items
+
+
+# ---------------------------------------------------------------------------
+# preflight — engine (TensorRT)
+# ---------------------------------------------------------------------------
+
+def test_preflight_engine_checks_tensorrt_and_cuda_warning(tmp_path):
+    pt = tmp_path / "best.pt"
+    pt.write_bytes(b"fake")
+    source = _provider.detect_source(pt)
+    assert source is not None
+    routes = _provider.routes_for(source)
+    route = next(r for r in routes if r.id == "ultralytics.pt.engine")
+    results = _provider.preflight(route, {})
+    items = {r.item for r in results}
+    assert "tensorrt" in items
+    assert "cuda_gpu" in items
+    cuda_result = next(r for r in results if r.item == "cuda_gpu")
+    assert cuda_result.status == "warning"
+
+
+def test_preflight_engine_int8_adds_calibration_result(tmp_path):
+    pt = tmp_path / "best.pt"
+    pt.write_bytes(b"fake")
+    source = _provider.detect_source(pt)
+    assert source is not None
+    routes = _provider.routes_for(source)
+    route = next(r for r in routes if r.id == "ultralytics.pt.engine")
+    results = _provider.preflight(route, {"int8": True})
+    items = {r.item for r in results}
+    assert "calibration_data" in items
+    cal_result = next(r for r in results if r.item == "calibration_data")
+    assert cal_result.status == "calibration_required"
+
+
+# ---------------------------------------------------------------------------
+# preflight — rknn
+# ---------------------------------------------------------------------------
+
+def test_preflight_rknn_checks_rknn_toolkit_and_onnx(tmp_path):
+    pt = tmp_path / "best.pt"
+    pt.write_bytes(b"fake")
+    source = _provider.detect_source(pt)
+    assert source is not None
+    routes = _provider.routes_for(source)
+    route = next(r for r in routes if r.id == "ultralytics.pt.rknn")
+    results = _provider.preflight(route, {})
+    items = {r.item for r in results}
+    assert "rknn-toolkit2" in items
+    assert "onnx" in items
+
+
+def test_preflight_rknn_warns_without_chip_name(tmp_path):
+    pt = tmp_path / "best.pt"
+    pt.write_bytes(b"fake")
+    source = _provider.detect_source(pt)
+    assert source is not None
+    routes = _provider.routes_for(source)
+    route = next(r for r in routes if r.id == "ultralytics.pt.rknn")
+    results = _provider.preflight(route, {})
+    items = {r.item for r in results}
+    assert "chip_name" in items
+    chip_result = next(r for r in results if r.item == "chip_name")
+    assert chip_result.status == "warning"
+
+
+def test_preflight_rknn_no_chip_warning_when_name_provided(tmp_path):
+    pt = tmp_path / "best.pt"
+    pt.write_bytes(b"fake")
+    source = _provider.detect_source(pt)
+    assert source is not None
+    routes = _provider.routes_for(source)
+    route = next(r for r in routes if r.id == "ultralytics.pt.rknn")
+    results = _provider.preflight(route, {"name": "rk3588"})
+    items = {r.item for r in results}
+    assert "chip_name" not in items
+
+
+# ---------------------------------------------------------------------------
+# preflight — executorch
+# ---------------------------------------------------------------------------
+
+def test_preflight_executorch_checks_executorch_and_torch_version_warning(tmp_path):
+    pt = tmp_path / "best.pt"
+    pt.write_bytes(b"fake")
+    source = _provider.detect_source(pt)
+    assert source is not None
+    routes = _provider.routes_for(source)
+    route = next(r for r in routes if r.id == "ultralytics.pt.executorch")
+    results = _provider.preflight(route, {})
+    items = {r.item for r in results}
+    assert "executorch" in items
+    assert "torch_version" in items
+    tv_result = next(r for r in results if r.item == "torch_version")
+    assert tv_result.status == "warning"

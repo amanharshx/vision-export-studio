@@ -189,8 +189,9 @@ MNN = FormatSpec(
     category="runtime",
     can_be_source=False,
     can_be_target=True,
-    one_way=False,
+    one_way=True,
     platform_locked=False,
+    notes="Compiled MNN inference binary. Original weights cannot be recovered.",
 )
 
 RKNN = FormatSpec(
@@ -224,9 +225,9 @@ EXECUTORCH = FormatSpec(
     category="runtime",
     can_be_source=False,
     can_be_target=True,
-    one_way=False,
+    one_way=True,
     platform_locked=False,
-    notes="XNNPACK-optimised on-device inference. Requires torch >= 2.9.",
+    notes="XNNPACK-optimised on-device inference. Requires torch >= 2.9. One-way.",
 )
 
 AXELERA = FormatSpec(
