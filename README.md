@@ -1,73 +1,110 @@
 # YOLO Export Studio
 
-Desktop ML model export studio. Drop a model file, pick a target format, convert locally through the user's Python environment.
+Desktop studio for exporting Ultralytics YOLO `.pt` models into deployment-ready formats.
 
-Status: early v2 scaffold.
+> [!IMPORTANT]
+> **This project is currently under active development.** Some features may be incomplete or subject to change. Bug reports and feature requests are appreciated!
 
-## Product Boundary
+## What YOLO Export Studio Does
 
-YOLO Export Studio is a model export studio, not a universal all-to-all converter.
+YOLO Export Studio gives `yolo export` a desktop UI.
+
+- Drop supported `.pt` weights
+- Pick target format
+- Install route-specific dependencies when needed
+- Export locally on your machine
+
+YOLO Export Studio is **not** universal all-to-all model converter.
 
 ```text
 source format -> supported route -> target format
 ```
 
-Current source focus: Ultralytics-compatible `.pt` weights.
+Current source focus:
 
-YOLO Export Studio must not imply compiled/runtime outputs are reversible. TensorRT, RKNN, IMX, Edge TPU, Axelera, TFLite, and some CoreML outputs are one-way or platform-locked deployment artifacts.
+- Ultralytics-compatible `.pt` weights only
+- Generic PyTorch checkpoints not supported
+- Reverse conversion not supported
 
-## Stack
+## Why YOLO Export Studio
+
+- Local-first. Model files stay on your machine.
+- Managed runtime by default. YOLO Export Studio creates `~/.yolo-export-studio/.venv` for its Python tooling.
+- Optional override. Power users can point app at a different Python interpreter.
+- Route-aware installs. Dependencies install only when selected export path needs them.
+- Rust process layer. Export commands run through Tauri/Rust, not direct shell strings from React.
+
+## Supported Conversions
+
+Current source format:
+
+- `.pt`
+
+Current target formats:
+
+- `.pt -> onnx`
+- `.pt -> torchscript`
+- `.pt -> openvino`
+- `.pt -> engine` (TensorRT)
+- `.pt -> coreml`
+- `.pt -> saved_model`
+- `.pt -> pb`
+- `.pt -> tflite`
+- `.pt -> edgetpu`
+- `.pt -> tfjs`
+- `.pt -> paddle`
+- `.pt -> ncnn`
+- `.pt -> mnn`
+- `.pt -> rknn`
+- `.pt -> imx`
+- `.pt -> axelera`
+- `.pt -> executorch`
+
+Route metadata source of truth:
+
+- [`src/lib/routes.ts`](src/lib/routes.ts)
+
+## Target Caveats
+
+Some targets are one-way deployment artifacts or platform-locked:
+
+- `engine` requires NVIDIA GPU and supported TensorRT stack. No macOS support.
+- `coreml` export is macOS-only.
+- `edgetpu` export requires Linux `x86_64` and `edgetpu_compiler`.
+- `rknn` export is Linux-only and requires target chip selection.
+- `imx` export is Linux-only and requires Java `>= 17`.
+- `axelera` export is Linux-only.
+- `tflite`, `engine`, `mnn`, `rknn`, `imx`, `axelera`, `edgetpu`, and some `coreml` outputs should be treated as one-way deployment outputs.
+
+## Installation
+
+### Releases
+
+Download latest desktop build from GitHub Releases.
+
+Planned target experience:
+
+- install app
+- let YOLO Export Studio prepare runtime on first launch
+- pick export route
+- install route dependencies only when needed
+
+### First Launch Runtime Setup
+
+YOLO Export Studio now defaults to managed runtime in:
 
 ```text
-React + TypeScript + Tailwind + shadcn
-Tauri v2 desktop shell
-Rust command layer for process control
-Ultralytics `yolo export` CLI as export engine
-Bun for all JavaScript package tasks
+~/.yolo-export-studio/.venv
 ```
 
-Python is invoked at runtime only via the user's environment through `yolo export`.
+YOLO Export Studio creates this environment automatically and installs `ultralytics` there.
 
-## Architecture
+Current bootstrap limitation:
 
-```text
-React UI
-  -> Tauri invoke/listen
-Rust command layer
-  -> validates paths/options
-  -> finds selected Python and yolo CLI
-  -> spawns yolo export with argv, not shell strings
-  -> streams stdout/stderr events
-  -> owns cancel/kill
-Ultralytics CLI
-  -> runs export in user's Python environment
-```
+- first-time runtime creation still depends on working `python`/`python3` already available on host machine
+- bundled Python is not implemented yet
 
-React must not spawn shell commands directly. The Rust layer owns subprocess handles, quoting, cancel, and event streaming.
-
-## Supported Initial Routes
-
-`src/lib/routes.ts` is the sole route metadata source.
-
-| Target | Notes |
-|---|---|
-| TorchScript | Intermediate |
-| ONNX | Portable intermediate |
-| OpenVINO | Intel deployment |
-| TensorRT | NVIDIA GPU, one-way |
-| CoreML | Apple target, one-way |
-| TFLite | Mobile/runtime, often one-way |
-| Edge TPU | Coral, Linux x86_64, one-way |
-| TF.js | Browser/Node deployment |
-| PaddlePaddle | Intermediate/runtime |
-| NCNN | Mobile/embedded |
-| MNN | Mobile runtime, one-way |
-| RKNN | Rockchip NPU, chip-locked |
-| Sony IMX500 | Linux, calibration required |
-| ExecuTorch | On-device runtime |
-| Axelera Metis | Linux, calibration required |
-
-## Development
+## Build From Source
 
 Prerequisites:
 
@@ -100,6 +137,24 @@ Build frontend:
 bun run build
 ```
 
+## Architecture
+
+```text
+React UI
+  -> Tauri invoke/listen
+Rust command layer
+  -> validates paths/options
+  -> resolves managed Python or user override
+  -> installs dependencies for selected route
+  -> spawns yolo export with argv, not shell strings
+  -> streams stdout/stderr events
+  -> owns cancel/kill
+Ultralytics CLI
+  -> runs export in selected Python environment
+```
+
+React does not spawn export shell commands directly. Rust owns subprocess execution, path validation, and event streaming.
+
 ## Project Structure
 
 ```text
@@ -107,8 +162,18 @@ src/
   components/ui/          shadcn components
   features/export/        export workspace UI
   features/environment/   Python/yolo status UI
+  features/setup/         first-run runtime bootstrap UI
   lib/routes.ts           route metadata
   lib/types.ts            shared frontend types
 src-tauri/
-  src/                    Tauri v2 Rust entry and future commands
+  src/                    Tauri v2 Rust commands and process control
 ```
+## Status
+
+YOLO Export Studio is in public alpha shape, not polished final release.
+
+Expect:
+
+- rough edges in setup and platform-specific export paths
+- dependency/toolchain issues on some routes
+- UI and wording changes while product direction settles
