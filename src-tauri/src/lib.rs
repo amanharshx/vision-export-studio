@@ -22,6 +22,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::deps::check_dependencies,
+            commands::deps::install_dependencies,
             commands::environment::detect_environment,
             commands::export::start_export,
             commands::export::cancel_export,

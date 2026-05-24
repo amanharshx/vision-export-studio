@@ -1,5 +1,5 @@
 import { detectEnvironment } from "@/lib/tauri/environment";
-import { checkDependencies } from "@/lib/tauri/deps";
+import { checkDependencies, installDependencies } from "@/lib/tauri/deps";
 import { cancelExport, startExport } from "@/lib/tauri/export";
 import { defaultRoute, ultralyticsRoutes } from "@/lib/routes";
 import type {
@@ -11,6 +11,10 @@ import type {
   ExportLinePayload,
   ExportOptions,
   ExportStatus,
+  InstallFailedPayload,
+  InstallFinishedPayload,
+  InstallLinePayload,
+  InstallPhase,
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -163,6 +167,24 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
   const [depCheckLoading, setDepCheckLoading] = useState(false);
   const [depCheckError, setDepCheckError] = useState<string | null>(null);
 
+  // Install phase state
+  const [installPhase, setInstallPhase] = useState<InstallPhase>("idle");
+
+  const missingPackageNames = useMemo(() => {
+    const results = depResults ?? [];
+    const pipMissing = results
+      .filter((r) => r.status === "missing_package")
+      .map((r) => r.item);
+    const binaryViaPip = results
+      .filter(
+        (r) =>
+          r.status === "missing_binary" &&
+          r.install_hint.startsWith("pip install "),
+      )
+      .map((r) => r.install_hint.replace("pip install ", "").trim());
+    return [...pipMissing, ...binaryViaPip];
+  }, [depResults]);
+
   // Ref to current sessionId for use inside event listener closures
   const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = sessionId;
@@ -272,11 +294,10 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
     };
   }, []);
 
-  // Export handler
-  const handleExport = async () => {
-    if (!sourcePath || !envInfo?.yolo_path || exportStatus === "running") return;
+  // Core export invocation — call only when deps are satisfied
+  const doStartExport = async () => {
+    if (!sourcePath || !envInfo?.yolo_path) return;
     setInvokeError(null);
-    setLogLines([]);
     let outputDir = outputDirOverride.trim();
     if (!outputDir) {
       const sep = sourcePath.includes("/") ? "/" : "\\";
@@ -311,6 +332,92 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
     }
   };
 
+  // Export handler — gates on missing deps before starting
+  const handleExport = async () => {
+    if (!sourcePath || !envInfo?.yolo_path || exportStatus === "running") return;
+
+    if (missingPackageNames.length > 0) {
+      setInstallPhase("pending_consent");
+      return;
+    }
+
+    setLogLines([]);
+    await doStartExport();
+  };
+
+  // Install missing deps then auto-start export
+  const handleInstallAndExport = async () => {
+    const pythonPath = envInfo?.python_path;
+    if (!pythonPath) return;
+
+    const missingPkgs = (depResults ?? [])
+      .filter((r) => r.status === "missing_package")
+      .map((r) => r.item);
+
+    if (missingPkgs.length === 0) {
+      setInstallPhase("idle");
+      setLogLines([]);
+      await doStartExport();
+      return;
+    }
+
+    setInstallPhase("installing");
+    setLogLines([]);
+
+    let installSessionId = "";
+    let resolveInstall!: (result: "ok" | string) => void;
+    const installPromise = new Promise<"ok" | string>((r) => {
+      resolveInstall = r;
+    });
+
+    const [unOut, unErr, unDone, unFail] = await Promise.all([
+      listen<InstallLinePayload>("install:stdout", (ev) => {
+        if (!installSessionId || ev.payload.session_id !== installSessionId) return;
+        setLogLines((prev) => [...prev, "[stdout] " + ev.payload.line]);
+      }),
+      listen<InstallLinePayload>("install:stderr", (ev) => {
+        if (!installSessionId || ev.payload.session_id !== installSessionId) return;
+        setLogLines((prev) => [...prev, "[stderr] " + ev.payload.line]);
+      }),
+      listen<InstallFinishedPayload>("install:finished", (ev) => {
+        if (!installSessionId || ev.payload.session_id !== installSessionId) return;
+        resolveInstall("ok");
+      }),
+      listen<InstallFailedPayload>("install:failed", (ev) => {
+        if (!installSessionId || ev.payload.session_id !== installSessionId) return;
+        resolveInstall(ev.payload.error);
+      }),
+    ]);
+
+    const cleanup = () => {
+      unOut();
+      unErr();
+      unDone();
+      unFail();
+    };
+
+    try {
+      installSessionId = await installDependencies(missingPkgs, pythonPath);
+    } catch (e: unknown) {
+      cleanup();
+      setInstallPhase("failed");
+      setLogLines((prev) => [...prev, "[error] Failed to start install: " + String(e)]);
+      return;
+    }
+
+    const result = await installPromise;
+    cleanup();
+
+    if (result !== "ok") {
+      setInstallPhase("failed");
+      setLogLines((prev) => [...prev, "[error] Install failed: " + result]);
+      return;
+    }
+
+    setInstallPhase("done");
+    await doStartExport();
+  };
+
   // Cancel handler
   const handleCancel = async () => {
     if (sessionId === null || exportStatus !== "running") return;
@@ -333,6 +440,7 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
     setOptions(optionsForRoute(routeId));
     setLogLines([]);
     setExportStatus("idle");
+    setInstallPhase("idle");
     setDialogOpen(true);
   };
 
@@ -660,7 +768,10 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
 
       <ExportModal
         open={dialogOpen}
-        onOpenChange={setDialogOpen}
+        onOpenChange={(open) => {
+          setDialogOpen(open);
+          if (!open) setInstallPhase("idle");
+        }}
         route={selectedRoute}
         sourcePath={sourcePath}
         exportStatus={exportStatus}
@@ -672,6 +783,9 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
         depResults={depResults ?? undefined}
         depCheckLoading={depCheckLoading}
         depCheckError={depCheckError}
+        installPhase={installPhase}
+        missingPackageNames={missingPackageNames}
+        onInstallAndExport={handleInstallAndExport}
       />
     </div>
   );

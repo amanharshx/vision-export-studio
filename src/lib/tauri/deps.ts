@@ -10,3 +10,10 @@ export function checkDependencies(
     pythonPath,
   });
 }
+
+export function installDependencies(
+  packages: string[],
+  pythonPath: string,
+): Promise<string> {
+  return invoke<string>("install_dependencies", { packages, pythonPath });
+}
