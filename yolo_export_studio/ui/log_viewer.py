@@ -34,12 +34,12 @@ def _fmt(color: str | None = None, bold: bool = False, italic: bool = False) -> 
 
 
 _FMT_DEFAULT = _fmt()
-_FMT_WARNING = _fmt("#e67e22")
+_FMT_WARNING = _fmt("#b05c00")
 _FMT_ERROR = _fmt("#c0392b")
-_FMT_PROGRESS = _fmt("#5dade2")
-_FMT_ARTIFACT = _fmt("#27ae60")
+_FMT_PROGRESS = _fmt("#1a6fa8")
+_FMT_ARTIFACT = _fmt("#1a7a45")
 _FMT_BOLD = _fmt(bold=True)
-_FMT_STDERR = _fmt("#888888", italic=True)
+_FMT_STDERR = _fmt("#555555", italic=True)
 
 
 class LogViewer(QWidget):

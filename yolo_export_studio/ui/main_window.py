@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import platform
+import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtCore import QProcess, Qt
+from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -29,25 +31,14 @@ from yolo_export_studio.core.logs import ArtifactEvent, FinishedEvent, StartedEv
 from yolo_export_studio.core.preflight import CheckResult
 from yolo_export_studio.core.providers import ExportProvider, get_provider
 from yolo_export_studio.core.routes import Route
-from yolo_export_studio.ui.dependency_panel import DependencyPanel
+from yolo_export_studio.ui.dependency_panel import DependencyPanel, _is_pip_install
 from yolo_export_studio.ui.drop_zone import DropZone
+from yolo_export_studio.ui.theme import ACCENT, RADIUS, RED, SECTION_HEADER, TEXT_DIM
 from yolo_export_studio.ui.format_grid import FormatGrid
 from yolo_export_studio.ui.log_viewer import LogViewer
 from yolo_export_studio.ui.options_panel import OptionsPanel
 from yolo_export_studio.ui.process_controller import ProcessController
 from yolo_export_studio.ui.queue_panel import QueueEntry, QueuePanel
-
-
-_LIGHT_STYLESHEET = """
-QWidget { background-color: #f0f0f0; color: #1a1a1a; }
-QGroupBox { border: 1px solid #ccc; border-radius: 4px; margin-top: 6px; }
-QGroupBox::title { color: #333; }
-QPushButton { background-color: #e0e0e0; color: #1a1a1a; border: 1px solid #bbb; border-radius: 3px; padding: 4px 8px; }
-QPushButton:hover { background-color: #d0d0d0; }
-QLineEdit { background-color: #fff; color: #1a1a1a; border: 1px solid #bbb; border-radius: 3px; padding: 2px 4px; }
-QListWidget { background-color: #fff; color: #1a1a1a; }
-QScrollArea { background-color: #f0f0f0; }
-"""
 
 
 class MainWindow(QMainWindow):
@@ -63,6 +54,7 @@ class MainWindow(QMainWindow):
         self._artifact_path: str | None = None
         self._current_checks: list[CheckResult] = []
         self._queue_job_idx: int = 0
+        self._install_proc: QProcess | None = None
 
         self._setup_ui()
         self._wire_signals()
@@ -83,7 +75,7 @@ class MainWindow(QMainWindow):
 
         badge = QLabel(platform.machine())
         badge.setStyleSheet(
-            "background: #2c3e50; color: #ecf0f1; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
+            "background: #e8e8e8; color: #1a1a1a; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
         )
         header_layout.addWidget(badge)
 
@@ -96,49 +88,50 @@ class MainWindow(QMainWindow):
         browse_interp_btn.clicked.connect(self._browse_interpreter)
         header_layout.addWidget(browse_interp_btn)
 
-        self._theme_btn = QPushButton("☀ Light")
-        self._theme_btn.clicked.connect(self._toggle_theme)
-        header_layout.addWidget(self._theme_btn)
-
         # --- Splitter ---
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Left panel
+        # Left panel — content centered with max width
         left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(8, 8, 4, 8)
-        left_layout.setSpacing(8)
+        self._left_layout = QVBoxLayout(left)
+        self._left_layout.setContentsMargins(0, 0, 0, 0)
+
+        self._left_content = QWidget()
+        self._left_content.setMaximumWidth(750)
+        content_layout = QVBoxLayout(self._left_content)
+        content_layout.setContentsMargins(24, 40, 24, 24)
+        content_layout.setSpacing(20)
 
         self._drop_zone = DropZone()
-        self._drop_zone.setFixedHeight(120)
-        left_layout.addWidget(self._drop_zone)
+        content_layout.addWidget(self._drop_zone)
 
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.Shape.HLine)
-        left_layout.addWidget(sep1)
-
-        left_layout.addWidget(QLabel("Target Format"))
+        self._tf_label = QLabel("Target Format")
+        self._tf_label.setStyleSheet(SECTION_HEADER)
+        self._tf_label.setVisible(False)
+        content_layout.addWidget(self._tf_label)
         self._format_grid = FormatGrid()
-        left_layout.addWidget(self._format_grid, stretch=1)
+        content_layout.addWidget(self._format_grid, stretch=1)
 
-        splitter.addWidget(left)
+        self._left_layout.addWidget(self._left_content, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self._splitter.addWidget(left)
 
         # Right panel
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
+        self._right_panel = QWidget()
+        right_layout = QVBoxLayout(self._right_panel)
         right_layout.setContentsMargins(4, 8, 8, 8)
         right_layout.setSpacing(8)
 
-        right_layout.addWidget(QLabel("Options"))
+        _oh = QLabel("Options")
+        _oh.setStyleSheet(SECTION_HEADER)
+        right_layout.addWidget(_oh)
         self._options_panel = OptionsPanel()
         self._options_panel.setFixedHeight(240)
         right_layout.addWidget(self._options_panel)
 
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.Shape.HLine)
-        right_layout.addWidget(sep2)
-
-        right_layout.addWidget(QLabel("Dependencies"))
+        _dh = QLabel("Dependencies")
+        _dh.setStyleSheet(SECTION_HEADER)
+        right_layout.addWidget(_dh)
         self._dep_panel = DependencyPanel()
         self._dep_panel.setFixedHeight(160)
         right_layout.addWidget(self._dep_panel)
@@ -146,15 +139,17 @@ class MainWindow(QMainWindow):
         self._queue_panel = QueuePanel()
         right_layout.addWidget(self._queue_panel)
 
-        sep3 = QFrame()
-        sep3.setFrameShape(QFrame.Shape.HLine)
-        right_layout.addWidget(sep3)
-
         # Action buttons
         btn_row = QHBoxLayout()
         self._convert_btn = QPushButton("Convert")
         self._convert_btn.setEnabled(False)
         self._convert_btn.setFixedHeight(32)
+        self._convert_btn.setStyleSheet(
+            f"QPushButton {{ background: {ACCENT}; color: white; font-weight: bold; "
+            f"border: none; border-radius: {RADIUS}px; }}"
+            f"QPushButton:disabled {{ background: #e0e0e0; color: {TEXT_DIM}; }}"
+            f"QPushButton:hover:enabled {{ background: #3498db; }}"
+        )
         btn_row.addWidget(self._convert_btn)
 
         self._add_queue_btn = QPushButton("Add to Queue")
@@ -165,6 +160,9 @@ class MainWindow(QMainWindow):
         self._cancel_btn = QPushButton("Cancel")
         self._cancel_btn.setEnabled(False)
         self._cancel_btn.setFixedHeight(32)
+        self._cancel_btn.setStyleSheet(
+            f"QPushButton:enabled {{ color: {RED}; }}"
+        )
         btn_row.addWidget(self._cancel_btn)
 
         self._open_btn = QPushButton("Open Output Folder")
@@ -176,22 +174,27 @@ class MainWindow(QMainWindow):
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(0)
+        self._progress_bar.setFixedHeight(6)
+        self._progress_bar.setTextVisible(False)
+        self._progress_bar.setStyleSheet(
+            f"QProgressBar {{ border: none; background: #e0e0e0; border-radius: 3px; }}"
+            f"QProgressBar::chunk {{ background: {ACCENT}; border-radius: 3px; }}"
+        )
         right_layout.addWidget(self._progress_bar)
 
         self._artifact_label = QLabel("")
         self._artifact_label.setVisible(False)
         right_layout.addWidget(self._artifact_label)
 
-        sep4 = QFrame()
-        sep4.setFrameShape(QFrame.Shape.HLine)
-        right_layout.addWidget(sep4)
-
-        right_layout.addWidget(QLabel("Log"))
+        _lh = QLabel("Log")
+        _lh.setStyleSheet(SECTION_HEADER)
+        right_layout.addWidget(_lh)
         self._log_viewer = LogViewer()
         right_layout.addWidget(self._log_viewer, stretch=1)
 
-        splitter.addWidget(right)
-        splitter.setSizes([480, 720])
+        self._splitter.addWidget(self._right_panel)
+        self._splitter.setSizes([480, 720])
+        self._right_panel.setVisible(False)
 
         # --- Central widget ---
         central = QWidget()
@@ -204,8 +207,17 @@ class MainWindow(QMainWindow):
         sep_top.setFrameShape(QFrame.Shape.HLine)
         main_layout.addWidget(sep_top)
 
-        main_layout.addWidget(splitter, stretch=1)
+        main_layout.addWidget(self._splitter, stretch=1)
         self.setCentralWidget(central)
+
+        QApplication.instance().setStyleSheet(
+            "QWidget { background-color: #f5f5f5; color: #1a1a1a; }"
+            "QScrollArea, QPlainTextEdit { background-color: #ffffff; }"
+            "QLineEdit { background-color: #ffffff; border: 1px solid #d0d0d0; border-radius: 3px; padding: 2px 4px; }"
+            "QPushButton { background-color: #ebebeb; color: #1a1a1a; border: 1px solid #d0d0d0; border-radius: 3px; padding: 4px 8px; }"
+            "QPushButton:hover { background-color: #dedede; }"
+            "QSplitter::handle:horizontal { background-color: #d0d0d0; width: 1px; }"
+        )
 
         # Process controller
         self._proc = ProcessController(self)
@@ -215,6 +227,7 @@ class MainWindow(QMainWindow):
         self._format_grid.route_selected.connect(self._on_route_selected)
         self._options_panel.options_changed.connect(self._on_options_changed)
         self._dep_panel.recheck_requested.connect(self._on_recheck)
+        self._dep_panel.install_requested.connect(self._on_install_requested)
         self._convert_btn.clicked.connect(self._on_convert)
         self._add_queue_btn.clicked.connect(self._on_add_to_queue)
         self._cancel_btn.clicked.connect(self._proc.cancel)
@@ -243,6 +256,7 @@ class MainWindow(QMainWindow):
             (route, provider.preflight(route, {})) for route in routes
         ]
         self._format_grid.set_routes(routes_with_checks)
+        self._tf_label.setVisible(True)
         self._options_panel.set_route(None)
         self._dep_panel.clear()
         self._log_viewer.clear()
@@ -252,8 +266,12 @@ class MainWindow(QMainWindow):
         self._convert_btn.setEnabled(False)
         self._add_queue_btn.setEnabled(False)
         self._open_btn.setEnabled(False)
+        self._right_panel.setVisible(False)
 
     def _on_route_selected(self, route: Route) -> None:
+        if not self._right_panel.isVisible():
+            self._right_panel.setVisible(True)
+            self._splitter.setSizes([480, 720])
         self._selected_route = route
         self._options_panel.set_route(route)
         checks = self._provider.preflight(route, self._options_panel.get_options())
@@ -288,6 +306,88 @@ class MainWindow(QMainWindow):
             self._format_grid.select_route_by_id(self._selected_route.id)
 
         self._update_convert_button()
+
+    def _on_install_requested(self, hint: str, item: str) -> None:
+        python = self._get_python_executable()
+        if python is None:
+            return
+
+        if not _is_pip_install(hint):
+            self._log_viewer.append_stderr(f"[install] Rejected hint: {hint!r}")
+            return
+        spec = shlex.split(hint)[2]
+
+        # Resolve installer: uv (works without pip in venv) → adjacent pip script → python -m pip
+        uv = shutil.which("uv")
+        pip_script = Path(python).parent / ("pip.exe" if sys.platform == "win32" else "pip")
+        if uv:
+            program = uv
+            arguments = ["pip", "install", "--python", str(python), spec]
+            installer_label = "uv"
+        elif pip_script.exists():
+            program = str(pip_script)
+            arguments = ["install", spec]
+            installer_label = "pip"
+        else:
+            program = str(python)
+            arguments = ["-m", "pip", "install", spec]
+            installer_label = "python -m pip"
+
+        cmd = f"{program} {' '.join(arguments)}"
+
+        reply = QMessageBox.question(
+            self,
+            "Install Package",
+            f"Install '{spec}' using:\n\n  {cmd}\n\nProceed?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._log_viewer.append_stderr(f"[install] using {installer_label} for {python}")
+
+        self._dep_panel.set_installing(True)
+        self._convert_btn.setEnabled(False)
+        self._add_queue_btn.setEnabled(False)
+
+        self._install_proc = QProcess(self)
+        self._install_proc.setProgram(program)
+        self._install_proc.setArguments(arguments)
+
+        def _on_stdout(_proc=self._install_proc) -> None:
+            text = _proc.readAllStandardOutput().data().decode("utf-8", errors="replace")
+            if text.strip():
+                self._log_viewer.append_stderr(text)
+
+        def _on_stderr_data(_proc=self._install_proc) -> None:
+            text = _proc.readAllStandardError().data().decode("utf-8", errors="replace")
+            if text.strip():
+                self._log_viewer.append_stderr(text)
+
+        def _on_done(exit_code: int, exit_status: QProcess.ExitStatus) -> None:
+            self._dep_panel.set_installing(False)
+            if exit_status == QProcess.ExitStatus.CrashExit or exit_code != 0:
+                self._log_viewer.append_stderr(
+                    f"[install] Install failed (exit {exit_code}, status {exit_status.name})"
+                )
+            else:
+                self._log_viewer.append_stderr(f"[install] Installed {item}")
+            self._install_proc = None
+            self._on_recheck()
+
+        def _on_start_error(error: QProcess.ProcessError) -> None:
+            self._dep_panel.set_installing(False)
+            self._install_proc = None
+            self._log_viewer.append_stderr(
+                f"[install] Failed to start process: {error.name}"
+            )
+            self._on_recheck()
+
+        self._install_proc.readyReadStandardOutput.connect(_on_stdout)
+        self._install_proc.readyReadStandardError.connect(_on_stderr_data)
+        self._install_proc.finished.connect(_on_done)
+        self._install_proc.errorOccurred.connect(_on_start_error)
+        self._install_proc.start()
 
     def _on_convert(self) -> None:
         if self._source_path is None or self._selected_route is None or self._provider is None:
@@ -389,15 +489,6 @@ class MainWindow(QMainWindow):
         if path and Path(path).exists():
             self._interp_edit.setText(path)
 
-    def _toggle_theme(self) -> None:
-        app = QApplication.instance()
-        if self._theme_btn.text() == "☀ Light":
-            app.setStyleSheet(_LIGHT_STYLESHEET)
-            self._theme_btn.setText("● Dark")
-        else:
-            app.setStyleSheet("")
-            self._theme_btn.setText("☀ Light")
-
     def _setup_shortcuts(self) -> None:
         QShortcut(QKeySequence("Ctrl+O"), self).activated.connect(self._drop_zone._browse)
         QShortcut(QKeySequence("Ctrl+Return"), self).activated.connect(self._convert_btn.click)
@@ -442,6 +533,12 @@ class MainWindow(QMainWindow):
         self._open_btn.setEnabled(False)
         self.statusBar().showMessage("Running queue…")
         self._proc.start_sequence(jobs)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._install_proc is not None:
+            self._install_proc.kill()
+            self._install_proc.waitForFinished(3000)
+        super().closeEvent(event)
 
     def _update_convert_button(self) -> None:
         all_ok = (

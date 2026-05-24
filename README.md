@@ -113,8 +113,7 @@ yolo_export_studio/
 └── ui/
     ├── main_window.py          # Main window (stub)
     ├── drop_zone.py            # Drag-and-drop model file (stub)
-    ├── format_grid.py          # Format card grid (stub)
-    ├── format_card.py          # Per-format card (stub)
+    ├── format_grid.py          # Chip flow layout + format chips
     ├── options_panel.py        # Conversion options (stub)
     ├── dependency_panel.py     # Dep checklist + install hints (stub)
     ├── process_controller.py   # QProcess lifecycle (stub)
