@@ -496,10 +496,10 @@ mod tests {
         let python = venv_python("/tmp/yolo-export-studio");
 
         #[cfg(windows)]
-        assert_eq!(python, "/tmp/yolo_export_studio/.venv/Scripts/python.exe");
+        assert_eq!(python, "/tmp/yolo-export-studio/.venv/Scripts/python.exe");
 
         #[cfg(not(windows))]
-        assert_eq!(python, "/tmp/yolo_export_studio/.venv/bin/python");
+        assert_eq!(python, "/tmp/yolo-export-studio/.venv/bin/python");
     }
 
     #[test]
@@ -507,10 +507,10 @@ mod tests {
         let yolo = venv_yolo("/tmp/yolo-export-studio");
 
         #[cfg(windows)]
-        assert_eq!(yolo, "/tmp/yolo_export_studio/.venv/Scripts/yolo.exe");
+        assert_eq!(yolo, "/tmp/yolo-export-studio/.venv/Scripts/yolo.exe");
 
         #[cfg(not(windows))]
-        assert_eq!(yolo, "/tmp/yolo_export_studio/.venv/bin/yolo");
+        assert_eq!(yolo, "/tmp/yolo-export-studio/.venv/bin/yolo");
     }
 
     #[test]
