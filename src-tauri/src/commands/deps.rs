@@ -281,6 +281,31 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
             }],
             sys: &[],
         }),
+        "ultralytics.pt.saved_model" | "ultralytics.pt.pb" => Some(RouteDeps {
+            pip: &[
+                PipDep {
+                    package_name: "tensorflow",
+                    install_hint: "pip install tensorflow",
+                    optional: false,
+                },
+                PipDep {
+                    package_name: "onnx2tf",
+                    install_hint: "pip install onnx2tf",
+                    optional: false,
+                },
+                PipDep {
+                    package_name: "onnx",
+                    install_hint: "pip install onnx",
+                    optional: false,
+                },
+                PipDep {
+                    package_name: "onnxruntime",
+                    install_hint: "pip install onnxruntime",
+                    optional: false,
+                },
+            ],
+            sys: &[],
+        }),
         _ => None,
     }
 }
