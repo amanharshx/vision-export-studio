@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import sys
 import tempfile
 from pathlib import Path
 
@@ -26,6 +25,7 @@ class ProcessController(QObject):
         self._process: QProcess | None = None
         self._stdout_buf = b""
         self._received_finished = False
+        self._cancel_requested = False
         self._job_file: str | None = None
 
     # ------------------------------------------------------------------
@@ -35,6 +35,8 @@ class ProcessController(QObject):
     def start(self, job: ExportJob) -> None:
         if self._process is not None and self._process.state() != QProcess.ProcessState.NotRunning:
             return
+
+        self._cancel_requested = False
 
         # Write job to a temp file; we delete it in _on_finished
         fd, self._job_file = tempfile.mkstemp(suffix=".json")
@@ -47,7 +49,7 @@ class ProcessController(QObject):
         if self._process is not None:
             self._process.deleteLater()
         self._process = QProcess(self)
-        self._process.setProgram(sys.executable)
+        self._process.setProgram(job.python_executable)
         self._process.setArguments(["-m", "yolo_export_studio.workers.export_worker", self._job_file])
         self._process.readyReadStandardOutput.connect(self._on_stdout)
         self._process.readyReadStandardError.connect(self._on_stderr)
@@ -57,6 +59,7 @@ class ProcessController(QObject):
     def cancel(self) -> None:
         if self._process is None:
             return
+        self._cancel_requested = True
         self._process.terminate()
         QTimer.singleShot(3000, self._kill_if_running)
 
@@ -95,6 +98,10 @@ class ProcessController(QObject):
             self.stderr_received.emit(text)
 
     def _on_finished(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
+        # Capture and reset cancel flag before branching — ensures it's always cleared
+        was_cancelled = self._cancel_requested
+        self._cancel_requested = False
+
         # Drain any remaining stdout
         remaining = self._process.readAllStandardOutput().data()
         if remaining:
@@ -121,9 +128,15 @@ class ProcessController(QObject):
             self._job_file = None
 
         if exit_status == QProcess.ExitStatus.CrashExit:
-            self.crashed.emit()
+            if was_cancelled:
+                self.finished.emit(False, "Cancelled")
+            else:
+                self.crashed.emit()
         elif exit_code != 0 and not self._received_finished:
-            self.finished.emit(False, f"Worker exited unexpectedly (exit code {exit_code})")
+            if was_cancelled:
+                self.finished.emit(False, "Cancelled")
+            else:
+                self.finished.emit(False, f"Worker exited unexpectedly (exit code {exit_code})")
         elif not self._received_finished:
             self.finished.emit(False, "Worker exited without sending finished event")
         else:
