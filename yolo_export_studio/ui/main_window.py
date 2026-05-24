@@ -3,13 +3,18 @@ from __future__ import annotations
 
 import platform
 import subprocess
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QProgressBar,
@@ -20,9 +25,9 @@ from PySide6.QtWidgets import (
 )
 
 from yolo_export_studio.core.jobs import ExportJob
-from yolo_export_studio.core.logs import ArtifactEvent, FinishedEvent, WorkerEvent
+from yolo_export_studio.core.logs import ArtifactEvent, FinishedEvent, StartedEvent, WorkerEvent
 from yolo_export_studio.core.preflight import CheckResult
-from yolo_export_studio.core.providers import ExportProvider
+from yolo_export_studio.core.providers import ExportProvider, get_provider
 from yolo_export_studio.core.routes import Route
 from yolo_export_studio.ui.dependency_panel import DependencyPanel
 from yolo_export_studio.ui.drop_zone import DropZone
@@ -30,6 +35,19 @@ from yolo_export_studio.ui.format_grid import FormatGrid
 from yolo_export_studio.ui.log_viewer import LogViewer
 from yolo_export_studio.ui.options_panel import OptionsPanel
 from yolo_export_studio.ui.process_controller import ProcessController
+from yolo_export_studio.ui.queue_panel import QueueEntry, QueuePanel
+
+
+_LIGHT_STYLESHEET = """
+QWidget { background-color: #f0f0f0; color: #1a1a1a; }
+QGroupBox { border: 1px solid #ccc; border-radius: 4px; margin-top: 6px; }
+QGroupBox::title { color: #333; }
+QPushButton { background-color: #e0e0e0; color: #1a1a1a; border: 1px solid #bbb; border-radius: 3px; padding: 4px 8px; }
+QPushButton:hover { background-color: #d0d0d0; }
+QLineEdit { background-color: #fff; color: #1a1a1a; border: 1px solid #bbb; border-radius: 3px; padding: 2px 4px; }
+QListWidget { background-color: #fff; color: #1a1a1a; }
+QScrollArea { background-color: #f0f0f0; }
+"""
 
 
 class MainWindow(QMainWindow):
@@ -44,9 +62,11 @@ class MainWindow(QMainWindow):
         self._selected_route: Route | None = None
         self._artifact_path: str | None = None
         self._current_checks: list[CheckResult] = []
+        self._queue_job_idx: int = 0
 
         self._setup_ui()
         self._wire_signals()
+        self._setup_shortcuts()
         self.statusBar().showMessage(f"{platform.system()} {platform.machine()}")
 
     def _setup_ui(self) -> None:
@@ -66,6 +86,19 @@ class MainWindow(QMainWindow):
             "background: #2c3e50; color: #ecf0f1; border-radius: 4px; padding: 2px 8px; font-size: 11px;"
         )
         header_layout.addWidget(badge)
+
+        header_layout.addWidget(QLabel("Python:"))
+        self._interp_edit = QLineEdit(sys.executable)
+        self._interp_edit.setFixedWidth(260)
+        header_layout.addWidget(self._interp_edit)
+
+        browse_interp_btn = QPushButton("Browse…")
+        browse_interp_btn.clicked.connect(self._browse_interpreter)
+        header_layout.addWidget(browse_interp_btn)
+
+        self._theme_btn = QPushButton("☀ Light")
+        self._theme_btn.clicked.connect(self._toggle_theme)
+        header_layout.addWidget(self._theme_btn)
 
         # --- Splitter ---
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -110,6 +143,9 @@ class MainWindow(QMainWindow):
         self._dep_panel.setFixedHeight(160)
         right_layout.addWidget(self._dep_panel)
 
+        self._queue_panel = QueuePanel()
+        right_layout.addWidget(self._queue_panel)
+
         sep3 = QFrame()
         sep3.setFrameShape(QFrame.Shape.HLine)
         right_layout.addWidget(sep3)
@@ -120,6 +156,11 @@ class MainWindow(QMainWindow):
         self._convert_btn.setEnabled(False)
         self._convert_btn.setFixedHeight(32)
         btn_row.addWidget(self._convert_btn)
+
+        self._add_queue_btn = QPushButton("Add to Queue")
+        self._add_queue_btn.setEnabled(False)
+        self._add_queue_btn.setFixedHeight(32)
+        btn_row.addWidget(self._add_queue_btn)
 
         self._cancel_btn = QPushButton("Cancel")
         self._cancel_btn.setEnabled(False)
@@ -136,6 +177,10 @@ class MainWindow(QMainWindow):
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(0)
         right_layout.addWidget(self._progress_bar)
+
+        self._artifact_label = QLabel("")
+        self._artifact_label.setVisible(False)
+        right_layout.addWidget(self._artifact_label)
 
         sep4 = QFrame()
         sep4.setFrameShape(QFrame.Shape.HLine)
@@ -171,8 +216,10 @@ class MainWindow(QMainWindow):
         self._options_panel.options_changed.connect(self._on_options_changed)
         self._dep_panel.recheck_requested.connect(self._on_recheck)
         self._convert_btn.clicked.connect(self._on_convert)
+        self._add_queue_btn.clicked.connect(self._on_add_to_queue)
         self._cancel_btn.clicked.connect(self._proc.cancel)
         self._open_btn.clicked.connect(self._on_open_output)
+        self._queue_panel.run_requested.connect(self._on_run_queue)
 
         self._proc.event_received.connect(self._on_event)
         self._proc.stderr_received.connect(self._log_viewer.append_stderr)
@@ -200,7 +247,10 @@ class MainWindow(QMainWindow):
         self._dep_panel.clear()
         self._log_viewer.clear()
         self._progress_bar.setValue(0)
+        self._artifact_label.setText("")
+        self._artifact_label.setVisible(False)
         self._convert_btn.setEnabled(False)
+        self._add_queue_btn.setEnabled(False)
         self._open_btn.setEnabled(False)
 
     def _on_route_selected(self, route: Route) -> None:
@@ -243,16 +293,22 @@ class MainWindow(QMainWindow):
         if self._source_path is None or self._selected_route is None or self._provider is None:
             return
 
+        exe = self._get_python_executable()
+        if exe is None and self._interp_edit.text().strip():
+            return
+
         options = self._options_panel.get_options()
-        output_dir = self._source_path.parent / "yolo-export-studio-exports"
-        output_dir.mkdir(exist_ok=True)
+        output_dir = self._get_output_dir()
 
         job: ExportJob = self._provider.build_job(
-            self._source_path, self._selected_route, options, output_dir
+            self._source_path, self._selected_route, options, output_dir,
+            python_executable=exe,
         )
 
         self._log_viewer.clear()
         self._progress_bar.setValue(0)
+        self._artifact_label.setText("")
+        self._artifact_label.setVisible(False)
         self._convert_btn.setEnabled(False)
         self._cancel_btn.setEnabled(True)
         self._open_btn.setEnabled(False)
@@ -263,10 +319,19 @@ class MainWindow(QMainWindow):
 
     def _on_event(self, event: WorkerEvent) -> None:
         self._log_viewer.append_event(event)
+        if isinstance(event, StartedEvent) and self._queue_panel.entries:
+            self._queue_panel.mark_active(self._queue_job_idx)
         if isinstance(event, ArtifactEvent):
             self._artifact_path = event.path
             self._open_btn.setEnabled(True)
+            size_mb = event.size_bytes / (1024 * 1024)
+            name = Path(event.path).name
+            self._artifact_label.setText(f"Output: {name}  ({size_mb:.1f} MB)")
+            self._artifact_label.setVisible(True)
         if isinstance(event, FinishedEvent):
+            if self._queue_panel.entries:
+                self._queue_panel.mark_done(self._queue_job_idx, event.ok)
+                self._queue_job_idx += 1
             ok_str = "ok" if event.ok else f"failed — {event.error}"
             self.statusBar().showMessage(f"Conversion {ok_str}")
             self._convert_btn.setEnabled(True)
@@ -304,10 +369,86 @@ class MainWindow(QMainWindow):
     # Helpers
     # ------------------------------------------------------------------
 
+    def _get_python_executable(self) -> Path | None:
+        text = self._interp_edit.text().strip()
+        if not text:
+            return None
+        p = Path(text)
+        if not p.is_file():
+            self.statusBar().showMessage(f"Interpreter not found: {text}", 5000)
+            return None
+        return p
+
+    def _get_output_dir(self) -> Path:
+        d = self._source_path.parent / "yolo-export-studio-exports"
+        d.mkdir(exist_ok=True)
+        return d
+
+    def _browse_interpreter(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Select Python interpreter")
+        if path and Path(path).exists():
+            self._interp_edit.setText(path)
+
+    def _toggle_theme(self) -> None:
+        app = QApplication.instance()
+        if self._theme_btn.text() == "☀ Light":
+            app.setStyleSheet(_LIGHT_STYLESHEET)
+            self._theme_btn.setText("● Dark")
+        else:
+            app.setStyleSheet("")
+            self._theme_btn.setText("☀ Light")
+
+    def _setup_shortcuts(self) -> None:
+        QShortcut(QKeySequence("Ctrl+O"), self).activated.connect(self._drop_zone._browse)
+        QShortcut(QKeySequence("Ctrl+Return"), self).activated.connect(self._convert_btn.click)
+        QShortcut(QKeySequence("Escape"), self).activated.connect(self._proc.cancel)
+
+    def _on_add_to_queue(self) -> None:
+        if self._source_path is None or self._selected_route is None:
+            return
+        entry = QueueEntry(
+            source_path=self._source_path,
+            route=self._selected_route,
+            options=self._options_panel.get_options(),
+        )
+        self._queue_panel.add_entry(entry)
+
+    def _on_run_queue(self, entries: list) -> None:
+        if not entries:
+            return
+
+        exe = self._get_python_executable()
+        if exe is None and self._interp_edit.text().strip():
+            return
+
+        if self._source_path is not None:
+            output_dir = self._get_output_dir()
+        else:
+            output_dir = Path.cwd() / "yolo-export-studio-exports"
+            output_dir.mkdir(exist_ok=True)
+
+        jobs = []
+        for e in entries:
+            provider = get_provider(e.route.provider_id)
+            jobs.append(provider.build_job(e.source_path, e.route, e.options, output_dir, python_executable=exe))
+
+        self._queue_job_idx = 0
+        self._log_viewer.clear()
+        self._progress_bar.setValue(0)
+        self._artifact_label.setText("")
+        self._artifact_label.setVisible(False)
+        self._convert_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(True)
+        self._open_btn.setEnabled(False)
+        self.statusBar().showMessage("Running queue…")
+        self._proc.start_sequence(jobs)
+
     def _update_convert_button(self) -> None:
         all_ok = (
             self._source_match is not None
             and self._selected_route is not None
             and all(c.ok for c in self._current_checks)
         )
-        self._convert_btn.setEnabled(all_ok and not self._proc.is_running)
+        enabled = all_ok and not self._proc.is_running
+        self._convert_btn.setEnabled(enabled)
+        self._add_queue_btn.setEnabled(enabled)
