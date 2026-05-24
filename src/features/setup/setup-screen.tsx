@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Box, FolderOpen, Loader2 } from "lucide-react";
-import { openRuntimeDirPicker } from "@/lib/tauri/dialog";
+import { Box, Loader2 } from "lucide-react";
+import { detectEnvironment } from "@/lib/tauri/environment";
 import {
   createRuntimeVenv,
   installUltralytics,
@@ -29,11 +27,15 @@ interface SetupFailedPayload {
   error: string;
 }
 
-type SetupPhase = "idle" | "venv" | "pip" | "done" | "error";
+type SetupPhase = "idle" | "venv" | "pip" | "verify" | "done" | "error";
 
 interface SetupScreenProps {
   defaultRuntimeDir: string;
   onComplete: () => void;
+}
+
+function verifyEnvironmentReadyMessage() {
+  return "runtime verification failed after install; retry setup";
 }
 
 // ---------------------------------------------------------------------------
@@ -41,11 +43,11 @@ interface SetupScreenProps {
 // ---------------------------------------------------------------------------
 
 export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps) {
-  const [runtimeDir, setRuntimeDir] = useState(defaultRuntimeDir);
   const [phase, setPhase] = useState<SetupPhase>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
   const mountedRef = useRef(true);
+  const startedRef = useRef(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -60,16 +62,13 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
     return () => clearTimeout(t);
   }, [countdown, onComplete]);
 
-
-  async function browseDirPicker() {
-    const path = await openRuntimeDirPicker();
-    if (path) {
-      setRuntimeDir(path);
-    }
-  }
-
   async function runSetup() {
     if (!mountedRef.current) return;
+    if (defaultRuntimeDir.trim().length === 0) {
+      setPhase("error");
+      setErrorMessage("managed runtime path missing");
+      return;
+    }
     setErrorMessage(null);
     setPhase("venv");
 
@@ -104,7 +103,7 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
     const cleanupVenv = () => { unVenvOut(); unVenvErr(); unVenvDone(); unVenvFail(); };
 
     try {
-      venvSessionId = await createRuntimeVenv(runtimeDir);
+      venvSessionId = await createRuntimeVenv(defaultRuntimeDir);
     } catch (e: unknown) {
       cleanupVenv();
       if (!mountedRef.current) return;
@@ -151,7 +150,7 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
     const cleanupPip = () => { unPipOut(); unPipErr(); unPipDone(); unPipFail(); };
 
     try {
-      pipSessionId = await installUltralytics(runtimeDir);
+      pipSessionId = await installUltralytics(defaultRuntimeDir);
     } catch (e: unknown) {
       cleanupPip();
       if (!mountedRef.current) return;
@@ -173,11 +172,29 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
     // Step 3: mark complete
     // ------------------------------------------------------------------
     try {
-      await markSetupComplete(runtimeDir);
+      await markSetupComplete(defaultRuntimeDir);
     } catch (e: unknown) {
       if (!mountedRef.current) return;
       setPhase("error");
       setErrorMessage(`failed to save settings: ${String(e)}`);
+      return;
+    }
+
+    // ------------------------------------------------------------------
+    // Step 4: verify environment is actually ready before redirect
+    // ------------------------------------------------------------------
+    if (!mountedRef.current) return;
+    setPhase("verify");
+
+    try {
+      const envInfo = await detectEnvironment();
+      if (!envInfo.python_path || !envInfo.ultralytics_version || !envInfo.yolo_path) {
+        throw new Error(verifyEnvironmentReadyMessage());
+      }
+    } catch (e: unknown) {
+      if (!mountedRef.current) return;
+      setPhase("error");
+      setErrorMessage(`environment verify failed: ${String(e)}`);
       return;
     }
 
@@ -186,12 +203,27 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
     setCountdown(3);
   }
 
+  useEffect(() => {
+    if (startedRef.current) return;
+    if (defaultRuntimeDir.trim().length === 0) return;
+    startedRef.current = true;
+    runSetup().catch((e: unknown) => {
+      setPhase("error");
+      setErrorMessage(String(e));
+      startedRef.current = false;
+    });
+  }, [defaultRuntimeDir]);
+
   const isRunning = phase === "venv" || phase === "pip";
+  const managedVenvPath = defaultRuntimeDir.trim()
+    ? `${defaultRuntimeDir}/.venv`
+    : "~/.yolo-export-studio/.venv";
 
   const phaseLabel: Record<SetupPhase, string> = {
-    idle: "",
+    idle: "Preparing managed runtime...",
     venv: "Creating Python virtual environment...",
     pip: "Installing ultralytics...",
+    verify: "Verifying managed runtime...",
     done: "Setup complete.",
     error: "Setup failed.",
   };
@@ -209,74 +241,56 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
               Set up YOLO Export Studio
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Choose where YOLO Export Studio will install Python packages.
+              YOLO Export Studio is preparing its managed runtime for first use.
             </p>
             <span className="mt-3 inline-block rounded-full bg-zinc-100 px-3 py-0.5 text-xs text-zinc-500">
-              One-time setup · can be changed later in settings
+              One-time setup · override optional later in settings
             </span>
           </div>
         </div>
 
-        {/* Directory picker */}
-        <div className="space-y-2">
-          <Label htmlFor="runtime-dir">Runtime directory</Label>
-          <div className="flex gap-2">
-            <Input
-              id="runtime-dir"
-              value={runtimeDir}
-              onChange={(e) => setRuntimeDir(e.target.value)}
-              disabled={isRunning}
-              placeholder="/path/to/runtime"
-              className="flex-1 font-mono text-xs"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={browseDirPicker}
-              disabled={isRunning}
-              aria-label="Browse for directory"
-            >
-              <FolderOpen className="h-4 w-4" />
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            A <code>.venv</code> folder will be created here.
+        <div className="rounded-xl border border-zinc-200/80 bg-white px-4 py-3 shadow-sm">
+          <p className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+            Managed runtime
+          </p>
+          <p className="mt-2 font-mono text-sm text-zinc-800">{managedVenvPath}</p>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            YOLO Export Studio creates this environment automatically and installs Ultralytics here.
           </p>
         </div>
 
-        {/* Set Up button / countdown */}
         {phase === "done" && countdown !== null ? (
           <div className="flex w-full items-center justify-center gap-2 rounded-md bg-emerald-50 py-3 text-sm font-medium text-emerald-700">
             <span>✓ Setup complete — redirecting in {countdown}…</span>
           </div>
         ) : (
           <>
-            <Button
-              type="button"
-              className={`w-full${isRunning ? " animate-glow-pulse" : ""}`}
-              onClick={runSetup}
-              disabled={isRunning || runtimeDir.trim().length === 0}
-            >
-              {isRunning ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {phaseLabel[phase]}
-                </>
-              ) : phase === "error" ? (
-                "Retry"
-              ) : (
-                "Set Up"
-              )}
-            </Button>
-            {isRunning && (
+            <div className="flex w-full items-center justify-center gap-2 rounded-md bg-zinc-100 py-3 text-sm font-medium text-zinc-700">
+              <Loader2 className={`h-4 w-4 ${phase === "error" ? "" : "animate-spin"}`} />
+              <span>{phaseLabel[phase]}</span>
+            </div>
+            {(isRunning || phase === "idle") && (
               <p className="text-center text-xs text-muted-foreground">
                 This may take a few minutes on first install.
               </p>
             )}
+            {phase === "error" && (
+              <Button
+                type="button"
+                className="w-full"
+                onClick={() => {
+                  startedRef.current = false;
+                  runSetup().catch((e: unknown) => {
+                    setPhase("error");
+                    setErrorMessage(String(e));
+                  });
+                }}
+              >
+                Retry setup
+              </Button>
+            )}
           </>
         )}
-
 
         {/* Error message */}
         {phase === "error" && errorMessage && (

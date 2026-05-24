@@ -200,7 +200,7 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
           setOutputDirOverride(outOverride);
           setOutputDirInput(outOverride);
         }
-        return detectEnvironment(override || undefined);
+        return detectEnvironment(override.trim() || undefined);
       })
       .then(setEnvInfo)
       .catch((e: unknown) => setEnvError(String(e)));
@@ -452,11 +452,12 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
 
   // Re-detect environment with current override
   const handleRedetect = useCallback(async (overridePath?: string) => {
+    const trimmedOverride = overridePath?.trim();
     setRedetecting(true);
     setEnvInfo(null);
     setEnvError(null);
     try {
-      const info = await detectEnvironment(overridePath || undefined);
+      const info = await detectEnvironment(trimmedOverride || undefined);
       setEnvInfo(info);
     } catch (e: unknown) {
       setEnvError(String(e));
@@ -612,7 +613,7 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
 
               <div className="rounded-xl border border-zinc-200/80 bg-white p-4 shadow-sm">
                 <div className="mb-2.5 flex items-center justify-between">
-                  <p className="text-[13px] font-semibold text-zinc-800">Python path</p>
+                  <p className="text-[13px] font-semibold text-zinc-800">Python override</p>
                   {pythonOverride && (
                     <button
                       type="button"
@@ -629,7 +630,7 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
                     value={pythonOverride}
                     onChange={(e) => setPythonOverride(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter") handleSaveAndRedetect(); }}
-                    placeholder="Auto-detect"
+                    placeholder="Use managed YOLO Export Studio runtime"
                     className="h-8 flex-1 min-w-0 rounded-lg border-zinc-200 bg-zinc-50 font-mono text-[12px] placeholder:text-zinc-300 focus-visible:bg-white"
                   />
                   <button
@@ -641,6 +642,9 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
                     <FolderOpen className="h-3.5 w-3.5" />
                   </button>
                 </div>
+                <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
+                  Leave empty to use YOLO Export Studio&apos;s managed runtime in <code>~/.yolo-export-studio/.venv</code>.
+                </p>
                 <div className="mt-2.5 flex justify-end">
                   <Button
                     size="sm"
