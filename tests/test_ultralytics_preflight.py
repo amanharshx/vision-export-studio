@@ -45,7 +45,7 @@ def test_routes_for_pt(tmp_path):
     source = _provider.detect_source(pt)
     assert source is not None
     routes = _provider.routes_for(source)
-    assert len(routes) == 10
+    assert len(routes) == 15
     ids = {r.id for r in routes}
     assert ids == {
         "ultralytics.pt.torchscript",
@@ -58,6 +58,11 @@ def test_routes_for_pt(tmp_path):
         "ultralytics.pt.engine",
         "ultralytics.pt.rknn",
         "ultralytics.pt.executorch",
+        "ultralytics.pt.edgetpu",
+        "ultralytics.pt.tfjs",
+        "ultralytics.pt.paddle",
+        "ultralytics.pt.imx",
+        "ultralytics.pt.axelera",
     }
 
 
@@ -288,3 +293,109 @@ def test_preflight_executorch_checks_executorch_and_torch_version_warning(tmp_pa
     assert "torch_version" in items
     tv_result = next(r for r in results if r.item == "torch_version")
     assert tv_result.status == "warning"
+
+
+# ---------------------------------------------------------------------------
+# preflight — edgetpu
+# ---------------------------------------------------------------------------
+
+def test_preflight_edgetpu_checks_platform_tf_stack_and_binary(tmp_path):
+    pt = tmp_path / "best.pt"
+    pt.write_bytes(b"fake")
+    source = _provider.detect_source(pt)
+    assert source is not None
+    routes = _provider.routes_for(source)
+    route = next(r for r in routes if r.id == "ultralytics.pt.edgetpu")
+    results = _provider.preflight(route, {})
+    items = {r.item for r in results}
+    assert "platform" in items
+    assert "tensorflow" in items
+    assert "onnx2tf" in items
+    assert "onnx" in items
+    assert "onnxruntime" in items
+    assert "edgetpu_compiler" in items
+
+
+# ---------------------------------------------------------------------------
+# preflight — tfjs
+# ---------------------------------------------------------------------------
+
+def test_preflight_tfjs_checks_tf_stack_tensorflowjs_and_binary(tmp_path):
+    pt = tmp_path / "best.pt"
+    pt.write_bytes(b"fake")
+    source = _provider.detect_source(pt)
+    assert source is not None
+    routes = _provider.routes_for(source)
+    route = next(r for r in routes if r.id == "ultralytics.pt.tfjs")
+    results = _provider.preflight(route, {})
+    items = {r.item for r in results}
+    assert "tensorflow" in items
+    assert "onnx2tf" in items
+    assert "onnx" in items
+    assert "onnxruntime" in items
+    assert "tensorflowjs" in items
+    assert "tensorflowjs_converter" in items
+
+
+# ---------------------------------------------------------------------------
+# preflight — paddle
+# ---------------------------------------------------------------------------
+
+def test_preflight_paddle_checks_paddlepaddle_and_x2paddle(tmp_path):
+    pt = tmp_path / "best.pt"
+    pt.write_bytes(b"fake")
+    source = _provider.detect_source(pt)
+    assert source is not None
+    routes = _provider.routes_for(source)
+    route = next(r for r in routes if r.id == "ultralytics.pt.paddle")
+    results = _provider.preflight(route, {})
+    items = {r.item for r in results}
+    assert "paddlepaddle" in items
+    assert "x2paddle" in items
+
+
+# ---------------------------------------------------------------------------
+# preflight — imx
+# ---------------------------------------------------------------------------
+
+def test_preflight_imx_checks_platform_deps_and_calibration(tmp_path):
+    pt = tmp_path / "best.pt"
+    pt.write_bytes(b"fake")
+    source = _provider.detect_source(pt)
+    assert source is not None
+    routes = _provider.routes_for(source)
+    route = next(r for r in routes if r.id == "ultralytics.pt.imx")
+    results = _provider.preflight(route, {})
+    items = {r.item for r in results}
+    assert "platform" in items
+    assert "model-compression-toolkit" in items
+    assert "sony-custom-layers" in items
+    assert "imx500-converter" in items
+    assert "imxconv-pt" in items
+    assert "java" in items
+    assert "calibration_data" in items
+    cal_result = next(r for r in results if r.item == "calibration_data")
+    assert cal_result.status == "calibration_required"
+
+
+# ---------------------------------------------------------------------------
+# preflight — axelera
+# ---------------------------------------------------------------------------
+
+def test_preflight_axelera_checks_platform_devkit_and_calibration(tmp_path):
+    pt = tmp_path / "best.pt"
+    pt.write_bytes(b"fake")
+    source = _provider.detect_source(pt)
+    assert source is not None
+    routes = _provider.routes_for(source)
+    route = next(r for r in routes if r.id == "ultralytics.pt.axelera")
+    results = _provider.preflight(route, {})
+    items = {r.item for r in results}
+    assert "platform" in items
+    assert "axelera-devkit" in items
+    assert "torch_version" in items
+    tv_result = next(r for r in results if r.item == "torch_version")
+    assert tv_result.status == "warning"
+    assert "calibration_data" in items
+    cal_result = next(r for r in results if r.item == "calibration_data")
+    assert cal_result.status == "calibration_required"
