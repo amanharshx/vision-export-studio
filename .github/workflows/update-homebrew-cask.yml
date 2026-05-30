@@ -1,0 +1,123 @@
+name: Update Homebrew Cask
+
+run-name: >
+  Update Homebrew Cask • ${{ github.event.release.tag_name }} • ${{ github.actor }}
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-homebrew-cask
+  cancel-in-progress: false
+
+jobs:
+  update-cask:
+    name: Update tap cask
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Extract version
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Preparing cask update for $TAG (version=$VERSION)"
+
+      - name: Wait briefly for assets to settle
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 20
+
+      - name: Download DMGs + compute SHA256
+        id: sums
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.meta.outputs.version }}"
+          BASE_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}"
+
+          ARM_NAME="YOLO.Export.Studio_${VERSION}_aarch64.dmg"
+          INTEL_NAME="YOLO.Export.Studio_${VERSION}_x64.dmg"
+
+          echo "Downloading ${ARM_NAME}..."
+          curl -fL --retry 6 --retry-delay 10 --retry-all-errors \
+            -o aarch64.dmg "${BASE_URL}/${ARM_NAME}"
+
+          echo "Downloading ${INTEL_NAME}..."
+          curl -fL --retry 6 --retry-delay 10 --retry-all-errors \
+            -o x64.dmg "${BASE_URL}/${INTEL_NAME}"
+
+          test -s aarch64.dmg
+          test -s x64.dmg
+
+          SHA_ARM="$(sha256sum aarch64.dmg | awk '{print $1}')"
+          SHA_INTEL="$(sha256sum x64.dmg | awk '{print $1}')"
+
+          echo "sha_arm=$SHA_ARM" >> "$GITHUB_OUTPUT"
+          echo "sha_intel=$SHA_INTEL" >> "$GITHUB_OUTPUT"
+
+          echo "ARM SHA256:   $SHA_ARM"
+          echo "Intel SHA256: $SHA_INTEL"
+
+      - name: Checkout homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: amanharshx/homebrew-tap
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          path: homebrew-tap
+          fetch-depth: 0
+
+      - name: Update Cask file (surgical replace)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAP_DIR="homebrew-tap"
+          CASK_PATH="${TAP_DIR}/Casks/yolo-export-studio.rb"
+
+          VERSION="${{ steps.meta.outputs.version }}"
+          SHA_ARM="${{ steps.sums.outputs.sha_arm }}"
+          SHA_INTEL="${{ steps.sums.outputs.sha_intel }}"
+
+          test -f "$CASK_PATH"
+
+          sed -i \
+            -e "s/^  version \".*\"$/  version \"${VERSION}\"/" \
+            "$CASK_PATH"
+
+          sed -i \
+            -e "s/^  sha256 arm:   \".*\",$/  sha256 arm:   \"${SHA_ARM}\",/" \
+            -e "s/^         intel: \".*\"$/         intel: \"${SHA_INTEL}\"/" \
+            "$CASK_PATH"
+
+          echo "Updated ${CASK_PATH}:"
+          grep -nE '^  version |^  sha256 |^         intel:' "$CASK_PATH" || true
+
+      - name: Commit & push
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd homebrew-tap
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "No changes detected. Exiting."
+            exit 0
+          fi
+
+          git add Casks/yolo-export-studio.rb
+          git commit -m "Update yolo-export-studio to v${{ steps.meta.outputs.version }}"
+          git push
