@@ -52,10 +52,8 @@ pub(crate) fn resolve_python(python_path: Option<&str>) -> Result<String, String
     if let Some(path) = python_path {
         // If the caller supplied an explicit filesystem path (contains a separator),
         // verify it exists before spawning — avoids misleading spawn errors.
-        if path.contains('/') || path.contains('\\') {
-            if !Path::new(path).exists() {
-                return Err(format!("Python path does not exist: {}", path));
-            }
+        if (path.contains('/') || path.contains('\\')) && !Path::new(path).exists() {
+            return Err(format!("Python path does not exist: {}", path));
         }
         // Validate the provided path by running --version.
         run(&[path, "--version"])
