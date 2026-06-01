@@ -9,7 +9,10 @@ pub struct GpuInfo {
 
 #[tauri::command]
 pub fn list_gpus() -> Vec<GpuInfo> {
+    #[cfg(target_os = "macos")]
     let mut gpus = try_nvidia_smi().unwrap_or_default();
+    #[cfg(not(target_os = "macos"))]
+    let gpus = try_nvidia_smi().unwrap_or_default();
     if gpus.is_empty() {
         #[cfg(target_os = "macos")]
         {
