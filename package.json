@@ -7,7 +7,7 @@
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "cargo tauri",
+    "tauri": "tauri",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
