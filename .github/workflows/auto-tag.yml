@@ -16,6 +16,10 @@ on:
       - .github/**
       - dist/**
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  queue: max
+
 jobs:
   tag:
     runs-on: ubuntu-latest

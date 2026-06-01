@@ -65,10 +65,22 @@ jobs:
         env:
           PUBKEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
         run: |
-          jq -n --arg pk "$PUBKEY" '{"plugins":{"updater":{"pubkey":$pk}},"bundle":{"createUpdaterArtifacts":true}}' > src-tauri/tauri.release.conf.json
+          python - <<'PY'
+          import json
+          import os
+
+          pubkey = os.environ.get("PUBKEY", "")
+          cfg = {
+            "plugins": {"updater": {"pubkey": pubkey}},
+            "bundle": {"createUpdaterArtifacts": True},
+          }
+
+          with open("src-tauri/tauri.release.conf.json", "w", encoding="utf-8") as f:
+            json.dump(cfg, f)
+          PY
 
       - name: Build and release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

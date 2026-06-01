@@ -18,7 +18,7 @@ jobs:
   update-cask:
     name: Update tap cask
     if: ${{ !github.event.release.prerelease }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Extract version
@@ -32,43 +32,112 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Preparing cask update for $TAG (version=$VERSION)"
 
-      - name: Wait briefly for assets to settle
-        shell: bash
-        run: |
-          set -euo pipefail
-          sleep 20
-
       - name: Download DMGs + compute SHA256
         id: sums
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          import time
 
-          VERSION="${{ steps.meta.outputs.version }}"
-          BASE_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}"
+          repo = os.environ["GITHUB_REPOSITORY"]
+          tag = os.environ["TAG"]
+          version = os.environ["VERSION"]
 
-          ARM_NAME="YOLO.Export.Studio_${VERSION}_aarch64.dmg"
-          INTEL_NAME="YOLO.Export.Studio_${VERSION}_x64.dmg"
+          want_arm_re = re.compile(rf"_{re.escape(version)}_aarch64\.dmg$")
+          want_x64_re = re.compile(rf"_{re.escape(version)}_(x64|x86_64)\.dmg$")
 
-          echo "Downloading ${ARM_NAME}..."
-          curl -fL --retry 6 --retry-delay 10 --retry-all-errors \
-            -o aarch64.dmg "${BASE_URL}/${ARM_NAME}"
+          def sha256_file(path: str) -> str:
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+              for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+            return h.hexdigest()
 
-          echo "Downloading ${INTEL_NAME}..."
-          curl -fL --retry 6 --retry-delay 10 --retry-all-errors \
-            -o x64.dmg "${BASE_URL}/${INTEL_NAME}"
+          def curl_download(url: str, dest: str) -> None:
+            subprocess.check_call(
+              [
+                "curl",
+                "-fL",
+                "--retry",
+                "6",
+                "--retry-delay",
+                "10",
+                "--retry-all-errors",
+                "-o",
+                dest,
+                url,
+              ]
+            )
 
-          test -s aarch64.dmg
-          test -s x64.dmg
+          arm_url = None
+          x64_url = None
 
-          SHA_ARM="$(sha256sum aarch64.dmg | awk '{print $1}')"
-          SHA_INTEL="$(sha256sum x64.dmg | awk '{print $1}')"
+          # Poll release assets because uploads can lag behind "published" event.
+          for attempt in range(1, 41):  # ~10 min
+            raw = subprocess.check_output(
+              ["gh", "api", f"repos/{repo}/releases/tags/{tag}"], text=True
+            )
+            data = json.loads(raw)
+            assets = data.get("assets", [])
 
-          echo "sha_arm=$SHA_ARM" >> "$GITHUB_OUTPUT"
-          echo "sha_intel=$SHA_INTEL" >> "$GITHUB_OUTPUT"
+            for a in assets:
+              name = a.get("name", "")
+              url = a.get("browser_download_url", "")
+              if not url:
+                continue
+              if arm_url is None and want_arm_re.search(name):
+                arm_url = url
+              if x64_url is None and want_x64_re.search(name):
+                x64_url = url
 
-          echo "ARM SHA256:   $SHA_ARM"
-          echo "Intel SHA256: $SHA_INTEL"
+            if arm_url and x64_url:
+              break
+
+            print(
+              f"Assets not ready yet (attempt {attempt}/40). Waiting 15s...",
+              file=sys.stderr,
+            )
+            time.sleep(15)
+
+          if not arm_url or not x64_url:
+            print(
+              f"Missing assets for tag={tag} version={version}. arm_url={arm_url} x64_url={x64_url}",
+              file=sys.stderr,
+            )
+            sys.exit(1)
+
+          print(f"Downloading ARM DMG: {arm_url}")
+          curl_download(arm_url, "aarch64.dmg")
+
+          print(f"Downloading x64 DMG: {x64_url}")
+          curl_download(x64_url, "x64.dmg")
+
+          if os.path.getsize("aarch64.dmg") <= 0 or os.path.getsize("x64.dmg") <= 0:
+            print("Downloaded DMG is empty", file=sys.stderr)
+            sys.exit(1)
+
+          sha_arm = sha256_file("aarch64.dmg")
+          sha_x64 = sha256_file("x64.dmg")
+
+          out_path = os.environ["GITHUB_OUTPUT"]
+          with open(out_path, "a", encoding="utf-8") as f:
+            f.write(f"sha_arm={sha_arm}\n")
+            f.write(f"sha_intel={sha_x64}\n")
+
+          print(f"ARM SHA256:   {sha_arm}")
+          print(f"Intel SHA256: {sha_x64}")
+          PY
 
       - name: Checkout homebrew tap
         uses: actions/checkout@v4
