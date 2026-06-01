@@ -1,0 +1,123 @@
+name: Auto Tag
+
+run-name: >
+  Prepare Release • ${{ github.ref_name }} •
+  ${{ github.actor }}
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - README.md
+      - CONTRIBUTING.md
+      - CODE_OF_CONDUCT.md
+      - SECURITY.md
+      - LICENSE
+      - .github/**
+      - dist/**
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  queue: max
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    if: github.actor != 'github-actions[bot]'
+    permissions:
+      contents: write
+      actions: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine next tag
+        id: version
+        run: |
+          git fetch --tags
+
+          LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+          if [ -z "$LATEST_TAG" ]; then
+            VERSION=$(jq -r .version package.json)
+          else
+            VERSION="${LATEST_TAG#v}"
+          fi
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          NEW_VERSION="$MAJOR.$MINOR.$((PATCH+1))"
+
+          CURRENT_VERSION=$(jq -r .version package.json)
+          if [ "$CURRENT_VERSION" = "$NEW_VERSION" ]; then
+            SHOULD_TAG=true
+          else
+            SHOULD_TAG=false
+          fi
+
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "should_tag=$SHOULD_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create bump PR
+        if: steps.version.outputs.should_tag != 'true'
+        run: |
+          BRANCH="release/bump-${{ steps.version.outputs.tag }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin main
+          git checkout -B "$BRANCH" origin/main
+
+          git push origin --delete "$BRANCH" || true
+
+          jq --arg v "${{ steps.version.outputs.new_version }}" '.version=$v' package.json > package.json.tmp
+          mv package.json.tmp package.json
+
+          jq --arg v "${{ steps.version.outputs.new_version }}" '.version=$v' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp
+          mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
+
+          perl -pi -e "s/^version = \\\".*\\\"/version = \\\"${{ steps.version.outputs.new_version }}\\\"/" src-tauri/Cargo.toml
+
+          NEW_VER="${{ steps.version.outputs.new_version }}"
+          perl -i -pe 'if ($seen) { s/^version = "[^"]+"/version = "'"$NEW_VER"'"/; $seen=0 } $seen=1 if /^name = "yolo-export-studio"$/;' src-tauri/Cargo.lock
+
+          git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+          git commit -m "chore: bump version to ${{ steps.version.outputs.tag }}"
+
+          git push -u origin "$BRANCH"
+
+          gh pr create \
+            --title "chore: bump version to ${{ steps.version.outputs.tag }}" \
+            --body "Automated version bump." \
+            --base main \
+            --head "$BRANCH" || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check if tag exists
+        if: steps.version.outputs.should_tag == 'true'
+        id: check
+        run: |
+          if git ls-remote --tags origin "${{ steps.version.outputs.tag }}" | grep -q .; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create and push tag
+        if: steps.version.outputs.should_tag == 'true' && steps.check.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+      - name: Trigger release workflow
+        if: steps.version.outputs.should_tag == 'true' && steps.check.outputs.exists == 'false'
+        run: gh workflow run "Release" --ref main -f tag="${{ steps.version.outputs.tag }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
