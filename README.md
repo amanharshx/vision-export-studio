@@ -1,20 +1,25 @@
+<div align="center">
+
 # YOLO Export Studio
 
 Desktop studio for exporting Ultralytics YOLO `.pt` models into deployment-ready formats.
 
 [![Platforms](https://img.shields.io/badge/Platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)](#installation)
+[![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040?logo=homebrew)](#installation)
 [![Built with Tauri v2](https://img.shields.io/badge/Built%20with-Tauri%20v2-ffc131.svg)](https://v2.tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-%23dea584.svg?logo=rust&logoColor=black)](#build-from-source)
 [![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC.svg?logo=typescript&logoColor=white)](#build-from-source)
 
+</div>
+
 > [!IMPORTANT]
 > **This project is currently under active development.** Some features may be incomplete or subject to change. Bug reports and feature requests are appreciated!
 
-## Demo
+<br>
 
-Short walkthrough video:
-
-- [Yolo Export Studio Demo.mp4](assets/yolo-export-studio-demo.mp4)
+<div align="center">
+  <img src="assets/readme-demo.gif" width="720" alt="YOLO Export Studio demo">
+</div>
 
 ## What YOLO Export Studio Does
 
@@ -93,18 +98,54 @@ Some targets are one-way deployment artifacts or platform-locked:
 
 ## Installation
 
-### Releases
+### Quick Install
 
-Download latest desktop build from GitHub Releases.
+**macOS (Homebrew):**
 
-Planned target experience:
+```bash
+brew tap amanharshx/tap
+brew install --cask yolo-export-studio
+```
+
+**Windows / macOS / Linux (GitHub Releases):**
+
+Download the latest desktop build from [GitHub Releases](https://github.com/amanharshx/yolo-export-studio/releases).
+
+### Troubleshooting
+
+> **Note:** The app is not code-signed yet, so macOS and Windows may show security warnings.
+
+<details>
+<summary><b>macOS</b> - "App is damaged and can't be opened"</summary>
+
+Run this command in Terminal after installing:
+
+```bash
+xattr -cr "/Applications/YOLO Export Studio.app"
+```
+
+Then open the app again.
+
+</details>
+
+<details>
+<summary><b>Windows</b> - "Windows protected your PC" (SmartScreen)</summary>
+
+1. Click **More info**
+2. Click **Run anyway**
+
+Or: Right-click the `.exe` -> **Properties** -> Check **Unblock** -> **Apply**
+
+</details>
+
+### First Launch Runtime Setup
+
+Expected flow:
 
 - install app
 - let YOLO Export Studio prepare runtime on first launch
 - pick export route
 - install route dependencies only when needed
-
-### First Launch Runtime Setup
 
 YOLO Export Studio now defaults to managed runtime in:
 
@@ -121,35 +162,14 @@ Current bootstrap limitation:
 
 ## Build From Source
 
-Prerequisites:
+**Prerequisites:** [Rust](https://rustup.rs/), [Bun](https://bun.sh/), [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/)
 
 ```bash
-bun --version
-cargo --version
-cargo tauri --version
-```
-Install frontend dependencies:
-
-```bash
+git clone https://github.com/amanharshx/yolo-export-studio.git
+cd yolo-export-studio
 bun install
-```
-
-Run web shell:
-
-```bash
-bun run dev
-```
-
-Run desktop shell:
-
-```bash
-bun run tauri dev
-```
-
-Build frontend:
-
-```bash
-bun run build
+bun run tauri dev      # development
+bun run tauri build    # local production build
 ```
 
 ## Architecture
