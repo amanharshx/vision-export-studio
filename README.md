@@ -21,7 +21,22 @@ Desktop studio for exporting Ultralytics YOLO `.pt` models into deployment-ready
   <img src="assets/readme-demo.gif" width="720" alt="YOLO Export Studio demo">
 </div>
 
-## What YOLO Export Studio Does
+<br>
+
+> [**YOLO Export Studio**](https://github.com/amanharshx/yolo-export-studio) is a desktop app that exports [Ultralytics](https://www.ultralytics.com/) YOLO `.pt` weights into deployment-ready formats like ONNX, TensorRT, CoreML, TFLite, and more. Select your model, pick a target, and generate the export locally - model files stay on your machine.
+
+---
+
+## Table of Contents
+
+- [Supported Formats](#supported-formats)
+- [Target Caveats](#target-caveats)
+- [Installation](#installation)
+- [Build From Source](#build-from-source)
+- [Architecture](#architecture)
+- [Status](#status)
+
+---
 
 YOLO Export Studio gives `yolo export` a desktop UI.
 
@@ -42,6 +57,8 @@ Current source focus:
 - Generic PyTorch checkpoints not supported
 - Reverse conversion not supported
 
+---
+
 ## Why YOLO Export Studio
 
 - Local-first. Model files stay on your machine.
@@ -49,6 +66,8 @@ Current source focus:
 - Optional override. Power users can point app at a different Python interpreter.
 - Route-aware installs. Dependencies install only when selected export path needs them.
 - Rust process layer. Export commands run through Tauri/Rust, not direct shell strings from React.
+
+---
 
 ## Supported Formats
 
@@ -84,6 +103,8 @@ Route metadata source of truth:
 
 - [`src/lib/routes.ts`](src/lib/routes.ts)
 
+---
+
 ## Target Caveats
 
 Some targets are one-way deployment artifacts or platform-locked:
@@ -95,6 +116,8 @@ Some targets are one-way deployment artifacts or platform-locked:
 - `imx` export is Linux-only and requires Java `>= 17`.
 - `axelera` export is Linux-only.
 - `tflite`, `engine`, `mnn`, `rknn`, `imx`, `axelera`, `edgetpu`, and some `coreml` outputs should be treated as one-way deployment outputs.
+
+---
 
 ## Installation
 
@@ -160,6 +183,8 @@ Current bootstrap limitation:
 - first-time runtime creation still depends on working `python`/`python3` already available on host machine
 - bundled Python is not implemented yet
 
+---
+
 ## Build From Source
 
 **Prerequisites:** [Rust](https://rustup.rs/), [Bun](https://bun.sh/), [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/)
@@ -171,6 +196,8 @@ bun install
 bun run tauri dev      # development
 bun run tauri build    # local production build
 ```
+
+---
 
 ## Architecture
 
@@ -190,6 +217,8 @@ Ultralytics CLI
 
 React does not spawn export shell commands directly. Rust owns subprocess execution, path validation, and event streaming.
 
+---
+
 ## Project Structure
 
 ```text
@@ -203,6 +232,9 @@ src/
 src-tauri/
   src/                    Tauri v2 Rust commands and process control
 ```
+
+---
+
 ## Status
 
 YOLO Export Studio is in public alpha shape, not polished final release.
