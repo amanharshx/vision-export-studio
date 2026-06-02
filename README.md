@@ -2,8 +2,19 @@
 
 Desktop studio for exporting Ultralytics YOLO `.pt` models into deployment-ready formats.
 
+[![Platforms](https://img.shields.io/badge/Platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)](#installation)
+[![Built with Tauri v2](https://img.shields.io/badge/Built%20with-Tauri%20v2-ffc131.svg)](https://v2.tauri.app)
+[![Rust](https://img.shields.io/badge/Rust-%23dea584.svg?logo=rust&logoColor=black)](#build-from-source)
+[![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC.svg?logo=typescript&logoColor=white)](#build-from-source)
+
 > [!IMPORTANT]
 > **This project is currently under active development.** Some features may be incomplete or subject to change. Bug reports and feature requests are appreciated!
+
+## Demo
+
+Short walkthrough video:
+
+- [Yolo Export Studio Demo.mp4](assets/yolo-export-studio-demo.mp4)
 
 ## What YOLO Export Studio Does
 
@@ -34,31 +45,35 @@ Current source focus:
 - Route-aware installs. Dependencies install only when selected export path needs them.
 - Rust process layer. Export commands run through Tauri/Rust, not direct shell strings from React.
 
-## Supported Conversions
+## Supported Formats
 
 Current source format:
 
-- `.pt`
+| Format | Status | Notes |
+| --- | :---: | --- |
+| `.pt` | ✅ | Ultralytics-compatible weights only. |
 
 Current target formats:
 
-- `.pt -> onnx`
-- `.pt -> torchscript`
-- `.pt -> openvino`
-- `.pt -> engine` (TensorRT)
-- `.pt -> coreml`
-- `.pt -> saved_model`
-- `.pt -> pb`
-- `.pt -> tflite`
-- `.pt -> edgetpu`
-- `.pt -> tfjs`
-- `.pt -> paddle`
-- `.pt -> ncnn`
-- `.pt -> mnn`
-- `.pt -> rknn`
-- `.pt -> imx`
-- `.pt -> axelera`
-- `.pt -> executorch`
+| Format | Status | Notes |
+| --- | :---: | --- |
+| `.pt -> onnx` | ✅ | Most portable intermediate. |
+| `.pt -> torchscript` | ✅ | Traced TorchScript module. |
+| `.pt -> openvino` | ✅ | Optimised for Intel CPUs, iGPUs, and VPUs. |
+| `.pt -> engine` | ✅ | TensorRT. NVIDIA GPU and supported stack required. |
+| `.pt -> coreml` | ✅ | macOS-only. |
+| `.pt -> saved_model` | ✅ | TensorFlow SavedModel output. |
+| `.pt -> pb` | ✅ | TensorFlow GraphDef output. |
+| `.pt -> tflite` | ✅ | One-way runtime artifact. |
+| `.pt -> edgetpu` | ✅ | Linux `x86_64` and `edgetpu_compiler` required. |
+| `.pt -> tfjs` | ✅ | Web deployment output. |
+| `.pt -> paddle` | ✅ | PaddlePaddle export path. |
+| `.pt -> ncnn` | ✅ | Mobile-friendly runtime output. |
+| `.pt -> mnn` | ✅ | One-way runtime artifact. |
+| `.pt -> rknn` | ✅ | Linux-only. Target chip required. |
+| `.pt -> imx` | ✅ | Linux-only. Java `>= 17` required. |
+| `.pt -> axelera` | ✅ | Linux-only. |
+| `.pt -> executorch` | ✅ | Edge runtime output. |
 
 Route metadata source of truth:
 
