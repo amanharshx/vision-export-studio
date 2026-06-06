@@ -1,6 +1,6 @@
 [package]
 name = "yolo-export-studio"
-version = "0.1.1"
+version = "0.1.2"
 description = "Desktop ML model export studio"
 authors = ["Aman Harsh"]
 license = "MIT"
