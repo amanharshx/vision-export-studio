@@ -20,12 +20,24 @@ jobs:
         include:
           - platform: macos-latest
             args: --target aarch64-apple-darwin
+            linux_homebrew: false
+            linux_appimage_arch: ''
+            linux_tarball_arch: ''
           - platform: macos-latest
             args: --target x86_64-apple-darwin
+            linux_homebrew: false
+            linux_appimage_arch: ''
+            linux_tarball_arch: ''
           - platform: ubuntu-22.04
             args: ''
+            linux_homebrew: true
+            linux_appimage_arch: amd64
+            linux_tarball_arch: x86_64
           - platform: windows-latest
             args: ''
+            linux_homebrew: false
+            linux_appimage_arch: ''
+            linux_tarball_arch: ''
     runs-on: ${{ matrix.platform }}
 
     steps:
@@ -42,7 +54,7 @@ jobs:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Install Linux system dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: runner.os == 'Linux' && matrix.linux_homebrew
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
@@ -59,6 +71,15 @@ jobs:
 
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
+
+      - name: Clean Linux AppImage bundle output
+        if: runner.os == 'Linux' && matrix.linux_homebrew
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TARGET_DIR="${CARGO_TARGET_DIR:-src-tauri/target}"
+          rm -rf "${TARGET_DIR}/release/bundle/appimage"
 
       - name: Create release config with signing pubkey
         shell: bash
@@ -89,6 +110,60 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: '${{ inputs.tag || github.ref_name }}'
           generateReleaseNotes: true
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json
+
+      - name: Package Linux Homebrew tarball
+        if: runner.os == 'Linux' && matrix.linux_homebrew
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ inputs.tag || github.ref_name }}"
+          VERSION="${VERSION#v}"
+          TARGET_DIR="${CARGO_TARGET_DIR:-src-tauri/target}"
+          BUNDLE_DIR="${TARGET_DIR}/release/bundle/appimage"
+          TARBALL_PATH="dist/linux-homebrew/yolo-export-studio-linux-${{ matrix.linux_tarball_arch }}.tar.gz"
+
+          shopt -s nullglob
+          APPIMAGES=("${BUNDLE_DIR}"/*_"${VERSION}"_${{ matrix.linux_appimage_arch }}.AppImage)
+          shopt -u nullglob
+
+          if [[ ${#APPIMAGES[@]} -ne 1 ]]; then
+            echo "expected exactly 1 AppImage for version ${VERSION} in ${BUNDLE_DIR}; found ${#APPIMAGES[@]}" >&2
+            printf 'matched files:\n' >&2
+            printf '  %s\n' "${APPIMAGES[@]}" >&2
+            exit 1
+          fi
+
+          mkdir -p dist/linux-homebrew
+
+          ./scripts/package-linux-homebrew-tarball.sh \
+            "${VERSION}" \
+            "${APPIMAGES[0]}" \
+            "dist/linux-homebrew"
+
+          test -f "${TARBALL_PATH}"
+
+      - name: Upload Linux Homebrew tarball
+        if: runner.os == 'Linux' && matrix.linux_homebrew
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          files: dist/linux-homebrew/yolo-export-studio-linux-${{ matrix.linux_tarball_arch }}.tar.gz
+          draft: true
+
+  publish_release:
+    name: Publish release
+    needs: release
+    permissions:
+      contents: write
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Publish draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          draft: false
