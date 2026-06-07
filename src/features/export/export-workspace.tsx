@@ -1,4 +1,5 @@
 import { detectEnvironment } from "@/lib/tauri/environment";
+import { captureAnalyticsEvent } from "@/lib/analytics";
 import { checkDependencies, installDependencies } from "@/lib/tauri/deps";
 import { cancelExport, startExport } from "@/lib/tauri/export";
 import { defaultRoute, ultralyticsRoutes } from "@/lib/routes";
@@ -68,6 +69,33 @@ const routeDefaults: Partial<Record<string, Partial<ExportOptions>>> = {
 
 function optionsForRoute(routeId: string): ExportOptions {
   return { ...defaultOptions, ...(routeDefaults[routeId] ?? {}) };
+}
+
+function getInstallableMissingPackages(results: DepCheckResult[] | null): string[] {
+  if (!results) {
+    return [];
+  }
+
+  const pipMissing = results
+    .filter((r) => r.status === "missing_package")
+    .map((r) => r.item);
+  const binaryViaPip = results
+    .filter(
+      (r) =>
+        r.status === "missing_binary" &&
+        r.install_hint.startsWith("pip install "),
+    )
+    .map((r) => r.install_hint.replace("pip install ", "").trim());
+
+  return [...new Set([...pipMissing, ...binaryViaPip])];
+}
+
+function hasBlockingDependencies(results: DepCheckResult[] | null): boolean {
+  if (!results) {
+    return true;
+  }
+
+  return results.some((result) => result.status !== "ready" && result.status !== "warning");
 }
 
 type EnvCardStatus = "ok" | "error" | "loading";
@@ -171,23 +199,13 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
   const [installPhase, setInstallPhase] = useState<InstallPhase>("idle");
 
   const missingPackageNames = useMemo(() => {
-    const results = depResults ?? [];
-    const pipMissing = results
-      .filter((r) => r.status === "missing_package")
-      .map((r) => r.item);
-    const binaryViaPip = results
-      .filter(
-        (r) =>
-          r.status === "missing_binary" &&
-          r.install_hint.startsWith("pip install "),
-      )
-      .map((r) => r.install_hint.replace("pip install ", "").trim());
-    return [...pipMissing, ...binaryViaPip];
+    return getInstallableMissingPackages(depResults);
   }, [depResults]);
 
   // Ref to current sessionId for use inside event listener closures
   const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = sessionId;
+  const currentExportRouteRef = useRef<{ routeId: string; exportFormat: string } | null>(null);
 
   // Load settings + detect environment on mount
   useEffect(() => {
@@ -265,6 +283,13 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
           if (event.payload.artifact_warning) {
             setLogLines((prev) => [...prev, "[warning] " + event.payload.artifact_warning]);
           }
+          const exportRoute = currentExportRouteRef.current;
+          if (exportRoute) {
+            captureAnalyticsEvent("export_completed", {
+              route_id: exportRoute.routeId,
+              export_format: exportRoute.exportFormat,
+            });
+          }
           setExportStatus("finished");
         }
       });
@@ -272,6 +297,15 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
 
       const ulFailed = await listen<ExportFailedPayload>("export:failed", (event) => {
         if (event.payload.session_id === sessionIdRef.current) {
+          const exportRoute = currentExportRouteRef.current;
+          if (exportRoute) {
+            captureAnalyticsEvent("export_failed", {
+              route_id: exportRoute.routeId,
+              export_format: exportRoute.exportFormat,
+              failure_stage: "export_run",
+              failure_kind: "export_process_failed",
+            });
+          }
           setExportStatus("failed");
         }
       });
@@ -279,6 +313,13 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
 
       const ulCancelled = await listen<ExportCancelledPayload>("export:cancelled", (event) => {
         if (event.payload.session_id === sessionIdRef.current) {
+          const exportRoute = currentExportRouteRef.current;
+          if (exportRoute) {
+            captureAnalyticsEvent("export_cancelled", {
+              route_id: exportRoute.routeId,
+              export_format: exportRoute.exportFormat,
+            });
+          }
           setExportStatus("cancelled");
         }
       });
@@ -295,9 +336,14 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
   }, []);
 
   // Core export invocation — call only when deps are satisfied
-  const doStartExport = async () => {
+  const doStartExport = async (missingDepCount: number) => {
     if (!sourcePath || !envInfo?.yolo_path) return;
     setInvokeError(null);
+    const exportRoute = {
+      routeId: selectedRoute.id,
+      exportFormat: selectedRoute.targetFormat,
+    };
+    currentExportRouteRef.current = exportRoute;
     let outputDir = outputDirOverride.trim();
     if (!outputDir) {
       const sep = sourcePath.includes("/") ? "/" : "\\";
@@ -325,9 +371,21 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
         workspace: options.workspace,
         chip: options.chip,
       });
+      sessionIdRef.current = id;
       setSessionId(id);
       setExportStatus("running");
+      captureAnalyticsEvent("export_started", {
+        route_id: exportRoute.routeId,
+        export_format: exportRoute.exportFormat,
+        missing_dep_count: missingDepCount,
+      });
     } catch (e: unknown) {
+      captureAnalyticsEvent("export_failed", {
+        route_id: exportRoute.routeId,
+        export_format: exportRoute.exportFormat,
+        failure_stage: "start_export",
+        failure_kind: "start_export_failed",
+      });
       setInvokeError(String(e));
     }
   };
@@ -335,29 +393,43 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
   // Export handler — gates on missing deps before starting
   const handleExport = async () => {
     if (!sourcePath || !envInfo?.yolo_path || exportStatus === "running") return;
+    if (depCheckLoading) {
+      setInvokeError("Dependency check still running. Wait for it to finish before export.");
+      return;
+    }
+    if (depCheckError || depResults === null) {
+      setInvokeError("Dependency check not ready. Resolve dependency check before export.");
+      return;
+    }
 
     if (missingPackageNames.length > 0) {
+      setInvokeError(null);
       setInstallPhase("pending_consent");
+      return;
+    }
+    if (hasBlockingDependencies(depResults)) {
+      setInvokeError("Blocking dependencies still unresolved. Review dependency panel before export.");
       return;
     }
 
     setLogLines([]);
-    await doStartExport();
+    await doStartExport(missingPackageNames.length);
   };
 
   // Install missing deps then auto-start export
   const handleInstallAndExport = async () => {
     const pythonPath = envInfo?.python_path;
     if (!pythonPath) return;
-
-    const missingPkgs = (depResults ?? [])
-      .filter((r) => r.status === "missing_package")
-      .map((r) => r.item);
+    const exportRoute = {
+      routeId: selectedRoute.id,
+      exportFormat: selectedRoute.targetFormat,
+    };
+    const missingPkgs = getInstallableMissingPackages(depResults);
 
     if (missingPkgs.length === 0) {
       setInstallPhase("idle");
       setLogLines([]);
-      await doStartExport();
+      await doStartExport(missingPkgs.length);
       return;
     }
 
@@ -400,6 +472,12 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
       installSessionId = await installDependencies(missingPkgs, pythonPath);
     } catch (e: unknown) {
       cleanup();
+      captureAnalyticsEvent("export_failed", {
+        route_id: exportRoute.routeId,
+        export_format: exportRoute.exportFormat,
+        failure_stage: "install_dependencies",
+        failure_kind: "install_start_failed",
+      });
       setInstallPhase("failed");
       setLogLines((prev) => [...prev, "[error] Failed to start install: " + String(e)]);
       return;
@@ -409,13 +487,64 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
     cleanup();
 
     if (result !== "ok") {
+      captureAnalyticsEvent("export_failed", {
+        route_id: exportRoute.routeId,
+        export_format: exportRoute.exportFormat,
+        failure_stage: "install_dependencies",
+        failure_kind: "install_failed",
+      });
       setInstallPhase("failed");
       setLogLines((prev) => [...prev, "[error] Install failed: " + result]);
       return;
     }
 
     setInstallPhase("done");
-    await doStartExport();
+    setDepCheckLoading(true);
+    setDepCheckError(null);
+    let refreshedMissingPkgs: string[] = [];
+    try {
+      const refreshed = await checkDependencies(selectedRoute.id, pythonPath);
+      setDepResults(refreshed.results);
+      refreshedMissingPkgs = getInstallableMissingPackages(refreshed.results);
+      if (refreshedMissingPkgs.length > 0) {
+        captureAnalyticsEvent("export_failed", {
+          route_id: exportRoute.routeId,
+          export_format: exportRoute.exportFormat,
+          failure_stage: "recheck_dependencies",
+          failure_kind: "deps_still_missing_after_install",
+        });
+        setInstallPhase("pending_consent");
+        setInvokeError("Dependencies still missing after install. Review requirements before export.");
+        return;
+      }
+      if (hasBlockingDependencies(refreshed.results)) {
+        captureAnalyticsEvent("export_failed", {
+          route_id: exportRoute.routeId,
+          export_format: exportRoute.exportFormat,
+          failure_stage: "recheck_dependencies",
+          failure_kind: "blocking_dependencies_remaining_after_install",
+        });
+        setInstallPhase("failed");
+        setInvokeError("Non-installable dependency blockers remain after install. Export blocked.");
+        return;
+      }
+    } catch (e: unknown) {
+      captureAnalyticsEvent("export_failed", {
+        route_id: exportRoute.routeId,
+        export_format: exportRoute.exportFormat,
+        failure_stage: "recheck_dependencies",
+        failure_kind: "dependency_recheck_failed",
+      });
+      setDepResults(null);
+      setDepCheckError(String(e));
+      setInstallPhase("failed");
+      setInvokeError("Dependency re-check failed after install. Export blocked.");
+      return;
+    } finally {
+      setDepCheckLoading(false);
+    }
+
+    await doStartExport(refreshedMissingPkgs.length);
   };
 
   // Cancel handler
@@ -424,6 +553,15 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
     try {
       await cancelExport(sessionId);
     } catch (e: unknown) {
+      const exportRoute = currentExportRouteRef.current;
+      if (exportRoute) {
+        captureAnalyticsEvent("export_failed", {
+          route_id: exportRoute.routeId,
+          export_format: exportRoute.exportFormat,
+          failure_stage: "cancel_export",
+          failure_kind: "cancel_export_failed",
+        });
+      }
       setInvokeError("Cancel failed: " + String(e));
     }
   };
@@ -439,6 +577,7 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
     setSelectedRouteId(routeId);
     setOptions(optionsForRoute(routeId));
     setLogLines([]);
+    setInvokeError(null);
     setExportStatus("idle");
     setInstallPhase("idle");
     setDialogOpen(true);
@@ -774,7 +913,10 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
         open={dialogOpen}
         onOpenChange={(open) => {
           setDialogOpen(open);
-          if (!open) setInstallPhase("idle");
+          if (!open) {
+            setInstallPhase("idle");
+            setInvokeError(null);
+          }
         }}
         route={selectedRoute}
         sourcePath={sourcePath}
@@ -787,6 +929,7 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
         depResults={depResults ?? undefined}
         depCheckLoading={depCheckLoading}
         depCheckError={depCheckError}
+        errorMsg={invokeError}
         installPhase={installPhase}
         missingPackageNames={missingPackageNames}
         onInstallAndExport={handleInstallAndExport}

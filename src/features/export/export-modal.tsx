@@ -38,6 +38,7 @@ interface ExportModalProps {
   depResults?: DepCheckResult[];
   depCheckLoading?: boolean;
   depCheckError?: string | null;
+  errorMsg?: string | null;
   installPhase: InstallPhase;
   missingPackageNames: string[];
   onInstallAndExport: () => void;
@@ -57,6 +58,7 @@ export function ExportModal({
   depResults,
   depCheckLoading,
   depCheckError,
+  errorMsg,
   installPhase,
   missingPackageNames,
   onInstallAndExport,
@@ -184,6 +186,12 @@ export function ExportModal({
                     </li>
                   ))}
                 </ul>
+              </div>
+            )}
+
+            {errorMsg && (
+              <div className="rounded-md border border-red-200 bg-red-50 p-3">
+                <p className="text-sm text-red-800">{errorMsg}</p>
               </div>
             )}
 

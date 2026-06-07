@@ -1,7 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ExportWorkspace } from "@/features/export/export-workspace";
 import { LandingScreen } from "@/features/landing-screen";
 import { SetupScreen } from "@/features/setup/setup-screen";
+import {
+  captureAnalyticsEvent,
+  hasSentFirstRun,
+  isAnalyticsEnabled,
+  markFirstRunSent,
+  shouldCaptureFirstRun,
+} from "@/lib/analytics";
 import { loadSettings } from "@/lib/tauri/setup";
 
 // Fills the macOS title bar zone (fullSizeContentView) with the correct dark background.
@@ -27,6 +34,17 @@ function App() {
   const [runtimeDir, setRuntimeDir] = useState<string>("");
   const [setupComplete, setSetupComplete] = useState(false);
   const [settingsReady, setSettingsReady] = useState(false);
+  const appOpenedSentRef = useRef(false);
+  const firstRunSentRef = useRef(false);
+
+  useEffect(() => {
+    if (appOpenedSentRef.current) {
+      return;
+    }
+
+    captureAnalyticsEvent("app_opened");
+    appOpenedSentRef.current = true;
+  }, []);
 
   useEffect(() => {
     loadSettings()
@@ -34,11 +52,34 @@ function App() {
         setRuntimeDir(settings.runtime_dir);
         setSetupComplete(settings.setup_complete);
       })
-      .catch(() => {})
+      .catch(() => {
+        captureAnalyticsEvent("settings_load_failed", {
+          failure_kind: "settings_load_failed",
+          failure_stage: "load_settings",
+        });
+      })
       .finally(() => {
         setSettingsReady(true);
       });
   }, []);
+
+  useEffect(() => {
+    if (
+      !shouldCaptureFirstRun({
+        settingsReady,
+        setupComplete,
+        appState,
+        analyticsEnabled: isAnalyticsEnabled(),
+        firstRunAlreadySent: firstRunSentRef.current || hasSentFirstRun(),
+      })
+    ) {
+      return;
+    }
+
+    captureAnalyticsEvent("first_run");
+    markFirstRunSent();
+    firstRunSentRef.current = true;
+  }, [appState, settingsReady, setupComplete]);
 
   const handleGetStarted = () => {
     if (setupComplete) {
