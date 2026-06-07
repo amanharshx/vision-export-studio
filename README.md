@@ -34,6 +34,8 @@ Desktop studio for exporting Ultralytics YOLO `.pt` models into deployment-ready
 - [Target Caveats](#target-caveats)
 - [Installation](#installation)
 - [Build From Source](#build-from-source)
+- [Analytics](#analytics)
+- [Privacy](#privacy)
 - [Contributing](#contributing)
 - [Security](#security)
 - [License](#license)
@@ -197,6 +199,36 @@ bun install
 bun run tauri dev      # development
 bun run tauri build    # local production build
 ```
+
+---
+
+## Analytics
+
+YOLO Export Studio uses PostHog for install-scoped pseudonymous usage analytics. The app stores a persistent install identifier locally so launches from the same install can be measured across sessions.
+
+Current analytics covers:
+
+- app launches
+- setup completion and setup failures
+- export started, completed, failed, and cancelled
+- app and device metadata such as app version, OS, architecture, install channel, and route/event metadata
+
+Collected analytics excludes:
+
+- model files
+- dataset contents
+- file contents
+- export logs
+- local file paths
+- personal identity such as email address or username
+
+More detail lives in [PRIVACY.md](PRIVACY.md).
+
+---
+
+## Privacy
+
+Privacy summary: exports run locally, model files stay on your machine, and install-scoped pseudonymous analytics is limited to product usage and app/device metadata. See [PRIVACY.md](PRIVACY.md) for details.
 
 ---
 
