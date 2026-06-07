@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { check } from "@tauri-apps/plugin-updater";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
   AlertCircle,
@@ -23,6 +23,7 @@ export function UpdateChecker() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
   const resetRef = useRef<number | null>(null);
+  const updateRef = useRef<Update | null>(null);
 
   const clearReset = () => {
     if (resetRef.current !== null) {
@@ -54,14 +55,18 @@ export function UpdateChecker() {
       const update = await check();
 
       if (update) {
+        updateRef.current = update;
         setVersion(update.version);
         setProgress(0);
         setState("available");
       } else {
+        updateRef.current = null;
+        setVersion("");
         setState("up-to-date");
         scheduleReset(3000);
       }
     } catch (e) {
+      updateRef.current = null;
       setError(e instanceof Error ? e.message : "Failed to check for updates");
       setState("error");
       scheduleReset(5000);
@@ -75,7 +80,7 @@ export function UpdateChecker() {
     setProgress(0);
 
     try {
-      const update = await check();
+      const update = updateRef.current;
 
       if (!update) {
         setState("idle");
@@ -100,6 +105,20 @@ export function UpdateChecker() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to download update");
       setState("error");
+      scheduleReset(5000);
+    }
+  };
+
+  const restartToUpdate = async () => {
+    clearReset();
+    setError("");
+
+    try {
+      await relaunch();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to restart app");
+      setState("error");
+      scheduleReset(5000);
     }
   };
 
@@ -158,7 +177,7 @@ export function UpdateChecker() {
   if (state === "ready") {
     return (
       <button
-        onClick={() => relaunch()}
+        onClick={() => void restartToUpdate()}
         className="flex items-center gap-1.5 text-xs font-medium text-green-600 hover:text-green-700"
       >
         <RefreshCw className="h-3.5 w-3.5" />
