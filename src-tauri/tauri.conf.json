@@ -3,6 +3,13 @@
   "productName": "YOLO Export Studio",
   "version": "0.1.2",
   "identifier": "com.amanharshx.yoloexportstudio",
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/amanharshx/yolo-export-studio/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
