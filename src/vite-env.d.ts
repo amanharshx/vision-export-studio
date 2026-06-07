@@ -1,1 +1,6 @@
 /// <reference types="vite/client" />
+
+declare const __APP_VERSION__: string;
+declare const __POSTHOG_KEY__: string;
+declare const __POSTHOG_HOST__: string;
+declare const __INSTALL_CHANNEL__: string;

@@ -4,6 +4,7 @@ import { AppIcon } from "@/components/app-icon";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import { detectEnvironment } from "@/lib/tauri/environment";
+import { captureAnalyticsEvent } from "@/lib/analytics";
 import {
   createRuntimeVenv,
   installUltralytics,
@@ -39,6 +40,14 @@ function verifyEnvironmentReadyMessage() {
   return "runtime verification failed after install; retry setup";
 }
 
+function captureSetupFailed(failureStage: string, failureKind: string) {
+  captureAnalyticsEvent("setup_failed", {
+    setup_phase: failureStage,
+    failure_stage: failureStage,
+    failure_kind: failureKind,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -66,10 +75,14 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
   async function runSetup() {
     if (!mountedRef.current) return;
     if (defaultRuntimeDir.trim().length === 0) {
+      captureSetupFailed("preflight", "missing_runtime_dir");
       setPhase("error");
       setErrorMessage("managed runtime path missing");
       return;
     }
+    captureAnalyticsEvent("setup_started", {
+      setup_phase: "venv",
+    });
     setErrorMessage(null);
     setPhase("venv");
 
@@ -108,6 +121,7 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
     } catch (e: unknown) {
       cleanupVenv();
       if (!mountedRef.current) return;
+      captureSetupFailed("venv", "venv_start_failed");
       setPhase("error");
       setErrorMessage(String(e));
       return;
@@ -117,6 +131,7 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
 
     if (venvResult !== "ok") {
       if (!mountedRef.current) return;
+      captureSetupFailed("venv", "venv_create_failed");
       setPhase("error");
       setErrorMessage(`venv creation failed: ${venvResult}`);
       return;
@@ -155,6 +170,7 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
     } catch (e: unknown) {
       cleanupPip();
       if (!mountedRef.current) return;
+      captureSetupFailed("pip", "pip_install_start_failed");
       setPhase("error");
       setErrorMessage(String(e));
       return;
@@ -164,6 +180,7 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
 
     if (pipResult !== "ok") {
       if (!mountedRef.current) return;
+      captureSetupFailed("pip", "pip_install_failed");
       setPhase("error");
       setErrorMessage(`ultralytics install failed: ${pipResult}`);
       return;
@@ -176,6 +193,7 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
       await markSetupComplete(defaultRuntimeDir);
     } catch (e: unknown) {
       if (!mountedRef.current) return;
+      captureSetupFailed("save_settings", "settings_save_failed");
       setPhase("error");
       setErrorMessage(`failed to save settings: ${String(e)}`);
       return;
@@ -194,12 +212,16 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
       }
     } catch (e: unknown) {
       if (!mountedRef.current) return;
+      captureSetupFailed("verify", "environment_verify_failed");
       setPhase("error");
       setErrorMessage(`environment verify failed: ${String(e)}`);
       return;
     }
 
     if (!mountedRef.current) return;
+    captureAnalyticsEvent("setup_completed", {
+      setup_phase: "done",
+    });
     setPhase("done");
     setCountdown(3);
   }
@@ -209,6 +231,7 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
     if (defaultRuntimeDir.trim().length === 0) return;
     startedRef.current = true;
     runSetup().catch((e: unknown) => {
+      captureSetupFailed("run_setup", "unexpected_setup_error");
       setPhase("error");
       setErrorMessage(String(e));
       startedRef.current = false;
@@ -280,6 +303,7 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
                 onClick={() => {
                   startedRef.current = false;
                   runSetup().catch((e: unknown) => {
+                    captureSetupFailed("run_setup", "unexpected_setup_error");
                     setPhase("error");
                     setErrorMessage(String(e));
                   });
