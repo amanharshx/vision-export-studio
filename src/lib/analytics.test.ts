@@ -6,6 +6,7 @@ import {
   markFirstRunSent,
   resolveInstallChannel,
   sanitizeAnalyticsProperties,
+  shouldCaptureFirstRun,
   shouldInitAnalytics,
   shouldQueueAnalyticsCapture,
 } from "./analytics";
@@ -133,5 +134,55 @@ describe("first run marker", () => {
   it("persists after mark", () => {
     markFirstRunSent(storage);
     expect(hasSentFirstRun(storage)).toBe(true);
+  });
+});
+
+describe("shouldCaptureFirstRun", () => {
+  it("requires export-ready usable state", () => {
+    expect(
+      shouldCaptureFirstRun({
+        settingsReady: true,
+        setupComplete: true,
+        appState: "export",
+        analyticsEnabled: true,
+        firstRunAlreadySent: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not fire on landing before setup", () => {
+    expect(
+      shouldCaptureFirstRun({
+        settingsReady: true,
+        setupComplete: false,
+        appState: "landing",
+        analyticsEnabled: true,
+        firstRunAlreadySent: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not fire before export screen is reached", () => {
+    expect(
+      shouldCaptureFirstRun({
+        settingsReady: true,
+        setupComplete: true,
+        appState: "landing",
+        analyticsEnabled: true,
+        firstRunAlreadySent: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not fire when already marked", () => {
+    expect(
+      shouldCaptureFirstRun({
+        settingsReady: true,
+        setupComplete: true,
+        appState: "export",
+        analyticsEnabled: true,
+        firstRunAlreadySent: true,
+      }),
+    ).toBe(false);
   });
 });

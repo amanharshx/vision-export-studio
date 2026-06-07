@@ -7,6 +7,7 @@ import {
   hasSentFirstRun,
   isAnalyticsEnabled,
   markFirstRunSent,
+  shouldCaptureFirstRun,
 } from "@/lib/analytics";
 import { loadSettings } from "@/lib/tauri/setup";
 
@@ -50,12 +51,6 @@ function App() {
       .then((settings) => {
         setRuntimeDir(settings.runtime_dir);
         setSetupComplete(settings.setup_complete);
-
-        if (!firstRunSentRef.current && !hasSentFirstRun() && isAnalyticsEnabled()) {
-          captureAnalyticsEvent("first_run");
-          markFirstRunSent();
-          firstRunSentRef.current = true;
-        }
       })
       .catch(() => {
         captureAnalyticsEvent("settings_load_failed", {
@@ -67,6 +62,24 @@ function App() {
         setSettingsReady(true);
       });
   }, []);
+
+  useEffect(() => {
+    if (
+      !shouldCaptureFirstRun({
+        settingsReady,
+        setupComplete,
+        appState,
+        analyticsEnabled: isAnalyticsEnabled(),
+        firstRunAlreadySent: firstRunSentRef.current || hasSentFirstRun(),
+      })
+    ) {
+      return;
+    }
+
+    captureAnalyticsEvent("first_run");
+    markFirstRunSent();
+    firstRunSentRef.current = true;
+  }, [appState, settingsReady, setupComplete]);
 
   const handleGetStarted = () => {
     if (setupComplete) {

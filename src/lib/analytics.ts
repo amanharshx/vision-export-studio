@@ -132,6 +132,22 @@ export function markFirstRunSent(storage: StorageLike | null = getStorage()): vo
   storage?.setItem(FIRST_RUN_KEY, "true");
 }
 
+export function shouldCaptureFirstRun(input: {
+  settingsReady: boolean;
+  setupComplete: boolean;
+  appState: "landing" | "setup" | "export";
+  analyticsEnabled: boolean;
+  firstRunAlreadySent: boolean;
+}): boolean {
+  return (
+    input.settingsReady &&
+    input.setupComplete &&
+    input.appState === "export" &&
+    input.analyticsEnabled &&
+    !input.firstRunAlreadySent
+  );
+}
+
 export async function initAnalytics(): Promise<void> {
   if (initialized || initializationStarted) {
     return;
