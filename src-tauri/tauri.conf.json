@@ -3,6 +3,14 @@
   "productName": "YOLO Export Studio",
   "version": "0.1.2",
   "identifier": "com.amanharshx.yoloexportstudio",
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/amanharshx/yolo-export-studio/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERENTk0QUI1NkU0NTZFOUIKUldTYmJrVnV0VXBaM2VCQ2tpY25mUzl3NVRZSFMvSXVVMzJveE1sMGRzZVdjWENJRWFrcVZFK1oK"
+    }
+  },
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -23,7 +31,8 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self' asset:; img-src 'self' asset: data: blob:; connect-src 'self' ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'",
+      "devCsp": "default-src 'self' asset:; img-src 'self' asset: data: blob:; connect-src 'self' ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": {

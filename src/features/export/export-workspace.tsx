@@ -32,6 +32,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { loadSettings, savePythonOverride, saveOutputDirOverride } from "@/lib/tauri/setup";
 import { openPythonExecutablePicker, openOutputDirPicker } from "@/lib/tauri/dialog";
+import type { UpdaterController } from "@/features/updater/use-updater-controller";
 import { DropZone } from "./drop-zone";
 import { ExportModal } from "./export-modal";
 import { RouteGrid } from "./route-grid";
@@ -155,9 +156,11 @@ function EnvCard({
 
 interface ExportWorkspaceProps {
   onBack: () => void;
+  updatesEnabled: boolean;
+  updater: UpdaterController;
 }
 
-export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
+export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorkspaceProps) {
   const [view, setView] = useState<WorkspaceView>("drop");
   const [infoOpen, setInfoOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -676,7 +679,7 @@ export function ExportWorkspace({ onBack }: ExportWorkspaceProps) {
           <Info className="h-3.5 w-3.5" />
         </button>
 
-        <UpdateChecker />
+        {updatesEnabled ? <UpdateChecker updater={updater} /> : null}
       </div>
 
       {/* Settings slide-in panel */}

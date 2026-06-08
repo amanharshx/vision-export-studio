@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ExportWorkspace } from "@/features/export/export-workspace";
+import { UpdateAnnouncement } from "@/features/updater/update-announcement";
+import { useUpdaterController } from "@/features/updater/use-updater-controller";
 import { LandingScreen } from "@/features/landing-screen";
 import { SetupScreen } from "@/features/setup/setup-screen";
 import {
@@ -30,12 +32,15 @@ const TitleBarFill = () => (
 type AppState = "landing" | "setup" | "export";
 
 function App() {
+  const updatesEnabled = !import.meta.env.DEV;
   const [appState, setAppState] = useState<AppState>("landing");
   const [runtimeDir, setRuntimeDir] = useState<string>("");
   const [setupComplete, setSetupComplete] = useState(false);
   const [settingsReady, setSettingsReady] = useState(false);
+  const [hasCheckedForUpdateThisLaunch, setHasCheckedForUpdateThisLaunch] = useState(false);
   const appOpenedSentRef = useRef(false);
   const firstRunSentRef = useRef(false);
+  const updater = useUpdaterController();
 
   useEffect(() => {
     if (appOpenedSentRef.current) {
@@ -64,6 +69,14 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!updatesEnabled) return;
+    if (!settingsReady || hasCheckedForUpdateThisLaunch) return;
+
+    setHasCheckedForUpdateThisLaunch(true);
+    void updater.checkForUpdates({ silent: true });
+  }, [settingsReady, hasCheckedForUpdateThisLaunch, updatesEnabled]);
+
+  useEffect(() => {
     if (
       !shouldCaptureFirstRun({
         settingsReady,
@@ -89,31 +102,57 @@ function App() {
     }
   };
 
-  if (appState === "landing") {
-    return (
-      <>
-        <TitleBarFill />
-        <LandingScreen onGetStarted={handleGetStarted} settingsReady={settingsReady} />
-      </>
-    );
-  }
+  const showUpdateAnnouncement =
+    updatesEnabled &&
+    updater.state === "available" &&
+    !updater.hasDismissedAnnouncementThisSession;
 
-  if (appState === "setup") {
-    return (
-      <>
-        <TitleBarFill />
-        <SetupScreen
-          defaultRuntimeDir={runtimeDir}
-          onComplete={() => { setSetupComplete(true); setAppState("export"); }}
-        />
-      </>
+  let content: ReactNode;
+
+  if (appState === "landing") {
+    content = (
+      <LandingScreen
+        onGetStarted={handleGetStarted}
+        settingsReady={settingsReady}
+        updatesEnabled={updatesEnabled}
+        updater={updater}
+      />
+    );
+  } else if (appState === "setup") {
+    content = (
+      <SetupScreen
+        defaultRuntimeDir={runtimeDir}
+        updatesEnabled={updatesEnabled}
+        updater={updater}
+        onComplete={() => {
+          setSetupComplete(true);
+          setAppState("export");
+        }}
+      />
+    );
+  } else {
+    content = (
+      <ExportWorkspace
+        updatesEnabled={updatesEnabled}
+        updater={updater}
+        onBack={() => setAppState("landing")}
+      />
     );
   }
 
   return (
     <>
       <TitleBarFill />
-      <ExportWorkspace onBack={() => setAppState("landing")} />
+      {updatesEnabled ? (
+        <UpdateAnnouncement
+          open={showUpdateAnnouncement}
+          updater={updater}
+          onOpenChange={(open) => {
+            if (!open) updater.dismissAnnouncement();
+          }}
+        />
+      ) : null}
+      {content}
     </>
   );
 }
