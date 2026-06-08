@@ -128,10 +128,11 @@ function EnvCard({
 
 interface ExportWorkspaceProps {
   onBack: () => void;
+  updatesEnabled: boolean;
   updater: UpdaterController;
 }
 
-export function ExportWorkspace({ onBack, updater }: ExportWorkspaceProps) {
+export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorkspaceProps) {
   const [view, setView] = useState<WorkspaceView>("drop");
   const [infoOpen, setInfoOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -539,7 +540,7 @@ export function ExportWorkspace({ onBack, updater }: ExportWorkspaceProps) {
           <Info className="h-3.5 w-3.5" />
         </button>
 
-        <UpdateChecker updater={updater} />
+        {updatesEnabled ? <UpdateChecker updater={updater} /> : null}
       </div>
 
       {/* Settings slide-in panel */}

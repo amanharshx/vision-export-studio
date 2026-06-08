@@ -35,6 +35,7 @@ type SetupPhase = "idle" | "venv" | "pip" | "verify" | "done" | "error";
 interface SetupScreenProps {
   defaultRuntimeDir: string;
   onComplete: () => void;
+  updatesEnabled: boolean;
   updater: UpdaterController;
 }
 
@@ -49,6 +50,7 @@ function verifyEnvironmentReadyMessage() {
 export function SetupScreen({
   defaultRuntimeDir,
   onComplete,
+  updatesEnabled,
   updater,
 }: SetupScreenProps) {
   const [phase, setPhase] = useState<SetupPhase>("idle");
@@ -238,9 +240,11 @@ export function SetupScreen({
 
   return (
     <div className="relative flex min-h-screen flex-col items-center justify-center bg-background px-6 py-12">
-      <div className="absolute right-4 top-4">
-        <UpdateChecker updater={updater} />
-      </div>
+      {updatesEnabled ? (
+        <div className="absolute right-4 top-4">
+          <UpdateChecker updater={updater} />
+        </div>
+      ) : null}
       <div className="w-full max-w-lg space-y-8">
         {/* Header */}
         <div className="flex flex-col items-center gap-4">

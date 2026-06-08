@@ -25,6 +25,7 @@ const TitleBarFill = () => (
 type AppState = "landing" | "setup" | "export";
 
 function App() {
+  const updatesEnabled = !import.meta.env.DEV;
   const [appState, setAppState] = useState<AppState>("landing");
   const [runtimeDir, setRuntimeDir] = useState<string>("");
   const [setupComplete, setSetupComplete] = useState(false);
@@ -45,11 +46,12 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!updatesEnabled) return;
     if (!settingsReady || hasCheckedForUpdateThisLaunch) return;
 
     setHasCheckedForUpdateThisLaunch(true);
     void updater.checkForUpdates({ silent: true });
-  }, [settingsReady, hasCheckedForUpdateThisLaunch]);
+  }, [settingsReady, hasCheckedForUpdateThisLaunch, updatesEnabled]);
 
   const handleGetStarted = () => {
     if (setupComplete) {
@@ -60,7 +62,9 @@ function App() {
   };
 
   const showUpdateAnnouncement =
-    updater.state === "available" && !updater.hasDismissedAnnouncementThisSession;
+    updatesEnabled &&
+    updater.state === "available" &&
+    !updater.hasDismissedAnnouncementThisSession;
 
   let content: ReactNode;
 
@@ -69,6 +73,7 @@ function App() {
         <LandingScreen
           onGetStarted={handleGetStarted}
           settingsReady={settingsReady}
+          updatesEnabled={updatesEnabled}
           updater={updater}
         />
       );
@@ -76,6 +81,7 @@ function App() {
     content = (
       <SetupScreen
         defaultRuntimeDir={runtimeDir}
+        updatesEnabled={updatesEnabled}
         updater={updater}
         onComplete={() => { setSetupComplete(true); setAppState("export"); }}
       />
@@ -83,6 +89,7 @@ function App() {
   } else {
     content = (
       <ExportWorkspace
+        updatesEnabled={updatesEnabled}
         updater={updater}
         onBack={() => setAppState("landing")}
       />
@@ -92,13 +99,15 @@ function App() {
   return (
     <>
       <TitleBarFill />
-      <UpdateAnnouncement
-        open={showUpdateAnnouncement}
-        updater={updater}
-        onOpenChange={(open) => {
-          if (!open) updater.dismissAnnouncement();
-        }}
-      />
+      {updatesEnabled ? (
+        <UpdateAnnouncement
+          open={showUpdateAnnouncement}
+          updater={updater}
+          onOpenChange={(open) => {
+            if (!open) updater.dismissAnnouncement();
+          }}
+        />
+      ) : null}
       {content}
     </>
   );

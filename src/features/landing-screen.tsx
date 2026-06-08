@@ -8,19 +8,23 @@ import { ArrowRight, Layers, Lock, Zap } from "lucide-react";
 interface LandingScreenProps {
   onGetStarted: () => void;
   settingsReady: boolean;
+  updatesEnabled: boolean;
   updater: UpdaterController;
 }
 
 export function LandingScreen({
   onGetStarted,
   settingsReady,
+  updatesEnabled,
   updater,
 }: LandingScreenProps) {
   return (
     <div className="relative flex min-h-screen">
-      <div className="absolute right-4 top-4">
-        <UpdateChecker updater={updater} />
-      </div>
+      {updatesEnabled ? (
+        <div className="absolute right-4 top-4">
+          <UpdateChecker updater={updater} />
+        </div>
+      ) : null}
       {/* Left — Branding */}
       <div className="flex flex-1 flex-col items-center justify-center bg-primary/5 px-12 py-8">
         <div className="flex w-full max-w-lg flex-col items-center">
