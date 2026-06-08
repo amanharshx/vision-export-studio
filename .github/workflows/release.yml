@@ -81,18 +81,26 @@ jobs:
           TARGET_DIR="${CARGO_TARGET_DIR:-src-tauri/target}"
           rm -rf "${TARGET_DIR}/release/bundle/appimage"
 
-      - name: Create release config with signing pubkey
+      - name: Validate updater signing secrets
         shell: bash
         env:
           PUBKEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
+          PRIVKEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          PRIVKEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          test -n "${PUBKEY}" || { echo "TAURI_SIGNING_PUBLIC_KEY missing" >&2; exit 1; }
+          test -n "${PRIVKEY}" || { echo "TAURI_SIGNING_PRIVATE_KEY missing" >&2; exit 1; }
+          test -n "${PRIVKEY_PASSWORD}" || { echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD missing" >&2; exit 1; }
+
+      - name: Create release config with signing pubkey
+        shell: bash
         run: |
           python - <<'PY'
           import json
-          import os
 
-          pubkey = os.environ.get("PUBKEY", "")
           cfg = {
-            "plugins": {"updater": {"pubkey": pubkey}},
             "bundle": {"createUpdaterArtifacts": True},
           }
 

@@ -135,6 +135,19 @@ Download the latest desktop build from [GitHub Releases](https://github.com/aman
 
 Current Linux release assets include Homebrew tarball, `.AppImage`, `.deb`, and `.rpm` packages.
 
+### In-App Updates
+
+Released builds can check for updates from `Updates` inside app.
+
+Expected flow:
+
+- click `Updates`
+- if no update exists, app shows `Up to date`
+- if update exists, app offers `Update to <version>`
+- after install, click `Restart to update`
+
+Updater metadata is served from GitHub Releases.
+
 ### Troubleshooting
 
 > **Note:** The app is not code-signed yet, so macOS and Windows may show security warnings.
