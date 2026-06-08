@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { AppIcon } from "@/components/app-icon";
+import { UpdateChecker } from "@/components/update-checker";
 import { Button } from "@/components/ui/button";
+import type { UpdaterController } from "@/features/updater/use-updater-controller";
 import { Loader2 } from "lucide-react";
 import { detectEnvironment } from "@/lib/tauri/environment";
 import {
@@ -33,6 +35,7 @@ type SetupPhase = "idle" | "venv" | "pip" | "verify" | "done" | "error";
 interface SetupScreenProps {
   defaultRuntimeDir: string;
   onComplete: () => void;
+  updater: UpdaterController;
 }
 
 function verifyEnvironmentReadyMessage() {
@@ -43,7 +46,11 @@ function verifyEnvironmentReadyMessage() {
 // Component
 // ---------------------------------------------------------------------------
 
-export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps) {
+export function SetupScreen({
+  defaultRuntimeDir,
+  onComplete,
+  updater,
+}: SetupScreenProps) {
   const [phase, setPhase] = useState<SetupPhase>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -230,7 +237,10 @@ export function SetupScreen({ defaultRuntimeDir, onComplete }: SetupScreenProps)
   };
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-background px-6 py-12">
+    <div className="relative flex min-h-screen flex-col items-center justify-center bg-background px-6 py-12">
+      <div className="absolute right-4 top-4">
+        <UpdateChecker updater={updater} />
+      </div>
       <div className="w-full max-w-lg space-y-8">
         {/* Header */}
         <div className="flex flex-col items-center gap-4">

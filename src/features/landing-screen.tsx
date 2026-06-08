@@ -1,19 +1,25 @@
 import { AppIcon } from "@/components/app-icon";
 import { Button } from "@/components/ui/button";
 import { UpdateChecker } from "@/components/update-checker";
+import type { UpdaterController } from "@/features/updater/use-updater-controller";
 import { ultralyticsRoutes } from "@/lib/routes";
 import { ArrowRight, Layers, Lock, Zap } from "lucide-react";
 
 interface LandingScreenProps {
   onGetStarted: () => void;
   settingsReady: boolean;
+  updater: UpdaterController;
 }
 
-export function LandingScreen({ onGetStarted, settingsReady }: LandingScreenProps) {
+export function LandingScreen({
+  onGetStarted,
+  settingsReady,
+  updater,
+}: LandingScreenProps) {
   return (
     <div className="relative flex min-h-screen">
       <div className="absolute right-4 top-4">
-        <UpdateChecker />
+        <UpdateChecker updater={updater} />
       </div>
       {/* Left — Branding */}
       <div className="flex flex-1 flex-col items-center justify-center bg-primary/5 px-12 py-8">

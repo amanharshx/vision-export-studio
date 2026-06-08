@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { ExportWorkspace } from "@/features/export/export-workspace";
+import { UpdateAnnouncement } from "@/features/updater/update-announcement";
+import { useUpdaterController } from "@/features/updater/use-updater-controller";
 import { LandingScreen } from "@/features/landing-screen";
 import { SetupScreen } from "@/features/setup/setup-screen";
 import { loadSettings } from "@/lib/tauri/setup";
@@ -27,6 +29,8 @@ function App() {
   const [runtimeDir, setRuntimeDir] = useState<string>("");
   const [setupComplete, setSetupComplete] = useState(false);
   const [settingsReady, setSettingsReady] = useState(false);
+  const [hasCheckedForUpdateThisLaunch, setHasCheckedForUpdateThisLaunch] = useState(false);
+  const updater = useUpdaterController();
 
   useEffect(() => {
     loadSettings()
@@ -40,6 +44,13 @@ function App() {
       });
   }, []);
 
+  useEffect(() => {
+    if (!settingsReady || hasCheckedForUpdateThisLaunch) return;
+
+    setHasCheckedForUpdateThisLaunch(true);
+    void updater.checkForUpdates({ silent: true });
+  }, [settingsReady, hasCheckedForUpdateThisLaunch]);
+
   const handleGetStarted = () => {
     if (setupComplete) {
       setAppState("export");
@@ -48,31 +59,47 @@ function App() {
     }
   };
 
-  if (appState === "landing") {
-    return (
-      <>
-        <TitleBarFill />
-        <LandingScreen onGetStarted={handleGetStarted} settingsReady={settingsReady} />
-      </>
-    );
-  }
+  const showUpdateAnnouncement =
+    updater.state === "available" && !updater.hasDismissedAnnouncementThisSession;
 
-  if (appState === "setup") {
-    return (
-      <>
-        <TitleBarFill />
-        <SetupScreen
-          defaultRuntimeDir={runtimeDir}
-          onComplete={() => { setSetupComplete(true); setAppState("export"); }}
+  let content: ReactNode;
+
+  if (appState === "landing") {
+    content = (
+        <LandingScreen
+          onGetStarted={handleGetStarted}
+          settingsReady={settingsReady}
+          updater={updater}
         />
-      </>
+      );
+  } else if (appState === "setup") {
+    content = (
+      <SetupScreen
+        defaultRuntimeDir={runtimeDir}
+        updater={updater}
+        onComplete={() => { setSetupComplete(true); setAppState("export"); }}
+      />
+    );
+  } else {
+    content = (
+      <ExportWorkspace
+        updater={updater}
+        onBack={() => setAppState("landing")}
+      />
     );
   }
 
   return (
     <>
       <TitleBarFill />
-      <ExportWorkspace onBack={() => setAppState("landing")} />
+      <UpdateAnnouncement
+        open={showUpdateAnnouncement}
+        updater={updater}
+        onOpenChange={(open) => {
+          if (!open) updater.dismissAnnouncement();
+        }}
+      />
+      {content}
     </>
   );
 }

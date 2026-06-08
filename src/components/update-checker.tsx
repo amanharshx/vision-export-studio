@@ -1,131 +1,30 @@
-import { useEffect, useRef, useState } from "react";
-import { check, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
 import {
   AlertCircle,
   CheckCircle,
   Download,
   RefreshCw,
 } from "lucide-react";
+import type { UpdaterController } from "@/features/updater/use-updater-controller";
 
-type UpdateState =
-  | "idle"
-  | "checking"
-  | "available"
-  | "downloading"
-  | "ready"
-  | "up-to-date"
-  | "error";
-
-export function UpdateChecker() {
-  const [state, setState] = useState<UpdateState>("idle");
-  const [version, setVersion] = useState("");
-  const [progress, setProgress] = useState(0);
-  const [error, setError] = useState("");
-  const resetRef = useRef<number | null>(null);
-  const updateRef = useRef<Update | null>(null);
-
-  const clearReset = () => {
-    if (resetRef.current !== null) {
-      window.clearTimeout(resetRef.current);
-      resetRef.current = null;
-    }
-  };
-
-  const scheduleReset = (ms: number) => {
-    clearReset();
-    resetRef.current = window.setTimeout(() => {
-      setState("idle");
-      resetRef.current = null;
-    }, ms);
-  };
-
-  useEffect(() => {
-    return () => {
-      clearReset();
-    };
-  }, []);
-
-  const checkForUpdates = async () => {
-    clearReset();
-    setState("checking");
-    setError("");
-
-    try {
-      const update = await check();
-
-      if (update) {
-        updateRef.current = update;
-        setVersion(update.version);
-        setProgress(0);
-        setState("available");
-      } else {
-        updateRef.current = null;
-        setVersion("");
-        setState("up-to-date");
-        scheduleReset(3000);
-      }
-    } catch (e) {
-      updateRef.current = null;
-      setError(e instanceof Error ? e.message : "Failed to check for updates");
-      setState("error");
-      scheduleReset(5000);
-    }
-  };
-
-  const downloadAndInstall = async () => {
-    clearReset();
-    setState("downloading");
-    setError("");
-    setProgress(0);
-
-    try {
-      const update = updateRef.current;
-
-      if (!update) {
-        setState("idle");
-        return;
-      }
-
-      let downloaded = 0;
-      let contentLength = 0;
-
-      await update.downloadAndInstall((event) => {
-        if (event.event === "Started") {
-          contentLength = event.data.contentLength ?? 0;
-        } else if (event.event === "Progress") {
-          downloaded += event.data.chunkLength;
-          if (contentLength > 0) {
-            setProgress(Math.round((downloaded / contentLength) * 100));
-          }
-        }
-      });
-
-      setState("ready");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to download update");
-      setState("error");
-      scheduleReset(5000);
-    }
-  };
-
-  const restartToUpdate = async () => {
-    clearReset();
-    setError("");
-
-    try {
-      await relaunch();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to restart app");
-      setState("error");
-      scheduleReset(5000);
-    }
-  };
+export function UpdateChecker({
+  updater,
+}: {
+  updater: UpdaterController;
+}) {
+  const {
+    state,
+    version,
+    progress,
+    error,
+    checkForUpdates,
+    beginInstall,
+    restartToUpdate,
+  } = updater;
 
   if (state === "idle") {
     return (
       <button
-        onClick={checkForUpdates}
+        onClick={() => void checkForUpdates()}
         className="flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
         title="Check for updates"
       >
@@ -156,7 +55,7 @@ export function UpdateChecker() {
   if (state === "available") {
     return (
       <button
-        onClick={downloadAndInstall}
+        onClick={() => void beginInstall()}
         className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-700"
       >
         <Download className="h-3.5 w-3.5" />
