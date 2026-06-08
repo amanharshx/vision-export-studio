@@ -1,9 +1,16 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ExportWorkspace } from "@/features/export/export-workspace";
 import { UpdateAnnouncement } from "@/features/updater/update-announcement";
 import { useUpdaterController } from "@/features/updater/use-updater-controller";
 import { LandingScreen } from "@/features/landing-screen";
 import { SetupScreen } from "@/features/setup/setup-screen";
+import {
+  captureAnalyticsEvent,
+  hasSentFirstRun,
+  isAnalyticsEnabled,
+  markFirstRunSent,
+  shouldCaptureFirstRun,
+} from "@/lib/analytics";
 import { loadSettings } from "@/lib/tauri/setup";
 
 // Fills the macOS title bar zone (fullSizeContentView) with the correct dark background.
@@ -31,7 +38,18 @@ function App() {
   const [setupComplete, setSetupComplete] = useState(false);
   const [settingsReady, setSettingsReady] = useState(false);
   const [hasCheckedForUpdateThisLaunch, setHasCheckedForUpdateThisLaunch] = useState(false);
+  const appOpenedSentRef = useRef(false);
+  const firstRunSentRef = useRef(false);
   const updater = useUpdaterController();
+
+  useEffect(() => {
+    if (appOpenedSentRef.current) {
+      return;
+    }
+
+    captureAnalyticsEvent("app_opened");
+    appOpenedSentRef.current = true;
+  }, []);
 
   useEffect(() => {
     loadSettings()
@@ -39,7 +57,12 @@ function App() {
         setRuntimeDir(settings.runtime_dir);
         setSetupComplete(settings.setup_complete);
       })
-      .catch(() => {})
+      .catch(() => {
+        captureAnalyticsEvent("settings_load_failed", {
+          failure_kind: "settings_load_failed",
+          failure_stage: "load_settings",
+        });
+      })
       .finally(() => {
         setSettingsReady(true);
       });
@@ -52,6 +75,24 @@ function App() {
     setHasCheckedForUpdateThisLaunch(true);
     void updater.checkForUpdates({ silent: true });
   }, [settingsReady, hasCheckedForUpdateThisLaunch, updatesEnabled]);
+
+  useEffect(() => {
+    if (
+      !shouldCaptureFirstRun({
+        settingsReady,
+        setupComplete,
+        appState,
+        analyticsEnabled: isAnalyticsEnabled(),
+        firstRunAlreadySent: firstRunSentRef.current || hasSentFirstRun(),
+      })
+    ) {
+      return;
+    }
+
+    captureAnalyticsEvent("first_run");
+    markFirstRunSent();
+    firstRunSentRef.current = true;
+  }, [appState, settingsReady, setupComplete]);
 
   const handleGetStarted = () => {
     if (setupComplete) {
@@ -70,20 +111,23 @@ function App() {
 
   if (appState === "landing") {
     content = (
-        <LandingScreen
-          onGetStarted={handleGetStarted}
-          settingsReady={settingsReady}
-          updatesEnabled={updatesEnabled}
-          updater={updater}
-        />
-      );
+      <LandingScreen
+        onGetStarted={handleGetStarted}
+        settingsReady={settingsReady}
+        updatesEnabled={updatesEnabled}
+        updater={updater}
+      />
+    );
   } else if (appState === "setup") {
     content = (
       <SetupScreen
         defaultRuntimeDir={runtimeDir}
         updatesEnabled={updatesEnabled}
         updater={updater}
-        onComplete={() => { setSetupComplete(true); setAppState("export"); }}
+        onComplete={() => {
+          setSetupComplete(true);
+          setAppState("export");
+        }}
       />
     );
   } else {
