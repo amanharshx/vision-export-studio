@@ -1,6 +1,6 @@
 [package]
 name = "vision-export-studio"
-version = "0.1.2"
+version = "0.1.3"
 description = "Desktop ML model export studio"
 authors = ["Aman Harsh"]
 license = "MIT"
