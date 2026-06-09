@@ -526,7 +526,10 @@ mod tests {
             normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio", false);
 
         assert!(changed);
-        assert_eq!(normalized.runtime_dir, "/Users/tester/.vision-export-studio");
+        assert_eq!(
+            normalized.runtime_dir,
+            "/Users/tester/.vision-export-studio"
+        );
         assert!(!normalized.setup_complete);
     }
 
@@ -543,7 +546,10 @@ mod tests {
             normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio", false);
 
         assert!(changed);
-        assert_eq!(normalized.runtime_dir, "/Users/tester/.vision-export-studio");
+        assert_eq!(
+            normalized.runtime_dir,
+            "/Users/tester/.vision-export-studio"
+        );
         assert!(normalized.setup_complete);
     }
 
