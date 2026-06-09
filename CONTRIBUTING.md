@@ -1,10 +1,10 @@
-# Contributing to YOLO Export Studio
+# Contributing to Vision Export Studio
 
 Thank you for considering a contribution! Whether you're fixing a bug, adding a new export route, or improving documentation - your help makes this project better for everyone.
 
 ## Bug Reports
 
-Found a bug? Please [open an issue](https://github.com/amanharshx/yolo-export-studio/issues/new) and include:
+Found a bug? Please [open an issue](https://github.com/amanharshx/vision-export-studio/issues/new) and include:
 
 - **OS and version** (e.g. macOS 15.2, Windows 11, Ubuntu 24.04)
 - **App version** (shown in the title bar or About screen)
@@ -14,7 +14,7 @@ Found a bug? Please [open an issue](https://github.com/amanharshx/yolo-export-st
 
 ## Feature Requests
 
-Have an idea? [Open a feature request](https://github.com/amanharshx/yolo-export-studio/issues/new) describing:
+Have an idea? [Open a feature request](https://github.com/amanharshx/vision-export-studio/issues/new) describing:
 
 - The problem you're trying to solve
 - Your proposed solution
@@ -71,7 +71,7 @@ bun run tauri build
    cd src-tauri && cargo test      # Rust tests
    ```
 5. **Commit** with a clear, descriptive message
-6. **Push** your branch and [open a pull request](https://github.com/amanharshx/yolo-export-studio/compare) against `main`
+6. **Push** your branch and [open a pull request](https://github.com/amanharshx/vision-export-studio/compare) against `main`
 
 ## Code Style
 
@@ -81,6 +81,6 @@ bun run tauri build
 
 ## First-Time Contributors
 
-New to the project? Look for issues tagged [`good first issue`](https://github.com/amanharshx/yolo-export-studio/labels/good%20first%20issue) - these are scoped, well-documented tasks that make a great starting point.
+New to the project? Look for issues tagged [`good first issue`](https://github.com/amanharshx/vision-export-studio/labels/good%20first%20issue) - these are scoped, well-documented tasks that make a great starting point.
 
 Welcome aboard!

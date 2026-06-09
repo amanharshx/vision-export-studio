@@ -85,7 +85,7 @@ fn settings_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
         .path()
         .app_data_dir()
         .map_err(|e| format!("could not resolve app data dir: {}", e))?;
-    Ok(data_dir.join("yolo-export-studio-settings.json"))
+    Ok(data_dir.join("vision-export-studio-settings.json"))
 }
 
 fn write_settings(app_handle: &tauri::AppHandle, settings: &AppSettings) -> Result<(), String> {
@@ -105,7 +105,7 @@ fn default_runtime_dir_from_home(home_dir: &str) -> Result<String, String> {
         return Err("could not resolve home dir".to_string());
     }
     Ok(format!(
-        "{}/.yolo-export-studio",
+        "{}/.vision-export-studio",
         home_dir.trim_end_matches(['/', '\\'])
     ))
 }
@@ -486,78 +486,84 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_runtime_dir_uses_yolo_export_studio_dir_in_home() {
+    fn default_runtime_dir_uses_vision_export_studio_dir_in_home() {
         let runtime_dir = default_runtime_dir_from_home("/Users/tester").unwrap();
-        assert_eq!(runtime_dir, "/Users/tester/.yolo-export-studio");
+        assert_eq!(runtime_dir, "/Users/tester/.vision-export-studio");
     }
 
     #[test]
     fn venv_python_uses_platform_specific_location() {
-        let python = venv_python("/tmp/yolo-export-studio");
+        let python = venv_python("/tmp/vision-export-studio");
 
         #[cfg(windows)]
-        assert_eq!(python, "/tmp/yolo-export-studio/.venv/Scripts/python.exe");
+        assert_eq!(python, "/tmp/vision-export-studio/.venv/Scripts/python.exe");
 
         #[cfg(not(windows))]
-        assert_eq!(python, "/tmp/yolo-export-studio/.venv/bin/python");
+        assert_eq!(python, "/tmp/vision-export-studio/.venv/bin/python");
     }
 
     #[test]
     fn venv_yolo_uses_platform_specific_location() {
-        let yolo = venv_yolo("/tmp/yolo-export-studio");
+        let yolo = venv_yolo("/tmp/vision-export-studio");
 
         #[cfg(windows)]
-        assert_eq!(yolo, "/tmp/yolo-export-studio/.venv/Scripts/yolo.exe");
+        assert_eq!(yolo, "/tmp/vision-export-studio/.venv/Scripts/yolo.exe");
 
         #[cfg(not(windows))]
-        assert_eq!(yolo, "/tmp/yolo-export-studio/.venv/bin/yolo");
+        assert_eq!(yolo, "/tmp/vision-export-studio/.venv/bin/yolo");
     }
 
     #[test]
     fn normalize_loaded_settings_migrates_runtime_dir_to_managed_root() {
         let settings = AppSettings {
-            runtime_dir: "/Users/tester/Developer/oss/yolo-export-studio".to_string(),
+            runtime_dir: "/Users/tester/Developer/oss/vision-export-studio".to_string(),
             setup_complete: true,
             python_path_override: None,
             output_dir_override: None,
         };
 
         let (normalized, changed) =
-            normalize_loaded_settings(settings, "/Users/tester/.yolo-export-studio", false);
+            normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio", false);
 
         assert!(changed);
-        assert_eq!(normalized.runtime_dir, "/Users/tester/.yolo-export-studio");
+        assert_eq!(
+            normalized.runtime_dir,
+            "/Users/tester/.vision-export-studio"
+        );
         assert!(!normalized.setup_complete);
     }
 
     #[test]
     fn normalize_loaded_settings_keeps_setup_complete_when_override_exists() {
         let settings = AppSettings {
-            runtime_dir: "/Users/tester/Developer/oss/yolo-export-studio".to_string(),
+            runtime_dir: "/Users/tester/Developer/oss/vision-export-studio".to_string(),
             setup_complete: false,
             python_path_override: Some("/custom/python".to_string()),
             output_dir_override: None,
         };
 
         let (normalized, changed) =
-            normalize_loaded_settings(settings, "/Users/tester/.yolo-export-studio", false);
+            normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio", false);
 
         assert!(changed);
-        assert_eq!(normalized.runtime_dir, "/Users/tester/.yolo-export-studio");
+        assert_eq!(
+            normalized.runtime_dir,
+            "/Users/tester/.vision-export-studio"
+        );
         assert!(normalized.setup_complete);
     }
 
     #[test]
     fn normalize_loaded_settings_marks_complete_when_managed_runtime_ready() {
         let settings = AppSettings {
-            runtime_dir: "/Users/tester/.yolo-export-studio".to_string(),
+            runtime_dir: "/Users/tester/.vision-export-studio".to_string(),
             setup_complete: false,
             python_path_override: None,
             output_dir_override: None,
         };
 
         let (normalized, changed) =
-            normalize_loaded_settings(settings, "/Users/tester/.yolo-export-studio", true);
+            normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio", true);
 
         assert!(changed);
         assert!(normalized.setup_complete);

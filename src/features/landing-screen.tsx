@@ -29,12 +29,9 @@ export function LandingScreen({
       <div className="flex flex-1 flex-col items-center justify-center bg-primary/5 px-12 py-8">
         <div className="flex w-full max-w-lg flex-col items-center">
           <AppIcon className="mb-8 h-24 w-24 drop-shadow-md" />
-          <h1 className="mb-1 text-center text-4xl font-bold tracking-tight text-foreground">
-            YOLO Export Studio
+          <h1 className="mb-6 text-center text-4xl font-bold tracking-tight text-foreground">
+            Vision Export Studio
           </h1>
-          <p className="mb-8 text-center text-xl font-semibold text-primary">
-            Export Studio
-          </p>
           <p className="mb-10 max-w-sm text-center text-base leading-7 text-muted-foreground">
             Local Ultralytics YOLO export. Fast, private, and runs entirely on
             your machine.

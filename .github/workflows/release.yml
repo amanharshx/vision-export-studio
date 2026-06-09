@@ -65,7 +65,6 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-release-
 
@@ -132,7 +131,7 @@ jobs:
           VERSION="${VERSION#v}"
           TARGET_DIR="${CARGO_TARGET_DIR:-src-tauri/target}"
           BUNDLE_DIR="${TARGET_DIR}/release/bundle/appimage"
-          TARBALL_PATH="dist/linux-homebrew/yolo-export-studio-linux-${{ matrix.linux_tarball_arch }}.tar.gz"
+          TARBALL_PATH="dist/linux-homebrew/vision-export-studio-linux-${{ matrix.linux_tarball_arch }}.tar.gz"
 
           shopt -s nullglob
           APPIMAGES=("${BUNDLE_DIR}"/*_"${VERSION}"_${{ matrix.linux_appimage_arch }}.AppImage)
@@ -159,7 +158,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
-          files: dist/linux-homebrew/yolo-export-studio-linux-${{ matrix.linux_tarball_arch }}.tar.gz
+          files: dist/linux-homebrew/vision-export-studio-linux-${{ matrix.linux_tarball_arch }}.tar.gz
           draft: true
 
   publish_release:

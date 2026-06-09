@@ -54,7 +54,7 @@ htmlcov/
 *.tmp
 job_*.json
 graphify-out/
-yolo_export_studio/graphify-out/
+vision_export_studio/graphify-out/
 
 # Model files (don't accidentally commit large models)
 *.pt

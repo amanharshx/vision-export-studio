@@ -34,7 +34,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-ROOT_DIR="${WORK_DIR}/yolo-export-studio-linux-x86_64"
+ROOT_DIR="${WORK_DIR}/vision-export-studio-linux-x86_64"
 
 mkdir -p \
   "${ROOT_DIR}/bin" \
@@ -42,42 +42,42 @@ mkdir -p \
   "${ROOT_DIR}/share/applications" \
   "${ROOT_DIR}/share/icons/hicolor/256x256/apps"
 
-install -m 0755 "$APPIMAGE_PATH" "${ROOT_DIR}/libexec/yolo-export-studio.AppImage"
+install -m 0755 "$APPIMAGE_PATH" "${ROOT_DIR}/libexec/vision-export-studio.AppImage"
 
-cat > "${ROOT_DIR}/bin/yolo-export-studio" <<'SH'
+cat > "${ROOT_DIR}/bin/vision-export-studio" <<'SH'
 #!/usr/bin/env sh
 set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 PREFIX="$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)"
 
-exec "${PREFIX}/libexec/yolo-export-studio.AppImage" "$@"
+exec "${PREFIX}/libexec/vision-export-studio.AppImage" "$@"
 SH
-chmod 0755 "${ROOT_DIR}/bin/yolo-export-studio"
+chmod 0755 "${ROOT_DIR}/bin/vision-export-studio"
 
-cat > "${ROOT_DIR}/share/applications/yolo-export-studio.desktop" <<'DESKTOP'
+cat > "${ROOT_DIR}/share/applications/vision-export-studio.desktop" <<'DESKTOP'
 [Desktop Entry]
 Type=Application
-Name=YOLO Export Studio
-Exec=yolo-export-studio
-Icon=yolo-export-studio
+Name=Vision Export Studio
+Exec=vision-export-studio
+Icon=vision-export-studio
 Categories=Development;Utility;
 Terminal=false
 DESKTOP
 
 install -m 0644 \
   "$ICON_PATH" \
-  "${ROOT_DIR}/share/icons/hicolor/256x256/apps/yolo-export-studio.png"
+  "${ROOT_DIR}/share/icons/hicolor/256x256/apps/vision-export-studio.png"
 
 mkdir -p "$OUTPUT_DIR"
 tar -C "$WORK_DIR" -czf \
-  "${OUTPUT_DIR}/yolo-export-studio-linux-x86_64.tar.gz" \
-  "yolo-export-studio-linux-x86_64"
+  "${OUTPUT_DIR}/vision-export-studio-linux-x86_64.tar.gz" \
+  "vision-export-studio-linux-x86_64"
 
 if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum "${OUTPUT_DIR}/yolo-export-studio-linux-x86_64.tar.gz"
+  sha256sum "${OUTPUT_DIR}/vision-export-studio-linux-x86_64.tar.gz"
 elif command -v shasum >/dev/null 2>&1; then
-  shasum -a 256 "${OUTPUT_DIR}/yolo-export-studio-linux-x86_64.tar.gz"
+  shasum -a 256 "${OUTPUT_DIR}/vision-export-studio-linux-x86_64.tar.gz"
 else
   echo "missing checksum tool: need sha256sum or shasum" >&2
   exit 1

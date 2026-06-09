@@ -352,7 +352,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       const sep = sourcePath.includes("/") ? "/" : "\\";
       const lastSep = sourcePath.lastIndexOf(sep);
       const parentDir = lastSep > 0 ? sourcePath.substring(0, lastSep) : "";
-      outputDir = parentDir ? `${parentDir}${sep}yolo-export-studio-exports` : "";
+      outputDir = parentDir ? `${parentDir}${sep}vision-export-studio-exports` : "";
     }
     try {
       const id = await startExport({
@@ -772,7 +772,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                     value={pythonOverride}
                     onChange={(e) => setPythonOverride(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter") handleSaveAndRedetect(); }}
-                    placeholder="Use managed YOLO Export Studio runtime"
+                    placeholder="Use managed Vision Export Studio runtime"
                     className="h-8 flex-1 min-w-0 rounded-lg border-zinc-200 bg-zinc-50 font-mono text-[12px] placeholder:text-zinc-300 focus-visible:bg-white"
                   />
                   <button
@@ -785,7 +785,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                   </button>
                 </div>
                 <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
-                  Leave empty to use YOLO Export Studio&apos;s managed runtime in <code>~/.yolo-export-studio/.venv</code>.
+                  Leave empty to use Vision Export Studio&apos;s managed runtime in <code>~/.vision-export-studio/.venv</code>.
                 </p>
                 <div className="mt-2.5 flex justify-end">
                   <Button

@@ -250,7 +250,7 @@ export function SetupScreen({
   const isRunning = phase === "venv" || phase === "pip";
   const managedVenvPath = defaultRuntimeDir.trim()
     ? `${defaultRuntimeDir}/.venv`
-    : "~/.yolo-export-studio/.venv";
+    : "~/.vision-export-studio/.venv";
 
   const phaseLabel: Record<SetupPhase, string> = {
     idle: "Preparing managed runtime...",
@@ -274,10 +274,10 @@ export function SetupScreen({
           <AppIcon className="h-16 w-16 drop-shadow-md" />
           <div className="text-center">
             <h1 className="text-2xl font-bold tracking-tight text-foreground">
-              Set up YOLO Export Studio
+              Set up Vision Export Studio
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              YOLO Export Studio is preparing its managed runtime for first use.
+              Vision Export Studio is preparing its managed runtime for first use.
             </p>
             <span className="mt-3 inline-block rounded-full bg-zinc-100 px-3 py-0.5 text-xs text-zinc-500">
               One-time setup · override optional later in settings
@@ -291,7 +291,7 @@ export function SetupScreen({
           </p>
           <p className="mt-2 font-mono text-sm text-zinc-800">{managedVenvPath}</p>
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-            YOLO Export Studio creates this environment automatically and installs Ultralytics here.
+            Vision Export Studio creates this environment automatically and installs Ultralytics here.
           </p>
         </div>
 

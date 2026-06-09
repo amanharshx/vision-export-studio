@@ -1,17 +1,17 @@
 [package]
-name = "yolo-export-studio"
+name = "vision-export-studio"
 version = "0.1.2"
 description = "Desktop ML model export studio"
 authors = ["Aman Harsh"]
 license = "MIT"
-repository = "https://github.com/amanharshx/yolo-export-studio"
+repository = "https://github.com/amanharshx/vision-export-studio"
 edition = "2021"
 rust-version = "1.77.2"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-name = "yolo_export_studio_lib"
+name = "vision_export_studio_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

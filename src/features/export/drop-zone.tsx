@@ -36,7 +36,7 @@ export function DropZone({ path, onFileSelect, errorMsg }: DropZoneProps) {
           setIsDragOver(false);
           const paths = event.payload.paths;
           if (paths.length > 0) {
-            // YOLO Export Studio is single-source: only the first dropped file is used.
+            // Vision Export Studio is single-source: only the first dropped file is used.
             onFileSelect(paths[0]);
           }
         } else {

@@ -1,6 +1,6 @@
 <div align="center">
 
-# YOLO Export Studio
+# Vision Export Studio
 
 Desktop studio for exporting Ultralytics YOLO `.pt` models into deployment-ready formats.
 
@@ -18,7 +18,7 @@ Desktop studio for exporting Ultralytics YOLO `.pt` models into deployment-ready
 <br>
 
 <div align="center">
-  <img src="assets/readme-demo.gif" width="720" alt="YOLO Export Studio demo">
+  <img src="assets/readme-demo.gif" width="720" alt="Vision Export Studio demo">
 </div>
 
 <br>
@@ -42,12 +42,12 @@ Desktop studio for exporting Ultralytics YOLO `.pt` models into deployment-ready
 
 ---
 
-[**YOLO Export Studio**](https://github.com/amanharshx/yolo-export-studio) is a desktop app that exports [Ultralytics](https://www.ultralytics.com/) YOLO `.pt` weights into deployment-ready formats like ONNX, TensorRT, CoreML, TFLite, and more. Select your model, pick a target, and generate the export locally - model files stay on your machine.
+[**Vision Export Studio**](https://github.com/amanharshx/vision-export-studio) is a desktop app that exports [Ultralytics](https://www.ultralytics.com/) YOLO `.pt` weights into deployment-ready formats like ONNX, TensorRT, CoreML, TFLite, and more. Select your model, pick a target, and generate the export locally - model files stay on your machine.
 
 ## Features
 
 - **Local-first** - exports run on your machine; model files do not leave your environment
-- **Managed runtime** - app creates and uses `~/.yolo-export-studio/.venv` for Python tooling by default
+- **Managed runtime** - app creates and uses `~/.vision-export-studio/.venv` for Python tooling by default
 - **Optional Python override** - power users can point the app at a different interpreter
 - **Automatic route installs** - route-specific Python dependencies install when needed for most export paths
 - **Multiple export targets** - ONNX, TensorRT, CoreML, OpenVINO, TFLite, Paddle, NCNN, RKNN, and more
@@ -57,7 +57,7 @@ Desktop studio for exporting Ultralytics YOLO `.pt` models into deployment-ready
 
 ## Supported Formats
 
-YOLO Export Studio is **not** universal all-to-all model converter.
+Vision Export Studio is **not** universal all-to-all model converter.
 
 ```text
 source format -> supported route -> target format
@@ -120,18 +120,18 @@ Some targets are one-way deployment artifacts or platform-locked:
 **macOS (Homebrew):**
 
 ```bash
-brew install --cask amanharshx/tap/yolo-export-studio
+brew install --cask amanharshx/tap/vision-export-studio
 ```
 
 **Linux (Homebrew):**
 
 ```bash
-brew install amanharshx/tap/yolo-export-studio
+brew install amanharshx/tap/vision-export-studio
 ```
 
 **Windows / macOS / Linux (GitHub Releases):**
 
-Download the latest desktop build from [GitHub Releases](https://github.com/amanharshx/yolo-export-studio/releases).
+Download the latest desktop build from [GitHub Releases](https://github.com/amanharshx/vision-export-studio/releases).
 
 **Linux package note:**
 
@@ -160,7 +160,7 @@ Updater metadata is served from GitHub Releases.
 Run this command in Terminal after installing:
 
 ```bash
-xattr -cr "/Applications/YOLO Export Studio.app"
+xattr -cr "/Applications/Vision Export Studio.app"
 ```
 
 Then open the app again.
@@ -182,17 +182,17 @@ Or: Right-click the `.exe` -> **Properties** -> Check **Unblock** -> **Apply**
 Expected flow:
 
 - install app
-- let YOLO Export Studio prepare runtime on first launch
+- let Vision Export Studio prepare runtime on first launch
 - pick export route
 - install route dependencies only when needed
 
-YOLO Export Studio now defaults to managed runtime in:
+Vision Export Studio now defaults to managed runtime in:
 
 ```text
-~/.yolo-export-studio/.venv
+~/.vision-export-studio/.venv
 ```
 
-YOLO Export Studio creates this environment automatically and installs `ultralytics` there.
+Vision Export Studio creates this environment automatically and installs `ultralytics` there.
 
 Current bootstrap limitation:
 
@@ -206,8 +206,8 @@ Current bootstrap limitation:
 **Prerequisites:** [Rust](https://rustup.rs/), [Bun](https://bun.sh/), [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/)
 
 ```bash
-git clone https://github.com/amanharshx/yolo-export-studio.git
-cd yolo-export-studio
+git clone https://github.com/amanharshx/vision-export-studio.git
+cd vision-export-studio
 bun install
 bun run tauri dev      # development
 bun run tauri build    # local production build
@@ -217,7 +217,7 @@ bun run tauri build    # local production build
 
 ## Analytics
 
-YOLO Export Studio uses PostHog for install-scoped pseudonymous usage analytics. The app stores a persistent install identifier locally so launches from the same install can be measured across sessions.
+Vision Export Studio uses PostHog for install-scoped pseudonymous usage analytics. The app stores a persistent install identifier locally so launches from the same install can be measured across sessions.
 
 Current analytics covers:
 
