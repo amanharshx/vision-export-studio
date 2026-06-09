@@ -1,6 +1,6 @@
 # Privacy
 
-YOLO Export Studio uses PostHog for install-scoped pseudonymous usage analytics.
+Vision Export Studio uses PostHog for install-scoped pseudonymous usage analytics.
 
 The app stores a persistent install identifier locally so launches and lifecycle events from the same install can be measured across sessions. This is not tied to a user account, but it is not purely anonymous telemetry either.
 
