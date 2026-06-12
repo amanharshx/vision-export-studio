@@ -33,6 +33,7 @@ pub fn run() {
             commands::export::start_export,
             commands::export::cancel_export,
             commands::gpu::list_gpus,
+            commands::rfdetr::inspect_rfdetr_checkpoint,
             commands::setup::load_settings,
             commands::setup::create_runtime_venv,
             commands::setup::install_ultralytics,

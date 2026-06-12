@@ -5,6 +5,26 @@ export interface AppSettings {
   output_dir_override?: string;
 }
 
+export type ProviderId = "ultralytics" | "rfdetr";
+export type SourceFormat = "pt" | "pth";
+
+export interface ProviderDependency {
+  packageName: string;
+  installHint: string;
+}
+
+export interface ProviderSpec {
+  id: ProviderId;
+  displayName: string;
+  shortName: string;
+  sourceFormat: SourceFormat;
+  sourceExtensions: string[];
+  pickerFilterName: string;
+  dropTitle: string;
+  dropHelper: string;
+  baseDeps: ProviderDependency[];
+}
+
 export type FormatCategory = "source" | "intermediate" | "runtime" | "vendor";
 
 export type PlatformLock = "any" | "linux" | "linux_x86_64" | "linux_windows" | "macos" | "windows";
@@ -23,8 +43,8 @@ export interface FormatSpec {
 
 export interface RouteSpec {
   id: string;
-  providerId: "ultralytics";
-  sourceFormat: "pt";
+  providerId: ProviderId;
+  sourceFormat: SourceFormat;
   targetFormat: string;
   title: string;
   displayPath: string;
@@ -40,6 +60,7 @@ export interface RouteSpec {
   lossy: boolean;
   notes: string;
   unsupportedNote?: string;
+  experimental?: boolean;
 }
 
 export type EnvironmentStatus = "ok" | "partial" | "missing" | "loading" | "error";
@@ -70,6 +91,27 @@ export interface ExportOptions {
 }
 
 export type ExportStatus = "idle" | "running" | "finished" | "failed" | "cancelled";
+
+export type RfDetrInspectStatus =
+  | "idle"
+  | "needs_trust"
+  | "inspecting"
+  | "detected"
+  | "failed"
+  | "cancelled";
+
+export type RfDetrVariantMode = "auto" | "manual";
+export type RfDetrFamily = "detection" | "segmentation";
+
+export interface RfDetrInspectResult {
+  success: boolean;
+  class_symbol: string | null;
+  family: RfDetrFamily | null;
+  size: string | null;
+  requires_plus: boolean;
+  is_legacy: boolean;
+  error: string | null;
+}
 
 export interface ExportLinePayload {
   session_id: string;
@@ -120,6 +162,7 @@ export interface DepCheckResult {
   status: DepCheckStatus;
   reason: string;
   install_hint: string;
+  install_package?: string;
 }
 
 export interface DepCheckResponse {

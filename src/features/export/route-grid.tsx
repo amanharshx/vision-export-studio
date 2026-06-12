@@ -1,16 +1,17 @@
-import { ultralyticsRoutes } from "@/lib/routes";
+import type { RouteSpec } from "@/lib/types";
 import { getOS, isCompatible, OS_LABEL } from "@/lib/platform";
 import { RouteRow } from "./route-card";
 
 const os = getOS();
 
 interface RouteGridProps {
+  routes: RouteSpec[];
   onSelectRoute: (routeId: string) => void;
 }
 
-export function RouteGrid({ onSelectRoute }: RouteGridProps) {
-  const compatible = ultralyticsRoutes.filter((r) => isCompatible(r.platformLock, os));
-  const incompatible = ultralyticsRoutes.filter((r) => !isCompatible(r.platformLock, os));
+export function RouteGrid({ routes, onSelectRoute }: RouteGridProps) {
+  const compatible = routes.filter((r) => isCompatible(r.platformLock, os));
+  const incompatible = routes.filter((r) => !isCompatible(r.platformLock, os));
 
   return (
     <div className="space-y-2">

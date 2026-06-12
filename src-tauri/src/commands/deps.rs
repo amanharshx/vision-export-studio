@@ -14,6 +14,8 @@ pub struct DepCheckResult {
     pub status: String,
     pub reason: String,
     pub install_hint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_package: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -309,6 +311,34 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
             ],
             sys: &[],
         }),
+        // RF-DETR routes
+        "rfdetr.pth.onnx" => Some(RouteDeps {
+            pip: &[PipDep {
+                package_name: "rfdetr",
+                install_hint: "pip install \"rfdetr[onnx]\"",
+                optional: false,
+            }],
+            sys: &[],
+        }),
+        "rfdetr.pth.engine" => Some(RouteDeps {
+            pip: &[PipDep {
+                package_name: "rfdetr",
+                install_hint: "pip install \"rfdetr[onnx]\"",
+                optional: false,
+            }],
+            sys: &[SysDep {
+                binary_name: "trtexec",
+                install_hint: "Install NVIDIA TensorRT and ensure trtexec is on PATH.",
+            }],
+        }),
+        "rfdetr.pth.tflite" => Some(RouteDeps {
+            pip: &[PipDep {
+                package_name: "rfdetr",
+                install_hint: "pip install \"rfdetr[onnx,tflite]\"",
+                optional: false,
+            }],
+            sys: &[],
+        }),
         _ => None,
     }
 }
@@ -386,24 +416,44 @@ pub async fn check_dependencies(
 
     let mut results: Vec<DepCheckResult> = Vec::new();
 
-    // Always check ultralytics first (required, not optional).
-    let ultra_result = check_pip_dep(
-        &python_path,
-        "ultralytics",
-        "pip install ultralytics",
-        false,
-    );
-    results.push(ultra_result);
-
-    // Check route pip deps.
-    for dep in deps.pip {
-        let result = check_pip_dep(
+    // Check ultralytics only for Ultralytics routes.
+    if route_id.starts_with("ultralytics.") {
+        let ultra_result = check_pip_dep(
             &python_path,
-            dep.package_name,
-            dep.install_hint,
-            dep.optional,
+            "ultralytics",
+            "pip install ultralytics",
+            false,
         );
-        results.push(result);
+        results.push(ultra_result);
+    }
+
+    // Check route pip deps — RF-DETR routes use probe-based checks for extras.
+    if route_id == "rfdetr.pth.onnx" || route_id == "rfdetr.pth.engine" {
+        results.push(check_python_probe_dep(
+            &python_path,
+            "rfdetr[onnx]",
+            "import importlib.util; ok = importlib.util.find_spec('rfdetr') is not None and importlib.util.find_spec('onnx') is not None; print(ok)",
+            "pip install \"rfdetr[onnx]\"",
+            "rfdetr[onnx]",
+        ));
+    } else if route_id == "rfdetr.pth.tflite" {
+        results.push(check_python_probe_dep(
+            &python_path,
+            "rfdetr[onnx,tflite]",
+            "import importlib.util; mods = ['rfdetr', 'onnx', 'onnx2tf', 'ai_edge_litert']; print(all(importlib.util.find_spec(m) is not None for m in mods))",
+            "pip install \"rfdetr[onnx,tflite]\"",
+            "rfdetr[onnx,tflite]",
+        ));
+    } else {
+        for dep in deps.pip {
+            let result = check_pip_dep(
+                &python_path,
+                dep.package_name,
+                dep.install_hint,
+                dep.optional,
+            );
+            results.push(result);
+        }
     }
 
     // Check route sys deps.
@@ -436,6 +486,7 @@ fn check_pip_dep(
             status: "unknown".to_string(),
             reason: format!("probe failed: {}", e),
             install_hint: install_hint.to_string(),
+            install_package: None,
         },
         Ok(out) => {
             if out == "True" {
@@ -444,6 +495,7 @@ fn check_pip_dep(
                     status: "ready".to_string(),
                     reason: String::new(),
                     install_hint: install_hint.to_string(),
+                    install_package: None,
                 }
             } else if optional {
                 DepCheckResult {
@@ -451,6 +503,7 @@ fn check_pip_dep(
                     status: "warning".to_string(),
                     reason: "optional: improves model portability".to_string(),
                     install_hint: install_hint.to_string(),
+                    install_package: None,
                 }
             } else {
                 DepCheckResult {
@@ -458,9 +511,42 @@ fn check_pip_dep(
                     status: "missing_package".to_string(),
                     reason: format!("importlib.util.find_spec('{}') returned False", imp),
                     install_hint: install_hint.to_string(),
+                    install_package: None,
                 }
             }
         }
+    }
+}
+
+fn check_python_probe_dep(
+    python: &str,
+    item: &str,
+    code: &str,
+    install_hint: &str,
+    install_package: &str,
+) -> DepCheckResult {
+    match probe(python, code) {
+        Err(e) => DepCheckResult {
+            item: item.to_string(),
+            status: "missing_package".to_string(),
+            reason: format!("probe failed: {}", e),
+            install_hint: install_hint.to_string(),
+            install_package: Some(install_package.to_string()),
+        },
+        Ok(out) if out == "True" => DepCheckResult {
+            item: item.to_string(),
+            status: "ready".to_string(),
+            reason: String::new(),
+            install_hint: install_hint.to_string(),
+            install_package: None,
+        },
+        Ok(out) => DepCheckResult {
+            item: item.to_string(),
+            status: "missing_package".to_string(),
+            reason: format!("probe returned {}", out),
+            install_hint: install_hint.to_string(),
+            install_package: Some(install_package.to_string()),
+        },
     }
 }
 
@@ -497,7 +583,7 @@ fn validate_package_name(name: &str) -> Result<(), String> {
     }
     if !name
         .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '[' || c == ']' || c == ',')
     {
         return Err(format!("invalid package name: {}", name));
     }
@@ -651,6 +737,7 @@ fn check_sys_dep(python: &str, binary_name: &str, install_hint: &str) -> DepChec
             status: "unknown".to_string(),
             reason: format!("probe failed: {}", e),
             install_hint: install_hint.to_string(),
+            install_package: None,
         },
         Ok(out) => {
             if out.is_empty() {
@@ -659,6 +746,7 @@ fn check_sys_dep(python: &str, binary_name: &str, install_hint: &str) -> DepChec
                     status: "missing_binary".to_string(),
                     reason: format!("shutil.which('{}') returned None", binary_name),
                     install_hint: install_hint.to_string(),
+                    install_package: None,
                 }
             } else {
                 DepCheckResult {
@@ -666,8 +754,46 @@ fn check_sys_dep(python: &str, binary_name: &str, install_hint: &str) -> DepChec
                     status: "ready".to_string(),
                     reason: String::new(),
                     install_hint: install_hint.to_string(),
+                    install_package: None,
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rfdetr_onnx_route_uses_rfdetr_extra_hint() {
+        let deps = route_deps("rfdetr.pth.onnx").expect("route deps");
+        assert_eq!(deps.pip[0].package_name, "rfdetr");
+        assert_eq!(deps.pip[0].install_hint, "pip install \"rfdetr[onnx]\"");
+    }
+
+    #[test]
+    fn rfdetr_tflite_route_uses_tflite_extra_hint() {
+        let deps = route_deps("rfdetr.pth.tflite").expect("route deps");
+        assert_eq!(deps.pip[0].install_hint, "pip install \"rfdetr[onnx,tflite]\"");
+    }
+
+    #[test]
+    fn rfdetr_engine_route_requires_trtexec() {
+        let deps = route_deps("rfdetr.pth.engine").expect("route deps");
+        assert_eq!(deps.sys[0].binary_name, "trtexec");
+    }
+
+    #[test]
+    fn rfdetr_extra_install_package_survives_validation() {
+        assert!(validate_package_name("rfdetr").is_ok());
+        assert!(validate_package_name("rfdetr[onnx]").is_ok());
+    }
+
+    #[test]
+    fn package_validation_allows_safe_extras() {
+        assert!(validate_package_name("rfdetr[onnx]").is_ok());
+        assert!(validate_package_name("rfdetr[onnx,tflite]").is_ok());
+        assert!(validate_package_name("rfdetr[onnx];rm").is_err());
     }
 }

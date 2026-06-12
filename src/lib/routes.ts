@@ -1,4 +1,4 @@
-import type { FormatSpec, RouteSpec } from "@/lib/types";
+import type { FormatSpec, ProviderId, ProviderSpec, RouteSpec } from "@/lib/types";
 
 export const formats: Record<string, FormatSpec> = {
   pt: {
@@ -11,6 +11,17 @@ export const formats: Record<string, FormatSpec> = {
     oneWay: false,
     platformLocked: false,
     notes: "Ultralytics YOLO .pt files only. Generic PyTorch checkpoints are not supported.",
+  },
+  pth: {
+    id: "pth",
+    name: "RF-DETR Checkpoint",
+    suffixes: [".pth"],
+    category: "source",
+    canBeSource: true,
+    canBeTarget: false,
+    oneWay: false,
+    platformLocked: false,
+    notes: "Roboflow RF-DETR .pth checkpoints only. Generic PyTorch checkpoints are not supported.",
   },
   torchscript: {
     id: "torchscript",
@@ -193,6 +204,40 @@ export const formats: Record<string, FormatSpec> = {
     platformLocked: true,
   },
 };
+
+export const providers: Record<ProviderId, ProviderSpec> = {
+  ultralytics: {
+    id: "ultralytics",
+    displayName: "Ultralytics YOLO",
+    shortName: "YOLO",
+    sourceFormat: "pt",
+    sourceExtensions: [".pt"],
+    pickerFilterName: "Ultralytics YOLO Weights",
+    dropTitle: "Drop .pt model",
+    dropHelper: "Local Ultralytics export using the selected Python environment.",
+    baseDeps: [{ packageName: "ultralytics", installHint: "pip install ultralytics" }],
+  },
+  rfdetr: {
+    id: "rfdetr",
+    displayName: "Roboflow RF-DETR",
+    shortName: "RF-DETR",
+    sourceFormat: "pth",
+    sourceExtensions: [".pth"],
+    pickerFilterName: "RF-DETR Checkpoint",
+    dropTitle: "Drop .pth checkpoint",
+    dropHelper: "Local Roboflow RF-DETR export using the selected Python environment.",
+    baseDeps: [],
+  },
+};
+
+export function providerList(): ProviderSpec[] {
+  return [providers.ultralytics, providers.rfdetr];
+}
+
+export function hasAllowedSourceExtension(path: string, provider: ProviderSpec): boolean {
+  const lower = path.trim().toLowerCase();
+  return provider.sourceExtensions.some((extension) => lower.endsWith(extension));
+}
 
 const route = (spec: Omit<RouteSpec, "providerId" | "sourceFormat" | "sysDeps" | "platformLock" | "intermediates" | "requiresGpu" | "supportsHalf" | "supportsInt8" | "supportsDynamic" | "oneWay" | "lossy"> & Partial<RouteSpec>): RouteSpec => ({
   providerId: "ultralytics",
@@ -463,3 +508,72 @@ export const ultralyticsRoutes: RouteSpec[] = [
 ];
 
 export const defaultRoute = ultralyticsRoutes.find((item) => item.targetFormat === "onnx") ?? ultralyticsRoutes[0];
+
+const rfdetrRoute = (spec: Omit<RouteSpec, "providerId" | "sourceFormat" | "sysDeps" | "platformLock" | "intermediates" | "requiresGpu" | "supportsHalf" | "supportsInt8" | "supportsDynamic" | "oneWay" | "lossy"> & Partial<RouteSpec>): RouteSpec => ({
+  providerId: "rfdetr",
+  sourceFormat: "pth",
+  sysDeps: [],
+  platformLock: "any",
+  intermediates: [],
+  requiresGpu: false,
+  supportsHalf: false,
+  supportsInt8: false,
+  supportsDynamic: false,
+  oneWay: false,
+  lossy: false,
+  ...spec,
+});
+
+export const rfdetrRoutes: RouteSpec[] = [
+  rfdetrRoute({
+    id: "rfdetr.pth.onnx",
+    targetFormat: "onnx",
+    title: "ONNX",
+    displayPath: "checkpoint.pth -> inference_model.onnx",
+    pipDeps: [{ packageName: "rfdetr[onnx]", installHint: 'pip install "rfdetr[onnx]"' }],
+    notes: "Recommended RF-DETR export target and primary validation path.",
+  }),
+  rfdetrRoute({
+    id: "rfdetr.pth.engine",
+    targetFormat: "engine",
+    title: "TensorRT via ONNX",
+    displayPath: "checkpoint.pth -> inference_model.onnx -> inference_model.engine",
+    pipDeps: [{ packageName: "rfdetr[onnx]", installHint: 'pip install "rfdetr[onnx]"' }],
+    sysDeps: [{ binaryName: "trtexec", installHint: "Install NVIDIA TensorRT and ensure trtexec is on PATH." }],
+    platformLock: "linux_windows",
+    intermediates: ["onnx"],
+    requiresGpu: true,
+    oneWay: true,
+    lossy: true,
+    notes: "Exports ONNX first, then compiles TensorRT engine for NVIDIA deployment hardware.",
+    unsupportedNote: "TensorRT requires an NVIDIA GPU. NVIDIA does not support macOS.",
+  }),
+  rfdetrRoute({
+    id: "rfdetr.pth.tflite",
+    targetFormat: "tflite",
+    title: "TFLite Experimental",
+    displayPath: "checkpoint.pth -> inference_model_float32.tflite + inference_model_float16.tflite",
+    pipDeps: [{ packageName: "rfdetr[onnx,tflite]", installHint: 'pip install "rfdetr[onnx,tflite]"' }],
+    oneWay: true,
+    lossy: true,
+    experimental: true,
+    notes: "Experimental RF-DETR route. Validate FP32 and FP16 TFLite outputs carefully before deployment.",
+  }),
+];
+
+export const routesByProvider: Record<ProviderId, RouteSpec[]> = {
+  ultralytics: ultralyticsRoutes,
+  rfdetr: rfdetrRoutes,
+};
+
+export function routesForProvider(providerId: ProviderId): RouteSpec[] {
+  return routesByProvider[providerId];
+}
+
+export function defaultRouteForProvider(providerId: ProviderId): RouteSpec {
+  return routesForProvider(providerId).find((item) => item.targetFormat === "onnx") ?? routesForProvider(providerId)[0];
+}
+
+export function findRoute(routeId: string): RouteSpec | undefined {
+  return [...ultralyticsRoutes, ...rfdetrRoutes].find((route) => route.id === routeId);
+}

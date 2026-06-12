@@ -4,7 +4,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
+use tauri::Manager;
 use uuid::Uuid;
+
+use crate::commands::provider_registry::{
+    rfdetr_expected_artifacts, validate_provider_route, validate_rfdetr_manual_class,
+    validate_source_extension, ProviderId,
+};
 
 // ---------------------------------------------------------------------------
 // Artifact helpers
@@ -141,14 +147,115 @@ struct ExportCancelledPayload {
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
+fn build_ultralytics_command(
+    yolo_path: &str,
+    source_path: &str,
+    yolo_format: &str,
+    imgsz: u32,
+    batch: u32,
+    half: bool,
+    int8: bool,
+    dynamic: bool,
+    simplify: bool,
+    optimize: bool,
+    nms: bool,
+    end_to_end: bool,
+    keras: bool,
+    opset: Option<u32>,
+    workspace: Option<u32>,
+    chip: &str,
+    route_id: &str,
+) -> Command {
+    let mut cmd = Command::new(yolo_path);
+    cmd.arg("export");
+    cmd.arg(format!("model={}", source_path));
+    cmd.arg(format!("format={}", yolo_format));
+    cmd.arg(format!("imgsz={}", imgsz));
+    cmd.arg(format!("batch={}", batch));
+    if half { cmd.arg("half=True"); }
+    if int8 { cmd.arg("int8=True"); }
+    if dynamic { cmd.arg("dynamic=True"); }
+    if simplify { cmd.arg("simplify=True"); }
+    if optimize { cmd.arg("optimize=True"); }
+    if nms { cmd.arg("nms=True"); }
+    if end_to_end { cmd.arg("end2end=True"); }
+    if keras { cmd.arg("keras=True"); }
+    if let Some(v) = opset { cmd.arg(format!("opset={}", v)); }
+    if let Some(v) = workspace { cmd.arg(format!("workspace={}", v)); }
+    if route_id == "ultralytics.pt.rknn" && !chip.trim().is_empty() {
+        cmd.arg(format!("name={}", chip.trim()));
+    }
+    cmd
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_rfdetr_command(
+    app_handle: &tauri::AppHandle,
+    python_path: &str,
+    source_path: &str,
+    route_id: &str,
+    output_dir: &str,
+    variant_mode: &str,
+    manual_class_symbol: Option<&str>,
+    imgsz: u32,
+    batch: u32,
+    opset: Option<u32>,
+) -> Result<Command, String> {
+    if variant_mode == "manual" {
+        validate_rfdetr_manual_class(manual_class_symbol.unwrap_or(""))?;
+    }
+    let helper = app_handle
+        .path()
+        .resolve("python/rfdetr_export_helper.py", tauri::path::BaseDirectory::Resource)
+        .map_err(|e| format!("failed to resolve RF-DETR helper resource: {}", e))?;
+    let mut cmd = Command::new(python_path);
+    cmd.arg(helper);
+    cmd.arg("export");
+    cmd.arg("--checkpoint").arg(source_path);
+    cmd.arg("--route-id").arg(route_id);
+    cmd.arg("--output-dir").arg(output_dir);
+    cmd.arg("--variant-mode").arg(variant_mode);
+    if let Some(symbol) = manual_class_symbol {
+        if !symbol.is_empty() {
+            cmd.arg("--manual-class-symbol").arg(symbol);
+        }
+    }
+    cmd.arg("--imgsz").arg(imgsz.to_string());
+    cmd.arg("--batch").arg(batch.to_string());
+    if let Some(value) = opset {
+        cmd.arg("--opset").arg(value.to_string());
+    }
+    Ok(cmd)
+}
+
+fn confirm_rfdetr_artifacts(route_id: &str, output_dir: &str) -> Result<bool, String> {
+    let expected = rfdetr_expected_artifacts(route_id);
+    if expected.is_empty() {
+        return Ok(false);
+    }
+    let missing: Vec<&str> = expected
+        .iter()
+        .copied()
+        .filter(|name| !Path::new(output_dir).join(name).exists())
+        .collect();
+    if missing.is_empty() {
+        Ok(true)
+    } else {
+        Err(format!("RF-DETR export missing expected artifact(s): {}", missing.join(", ")))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn start_export(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, ExportState>,
+    provider_id: String,
     source_path: String,
     route_id: String,
     output_dir: String,
     yolo_path: String,
+    python_path: String,
     imgsz: u32,
     batch: u32,
     half: bool,
@@ -162,6 +269,9 @@ pub async fn start_export(
     opset: Option<u32>,
     workspace: Option<u32>,
     chip: String,
+    rfdetr_trust_confirmed: bool,
+    rfdetr_variant_mode: Option<String>,
+    rfdetr_manual_class_symbol: Option<String>,
 ) -> Result<String, String> {
     // ------------------------------------------------------------------
     // Validation
@@ -174,28 +284,15 @@ pub async fn start_export(
         return Err("source path must not contain '='".to_string());
     }
 
-    const VALID_ROUTE_IDS: &[&str] = &[
-        "ultralytics.pt.torchscript",
-        "ultralytics.pt.onnx",
-        "ultralytics.pt.openvino",
-        "ultralytics.pt.coreml",
-        "ultralytics.pt.ncnn",
-        "ultralytics.pt.mnn",
-        "ultralytics.pt.tflite",
-        "ultralytics.pt.engine",
-        "ultralytics.pt.rknn",
-        "ultralytics.pt.executorch",
-        "ultralytics.pt.edgetpu",
-        "ultralytics.pt.tfjs",
-        "ultralytics.pt.paddle",
-        "ultralytics.pt.imx",
-        "ultralytics.pt.axelera",
-        "ultralytics.pt.saved_model",
-        "ultralytics.pt.pb",
-    ];
+    let provider = validate_provider_route(&provider_id, &route_id)?;
+    validate_source_extension(provider, &source_path)?;
 
-    if !VALID_ROUTE_IDS.contains(&route_id.as_str()) {
-        return Err(format!("route not supported in this build: {}", route_id));
+    if !output_dir.is_empty() {
+        if output_dir.contains('=') {
+            return Err("output dir must not contain '='".to_string());
+        }
+        std::fs::create_dir_all(&output_dir)
+            .map_err(|e| format!("failed to create output dir: {}", e))?;
     }
 
     // IMX500 only supports YOLOv8n and YOLO11n (nano) models.
@@ -214,27 +311,6 @@ pub async fn start_export(
         }
     }
 
-    let yolo_format = route_id
-        .strip_prefix("ultralytics.pt.")
-        .expect("route_id prefix validated above")
-        .to_string();
-
-    if yolo_path.is_empty() || !Path::new(&yolo_path).exists() {
-        return Err(format!("yolo not found at: {}", yolo_path));
-    }
-
-    if !output_dir.is_empty() {
-        if output_dir.contains('=') {
-            return Err("output dir must not contain '='".to_string());
-        }
-        std::fs::create_dir_all(&output_dir)
-            .map_err(|e| format!("failed to create output dir: {}", e))?;
-    }
-
-    let output_dir_for_move = output_dir.clone();
-    let source_path_for_move = source_path.clone();
-    let yolo_format_for_move = yolo_format.clone();
-
     // ------------------------------------------------------------------
     // Assign session id
     // ------------------------------------------------------------------
@@ -243,53 +319,63 @@ pub async fn start_export(
     // ------------------------------------------------------------------
     // Build and spawn child process
     // ------------------------------------------------------------------
-    let mut cmd = Command::new(&yolo_path);
-    cmd.arg("export");
-    cmd.arg(format!("model={}", source_path));
-    cmd.arg(format!("format={}", yolo_format));
-    cmd.arg(format!("imgsz={}", imgsz));
-    cmd.arg(format!("batch={}", batch));
-    if half {
-        cmd.arg("half=True");
-    }
-    if int8 {
-        cmd.arg("int8=True");
-    }
-    if dynamic {
-        cmd.arg("dynamic=True");
-    }
-    if simplify {
-        cmd.arg("simplify=True");
-    }
-    if optimize {
-        cmd.arg("optimize=True");
-    }
-    if nms {
-        cmd.arg("nms=True");
-    }
-    if end_to_end {
-        cmd.arg("end2end=True");
-    }
-    if keras {
-        cmd.arg("keras=True");
-    }
-    if let Some(v) = opset {
-        cmd.arg(format!("opset={}", v));
-    }
-    if let Some(v) = workspace {
-        cmd.arg(format!("workspace={}", v));
-    }
-    if route_id == "ultralytics.pt.rknn" && !chip.trim().is_empty() {
-        cmd.arg(format!("name={}", chip.trim()));
-    }
-    // output_dir is handled post-export via move_artifact (project= is not
-    // honoured by `yolo export` for artifact placement)
+    let mut cmd = match provider {
+        ProviderId::Ultralytics => {
+            if yolo_path.is_empty() || !Path::new(&yolo_path).exists() {
+                return Err(format!("yolo not found at: {}", yolo_path));
+            }
+            let yolo_format = route_id
+                .strip_prefix("ultralytics.pt.")
+                .ok_or_else(|| format!("route not supported in this build: {}", route_id))?
+                .to_string();
+            build_ultralytics_command(
+                &yolo_path,
+                &source_path,
+                &yolo_format,
+                imgsz,
+                batch,
+                half,
+                int8,
+                dynamic,
+                simplify,
+                optimize,
+                nms,
+                end_to_end,
+                keras,
+                opset,
+                workspace,
+                &chip,
+                &route_id,
+            )
+        }
+        ProviderId::RfDetr => {
+            if !rfdetr_trust_confirmed {
+                return Err("RF-DETR export requires trusted checkpoint confirmation.".to_string());
+            }
+            if python_path.is_empty() || !Path::new(&python_path).exists() {
+                return Err(format!("python not found at: {}", python_path));
+            }
+            let variant_mode = rfdetr_variant_mode.as_deref().unwrap_or("auto");
+            build_rfdetr_command(
+                &app_handle,
+                &python_path,
+                &source_path,
+                &route_id,
+                &output_dir,
+                variant_mode,
+                rfdetr_manual_class_symbol.as_deref(),
+                imgsz,
+                batch,
+                opset,
+            )?
+        }
+    };
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("failed to spawn yolo: {}", e))?;
+        .map_err(|e| format!("failed to spawn export process: {}", e))?;
 
     // Take handles BEFORE storing the child (moving child into sessions map
     // would make the handles inaccessible).
@@ -361,9 +447,13 @@ pub async fn start_export(
     // waiter thread — joins both readers, then waits for the child process
     let ah_wait = app_handle.clone();
     let sid_wait = session_id.clone();
-    let output_dir_wait = output_dir_for_move;
-    let source_path_wait = source_path_for_move;
-    let yolo_format_wait = yolo_format_for_move;
+    let output_dir_wait = output_dir.clone();
+    let source_path_wait = source_path.clone();
+    let provider_wait = provider;
+    let route_id_wait = route_id.clone();
+    let yolo_format_wait = route_id
+        .strip_prefix("ultralytics.pt.")
+        .map(|s| s.to_string());
     std::thread::spawn(move || {
         // Wait for both stream readers to finish.
         let _ = stdout_handle.join();
@@ -397,10 +487,29 @@ pub async fn start_export(
                     if status.success() {
                         let (artifact_moved, artifact_warning) = if output_dir_wait.is_empty() {
                             (false, None)
-                        } else {
+                        } else if provider_wait == ProviderId::RfDetr {
+                            match confirm_rfdetr_artifacts(&route_id_wait, &output_dir_wait) {
+                                Ok(true) => (true, None),
+                                Ok(false) => (
+                                    false,
+                                    Some(format!(
+                                        "RF-DETR export finished, but expected artifact(s) not found in {}. \
+                                         Check the output directory manually.",
+                                        output_dir_wait
+                                    )),
+                                ),
+                                Err(error) => (
+                                    false,
+                                    Some(format!(
+                                        "RF-DETR export finished, but artifact validation failed: {}",
+                                        error
+                                    )),
+                                ),
+                            }
+                        } else if let Some(ref yolo_format) = yolo_format_wait {
                             match move_artifact(
                                 &source_path_wait,
-                                &yolo_format_wait,
+                                yolo_format,
                                 &output_dir_wait,
                             ) {
                                 Ok(true) => (true, None),
@@ -420,6 +529,8 @@ pub async fn start_export(
                                     )),
                                 ),
                             }
+                        } else {
+                            (false, None)
                         };
 
                         let _ = ah_wait.emit(
@@ -473,6 +584,40 @@ mod tests {
         ));
         fs::create_dir_all(&dir).expect("create temp dir");
         dir
+    }
+
+    #[test]
+    fn build_ultralytics_command_keeps_existing_onnx_args() {
+        let cmd = super::build_ultralytics_command(
+            "/tmp/yolo",
+            "/tmp/best.pt",
+            "onnx",
+            640,
+            1,
+            true,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            Some(13),
+            None,
+            "",
+            "ultralytics.pt.onnx",
+        );
+        let args: Vec<String> = cmd.get_args().map(|arg| arg.to_string_lossy().to_string()).collect();
+        assert_eq!(args, vec![
+            "export",
+            "model=/tmp/best.pt",
+            "format=onnx",
+            "imgsz=640",
+            "batch=1",
+            "half=True",
+            "simplify=True",
+            "opset=13",
+        ]);
     }
 
     #[test]

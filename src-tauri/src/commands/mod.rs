@@ -3,4 +3,6 @@ pub mod deps;
 pub mod environment;
 pub mod export;
 pub mod gpu;
+pub mod provider_registry;
+pub mod rfdetr;
 pub mod setup;

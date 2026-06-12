@@ -1,9 +1,9 @@
 import { open } from "@tauri-apps/plugin-dialog";
 
-export async function openModelFilePicker(): Promise<string | null> {
+export async function openModelFilePicker(filterName = "Ultralytics YOLO Weights", extensions: string[] = ["pt"]): Promise<string | null> {
   const result = await open({
     multiple: false,
-    filters: [{ name: "PyTorch Weights", extensions: ["pt"] }],
+    filters: [{ name: filterName, extensions }],
   });
   // open() with multiple:false returns string | string[] | null per plugin types.
   // In practice it returns string | null, but guard against array defensively.

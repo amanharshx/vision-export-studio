@@ -11,6 +11,7 @@ import { AxeleraOptions } from "./options/axelera";
 import { ExecuTorchOptions } from "./options/executorch";
 import { ImxOptions } from "./options/imx";
 import { PaddleOptions } from "./options/paddle";
+import { RfDetrOptions } from "./options/rfdetr";
 import { RknnOptions } from "./options/rknn";
 import { TensorRtOptions } from "./options/tensorrt";
 import { TorchScriptOptions } from "./options/torchscript";
@@ -38,6 +39,9 @@ const panelMap: Record<string, React.ComponentType<OptionsPanelProps>> = {
 };
 
 export function OptionsPanel(props: OptionsPanelProps) {
+  if (props.route.providerId === "rfdetr") {
+    return <RfDetrOptions {...props} />;
+  }
   const Panel = panelMap[props.route.targetFormat] ?? GenericOptions;
   return <Panel {...props} />;
 }

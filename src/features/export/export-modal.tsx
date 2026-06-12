@@ -13,6 +13,8 @@ import type {
   ExportOptions,
   ExportStatus,
   InstallPhase,
+  ProviderSpec,
+  RfDetrVariantMode,
   RouteSpec,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -27,6 +29,7 @@ import { categoryBg, categoryIcon } from "./route-card";
 interface ExportModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  provider: ProviderSpec;
   route: RouteSpec;
   sourcePath: string;
   exportStatus: ExportStatus;
@@ -42,11 +45,18 @@ interface ExportModalProps {
   installPhase: InstallPhase;
   missingPackageNames: string[];
   onInstallAndExport: () => void;
+  rfdetrSummary?: {
+    variantMode: RfDetrVariantMode;
+    detectedClass?: string | null;
+    selectedClass?: string | null;
+    trusted: boolean;
+  } | null;
 }
 
 export function ExportModal({
   open,
   onOpenChange,
+  provider,
   route,
   sourcePath,
   exportStatus,
@@ -62,6 +72,7 @@ export function ExportModal({
   installPhase,
   missingPackageNames,
   onInstallAndExport,
+  rfdetrSummary,
 }: ExportModalProps) {
   const format = formats[route.targetFormat];
   const formatIcon = formatIconMap[format.id];
@@ -123,6 +134,22 @@ export function ExportModal({
             </div>
           )}
           <p className="mt-2 text-sm leading-6 text-zinc-500">{route.notes}</p>
+          {rfdetrSummary && (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <p>
+                RF-DETR variant:{" "}
+                <span className="font-mono">
+                  {rfdetrSummary.variantMode === "manual"
+                    ? rfdetrSummary.selectedClass
+                    : rfdetrSummary.detectedClass ?? "Auto"}
+                </span>
+              </p>
+              <p className="mt-1">Use checkpoints from trusted sources only. Local checkpoint loading may execute Python pickle data.</p>
+              {route.id === "rfdetr.pth.tflite" && (
+                <p className="mt-1">TFLite is experimental. Validate FP32 and FP16 outputs before deployment.</p>
+              )}
+            </div>
+          )}
         </DialogHeader>
 
         {/* Scrollable body */}
@@ -134,6 +161,7 @@ export function ExportModal({
                 Dependencies
               </p>
               <DependencyPanel
+                provider={provider}
                 route={route}
                 depResults={depResults}
                 depCheckLoading={depCheckLoading}

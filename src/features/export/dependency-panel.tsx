@@ -1,7 +1,8 @@
-import type { DepCheckResult, RouteSpec } from "@/lib/types";
+import type { DepCheckResult, ProviderSpec, RouteSpec } from "@/lib/types";
 import { AlertTriangle, CheckCircle2, CloudDownload, HelpCircle, Loader2, PackageCheck, TerminalSquare, XCircle } from "lucide-react";
 
 interface DependencyPanelProps {
+  provider: ProviderSpec;
   route: RouteSpec;
   depResults?: DepCheckResult[];
   depCheckLoading?: boolean;
@@ -50,13 +51,14 @@ function depIcon(result: DepCheckResult | undefined, installHint: string) {
 }
 
 export function DependencyPanel({
+  provider,
   route,
   depResults,
   depCheckLoading,
   depCheckError,
 }: DependencyPanelProps) {
   const allItems: DepItem[] = [
-    { name: "ultralytics", installHint: "pip install ultralytics" },
+    ...provider.baseDeps.map((d) => ({ name: d.packageName, installHint: d.installHint })),
     ...route.pipDeps.map((d) => ({ name: d.packageName, installHint: d.installHint })),
     ...route.sysDeps.map((d) => ({ name: d.binaryName, installHint: d.installHint })),
   ];

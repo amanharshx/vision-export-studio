@@ -1,9 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ProviderId, RfDetrVariantMode } from "@/lib/types";
 
 export interface StartExportInput {
   sourcePath: string;
   routeId: string;
   outputDir: string;
+  providerId: ProviderId;
+  pythonPath: string;
   yoloPath: string;
   imgsz: number;
   batch: number;
@@ -18,6 +21,9 @@ export interface StartExportInput {
   opset: number | null;
   workspace: number | null;
   chip: string;
+  rfdetrTrustConfirmed: boolean;
+  rfdetrVariantMode: RfDetrVariantMode | null;
+  rfdetrManualClassSymbol: string | null;
 }
 
 export async function startExport(input: StartExportInput): Promise<string> {
