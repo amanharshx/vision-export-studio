@@ -104,6 +104,17 @@ function hasBlockingDependencies(results: DepCheckResult[] | null): boolean {
   return results.some((result) => result.status !== "ready" && result.status !== "warning");
 }
 
+export function shouldAutofillRfDetrImgsz(
+  prevImgsz: number,
+  lastAuto: { sourcePath: string; imgsz: number } | null,
+  fileAtInspect: string,
+): boolean {
+  if (!lastAuto) return true;
+  if (lastAuto.sourcePath !== fileAtInspect) return true;
+  if (prevImgsz === lastAuto.imgsz) return true;
+  return false;
+}
+
 function isRfDetrExportReady(
   inspectStatus: RfDetrInspectStatus,
   variantMode: RfDetrVariantMode,
@@ -227,6 +238,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const [rfdetrVariantMode, setRfDetrVariantMode] = useState<RfDetrVariantMode>("auto");
   const [rfdetrManualClassSymbol, setRfDetrManualClassSymbol] = useState("");
   const rfdetrInspectRequestRef = useRef(0);
+  const rfdetrAutofillRef = useRef<{ sourcePath: string; imgsz: number } | null>(null);
 
   const missingPackageNames = useMemo(() => {
     return getInstallableMissingPackages(depResults);
@@ -689,6 +701,18 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       if (rfdetrInspectRequestRef.current !== requestId) return;
       setRfDetrInspectResult(result);
       setRfDetrInspectStatus(result.success ? "detected" : "failed");
+      if (result.success && result.recommended_imgsz) {
+        const recommended = result.recommended_imgsz;
+        const fileAtInspect = sourcePath;
+
+        setOptions((prev) => {
+          if (shouldAutofillRfDetrImgsz(prev.imgsz, rfdetrAutofillRef.current, fileAtInspect)) {
+            rfdetrAutofillRef.current = { sourcePath: fileAtInspect, imgsz: recommended };
+            return { ...prev, imgsz: recommended };
+          }
+          return prev;
+        });
+      }
     } catch (error) {
       if (rfdetrInspectRequestRef.current !== requestId) return;
       setRfDetrInspectResult({
@@ -1151,6 +1175,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
           detectedClass: rfdetrInspectResult?.class_symbol ?? null,
           selectedClass: rfdetrVariantMode === "manual" ? rfdetrManualClassSymbol : null,
           trusted: rfdetrTrustConfirmedPath === sourcePath,
+          recommendedImgsz: rfdetrInspectResult?.recommended_imgsz ?? null,
+          patchSize: rfdetrInspectResult?.patch_size ?? null,
         } : null}
       />
     </div>

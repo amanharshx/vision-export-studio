@@ -50,6 +50,8 @@ interface ExportModalProps {
     detectedClass?: string | null;
     selectedClass?: string | null;
     trusted: boolean;
+    recommendedImgsz?: number | null;
+    patchSize?: number | null;
   } | null;
 }
 
@@ -143,6 +145,9 @@ export function ExportModal({
                     ? rfdetrSummary.selectedClass
                     : rfdetrSummary.detectedClass ?? "Auto"}
                 </span>
+                {rfdetrSummary.recommendedImgsz
+                  ? ` · native ${rfdetrSummary.recommendedImgsz}px${rfdetrSummary.patchSize ? ` · patch ${rfdetrSummary.patchSize}` : ""}`
+                  : ""}
               </p>
               <p className="mt-1">Use checkpoints from trusted sources only. Local checkpoint loading may execute Python pickle data.</p>
               {route.id === "rfdetr.pth.tflite" && (
@@ -195,6 +200,8 @@ export function ExportModal({
                   route={route}
                   options={options}
                   onOptionsChange={onOptionsChange}
+                  recommendedImgsz={rfdetrSummary?.recommendedImgsz}
+                  patchSize={rfdetrSummary?.patchSize}
                 />
               )}
             </div>

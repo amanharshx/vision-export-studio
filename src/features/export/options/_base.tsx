@@ -4,6 +4,8 @@ export interface OptionsPanelProps {
   route: RouteSpec;
   options: ExportOptions;
   onOptionsChange: (options: ExportOptions) => void;
+  recommendedImgsz?: number | null;
+  patchSize?: number | null;
 }
 
 export function useOptionSetter(
