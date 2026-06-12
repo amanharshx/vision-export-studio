@@ -33,4 +33,15 @@ describe("provider route registry", () => {
     expect(hasAllowedSourceExtension("/tmp/checkpoint.pth", providers.rfdetr)).toBe(true);
     expect(hasAllowedSourceExtension("/tmp/checkpoint.pt", providers.rfdetr)).toBe(false);
   });
+
+  test("RF-DETR routes do not include Ultralytics base dependency", () => {
+    const provider = providers.rfdetr;
+    const route = routesForProvider("rfdetr").find((item) => item.id === "rfdetr.pth.onnx");
+    expect(provider.baseDeps.map((dep) => dep.packageName)).not.toContain("ultralytics");
+    expect(route?.pipDeps.map((dep) => dep.packageName)).toEqual(["rfdetr[onnx]"]);
+  });
+
+  test("Ultralytics routes keep Ultralytics base dependency", () => {
+    expect(providers.ultralytics.baseDeps.map((dep) => dep.packageName)).toContain("ultralytics");
+  });
 });
