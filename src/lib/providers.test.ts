@@ -5,7 +5,7 @@ import {
   hasAllowedSourceExtension,
   providers,
   routesForProvider,
-} from "./routes";
+} from "./providers";
 
 describe("provider route registry", () => {
   test("defaults to Ultralytics ONNX", () => {

@@ -2,7 +2,7 @@ import { detectEnvironment } from "@/lib/tauri/environment";
 import { captureAnalyticsEvent } from "@/lib/analytics";
 import { checkDependencies, installDependencies } from "@/lib/tauri/deps";
 import { cancelExport, startExport } from "@/lib/tauri/export";
-import { defaultRouteForProvider, hasAllowedSourceExtension, providers, providerList, routesForProvider } from "@/lib/routes";
+import { defaultRouteForProvider, hasAllowedSourceExtension, providers, providerList, routesForProvider } from "@/lib/providers";
 import { inspectRfDetrCheckpoint } from "@/lib/tauri/rfdetr";
 import type {
   DepCheckResult,

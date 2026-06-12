@@ -1,108 +1,17 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::path::Path;
+use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
-use tauri::Manager;
 use uuid::Uuid;
 
 use crate::commands::provider_registry::{
-    rfdetr_expected_artifacts, validate_provider_route, validate_rfdetr_manual_class,
-    validate_source_extension, ProviderId,
+    validate_provider_route, validate_source_extension,
 };
+use crate::commands::providers::{self, ExportRequest};
 
-// ---------------------------------------------------------------------------
-// Artifact helpers
-// ---------------------------------------------------------------------------
 
-/// Returns (suffix, is_directory) for each yolo format's output artifact.
-/// Suffix is appended to the model stem (e.g. "best" + ".onnx").
-fn artifact_info(format: &str) -> (&'static str, bool) {
-    match format {
-        "torchscript" => (".torchscript", false),
-        "onnx" => (".onnx", false),
-        "openvino" => ("_openvino_model", true),
-        "coreml" => (".mlpackage", true),
-        "ncnn" => ("_ncnn_model", true),
-        "mnn" => (".mnn", false),
-        "tflite" => (".tflite", false),
-        "engine" => (".engine", false),
-        "rknn" => (".rknn", false),
-        "executorch" => (".ptl", false),
-        "edgetpu" => ("_edgetpu.tflite", false),
-        "tfjs" => ("_web_model", true),
-        "paddle" => ("_paddle_model", true),
-        "saved_model" => ("_saved_model", true),
-        "pb" => (".pb", false),
-        _ => ("", false),
-    }
-}
-
-fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        if ty.is_dir() {
-            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
-        } else {
-            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
-        }
-    }
-    Ok(())
-}
-
-/// After a successful export, move the artifact from next to the source model
-/// into output_dir. Returns:
-/// - Ok(true): artifact moved
-/// - Ok(false): no known artifact found to move
-/// - Err(...): artifact move attempted but failed
-fn move_artifact(source_path: &str, format: &str, output_dir: &str) -> Result<bool, String> {
-    let (suffix, is_dir) = artifact_info(format);
-    if suffix.is_empty() {
-        return Ok(false);
-    }
-
-    let src_path = Path::new(source_path);
-    let stem = match src_path.file_stem().and_then(|s| s.to_str()) {
-        Some(s) => s,
-        None => return Ok(false),
-    };
-    let src_dir = match src_path.parent() {
-        Some(d) => d,
-        None => return Ok(false),
-    };
-
-    let artifact_name = format!("{}{}", stem, suffix);
-    let artifact_src: PathBuf = src_dir.join(&artifact_name);
-    let artifact_dst: PathBuf = Path::new(output_dir).join(&artifact_name);
-
-    if !artifact_src.exists() {
-        return Ok(false);
-    }
-
-    if is_dir {
-        copy_dir_all(&artifact_src, &artifact_dst)
-            .map_err(|e| format!("failed to copy artifact directory: {}", e))?;
-        std::fs::remove_dir_all(&artifact_src)
-            .map_err(|e| format!("failed to remove source artifact directory: {}", e))?;
-    } else {
-        // Try atomic rename first (same filesystem); fall back to copy+delete.
-        if let Err(rename_error) = std::fs::rename(&artifact_src, &artifact_dst) {
-            std::fs::copy(&artifact_src, &artifact_dst).map_err(|copy_error| {
-                format!(
-                    "failed to move artifact: rename error: {}; copy fallback error: {}",
-                    rename_error, copy_error
-                )
-            })?;
-            std::fs::remove_file(&artifact_src)
-                .map_err(|e| format!("failed to remove source artifact file: {}", e))?;
-        }
-    }
-
-    Ok(true)
-}
 
 // ---------------------------------------------------------------------------
 // State
@@ -145,105 +54,6 @@ struct ExportCancelledPayload {
 // ---------------------------------------------------------------------------
 // start_export
 // ---------------------------------------------------------------------------
-
-#[allow(clippy::too_many_arguments)]
-fn build_ultralytics_command(
-    yolo_path: &str,
-    source_path: &str,
-    yolo_format: &str,
-    imgsz: u32,
-    batch: u32,
-    half: bool,
-    int8: bool,
-    dynamic: bool,
-    simplify: bool,
-    optimize: bool,
-    nms: bool,
-    end_to_end: bool,
-    keras: bool,
-    opset: Option<u32>,
-    workspace: Option<u32>,
-    chip: &str,
-    route_id: &str,
-) -> Command {
-    let mut cmd = Command::new(yolo_path);
-    cmd.arg("export");
-    cmd.arg(format!("model={}", source_path));
-    cmd.arg(format!("format={}", yolo_format));
-    cmd.arg(format!("imgsz={}", imgsz));
-    cmd.arg(format!("batch={}", batch));
-    if half { cmd.arg("half=True"); }
-    if int8 { cmd.arg("int8=True"); }
-    if dynamic { cmd.arg("dynamic=True"); }
-    if simplify { cmd.arg("simplify=True"); }
-    if optimize { cmd.arg("optimize=True"); }
-    if nms { cmd.arg("nms=True"); }
-    if end_to_end { cmd.arg("end2end=True"); }
-    if keras { cmd.arg("keras=True"); }
-    if let Some(v) = opset { cmd.arg(format!("opset={}", v)); }
-    if let Some(v) = workspace { cmd.arg(format!("workspace={}", v)); }
-    if route_id == "ultralytics.pt.rknn" && !chip.trim().is_empty() {
-        cmd.arg(format!("name={}", chip.trim()));
-    }
-    cmd
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_rfdetr_command(
-    app_handle: &tauri::AppHandle,
-    python_path: &str,
-    source_path: &str,
-    route_id: &str,
-    output_dir: &str,
-    variant_mode: &str,
-    manual_class_symbol: Option<&str>,
-    imgsz: u32,
-    batch: u32,
-    opset: Option<u32>,
-) -> Result<Command, String> {
-    if variant_mode == "manual" {
-        validate_rfdetr_manual_class(manual_class_symbol.unwrap_or(""))?;
-    }
-    let helper = app_handle
-        .path()
-        .resolve("python/rfdetr_export_helper.py", tauri::path::BaseDirectory::Resource)
-        .map_err(|e| format!("failed to resolve RF-DETR helper resource: {}", e))?;
-    let mut cmd = Command::new(python_path);
-    cmd.arg(helper);
-    cmd.arg("export");
-    cmd.arg("--checkpoint").arg(source_path);
-    cmd.arg("--route-id").arg(route_id);
-    cmd.arg("--output-dir").arg(output_dir);
-    cmd.arg("--variant-mode").arg(variant_mode);
-    if let Some(symbol) = manual_class_symbol {
-        if !symbol.is_empty() {
-            cmd.arg("--manual-class-symbol").arg(symbol);
-        }
-    }
-    cmd.arg("--imgsz").arg(imgsz.to_string());
-    cmd.arg("--batch").arg(batch.to_string());
-    if let Some(value) = opset {
-        cmd.arg("--opset").arg(value.to_string());
-    }
-    Ok(cmd)
-}
-
-fn confirm_rfdetr_artifacts(route_id: &str, output_dir: &str) -> Result<bool, String> {
-    let expected = rfdetr_expected_artifacts(route_id);
-    if expected.is_empty() {
-        return Ok(false);
-    }
-    let missing: Vec<&str> = expected
-        .iter()
-        .copied()
-        .filter(|name| !Path::new(output_dir).join(name).exists())
-        .collect();
-    if missing.is_empty() {
-        Ok(true)
-    } else {
-        Err(format!("RF-DETR export missing expected artifact(s): {}", missing.join(", ")))
-    }
-}
 
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
@@ -319,57 +129,31 @@ pub async fn start_export(
     // ------------------------------------------------------------------
     // Build and spawn child process
     // ------------------------------------------------------------------
-    let mut cmd = match provider {
-        ProviderId::Ultralytics => {
-            if yolo_path.is_empty() || !Path::new(&yolo_path).exists() {
-                return Err(format!("yolo not found at: {}", yolo_path));
-            }
-            let yolo_format = route_id
-                .strip_prefix("ultralytics.pt.")
-                .ok_or_else(|| format!("route not supported in this build: {}", route_id))?
-                .to_string();
-            build_ultralytics_command(
-                &yolo_path,
-                &source_path,
-                &yolo_format,
-                imgsz,
-                batch,
-                half,
-                int8,
-                dynamic,
-                simplify,
-                optimize,
-                nms,
-                end_to_end,
-                keras,
-                opset,
-                workspace,
-                &chip,
-                &route_id,
-            )
-        }
-        ProviderId::RfDetr => {
-            if !rfdetr_trust_confirmed {
-                return Err("RF-DETR export requires trusted checkpoint confirmation.".to_string());
-            }
-            if python_path.is_empty() || !Path::new(&python_path).exists() {
-                return Err(format!("python not found at: {}", python_path));
-            }
-            let variant_mode = rfdetr_variant_mode.as_deref().unwrap_or("auto");
-            build_rfdetr_command(
-                &app_handle,
-                &python_path,
-                &source_path,
-                &route_id,
-                &output_dir,
-                variant_mode,
-                rfdetr_manual_class_symbol.as_deref(),
-                imgsz,
-                batch,
-                opset,
-            )?
-        }
+    let request = ExportRequest {
+        provider,
+        source_path: source_path.clone(),
+        route_id: route_id.clone(),
+        output_dir: output_dir.clone(),
+        yolo_path,
+        python_path,
+        imgsz,
+        batch,
+        half,
+        int8,
+        dynamic,
+        simplify,
+        optimize,
+        nms,
+        end_to_end,
+        keras,
+        opset,
+        workspace,
+        chip,
+        rfdetr_trust_confirmed,
+        rfdetr_variant_mode,
+        rfdetr_manual_class_symbol,
     };
+    let mut cmd = providers::build_command(&request, &app_handle)?;
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
@@ -447,13 +231,7 @@ pub async fn start_export(
     // waiter thread — joins both readers, then waits for the child process
     let ah_wait = app_handle.clone();
     let sid_wait = session_id.clone();
-    let output_dir_wait = output_dir.clone();
-    let source_path_wait = source_path.clone();
-    let provider_wait = provider;
-    let route_id_wait = route_id.clone();
-    let yolo_format_wait = route_id
-        .strip_prefix("ultralytics.pt.")
-        .map(|s| s.to_string());
+    let request_wait = request.clone();
     std::thread::spawn(move || {
         // Wait for both stream readers to finish.
         let _ = stdout_handle.join();
@@ -478,68 +256,18 @@ pub async fn start_export(
         };
 
         match child_opt {
-            None => {
-                // Child was already removed (cancelled). Nothing to emit — cancel
-                // path already emitted export:cancelled.
-            }
+            None => {}
             Some(mut child) => match child.wait() {
                 Ok(status) => {
                     if status.success() {
-                        let (artifact_moved, artifact_warning) = if output_dir_wait.is_empty() {
-                            (false, None)
-                        } else if provider_wait == ProviderId::RfDetr {
-                            match confirm_rfdetr_artifacts(&route_id_wait, &output_dir_wait) {
-                                Ok(true) => (true, None),
-                                Ok(false) => (
-                                    false,
-                                    Some(format!(
-                                        "RF-DETR export finished, but expected artifact(s) not found in {}. \
-                                         Check the output directory manually.",
-                                        output_dir_wait
-                                    )),
-                                ),
-                                Err(error) => (
-                                    false,
-                                    Some(format!(
-                                        "RF-DETR export finished, but artifact validation failed: {}",
-                                        error
-                                    )),
-                                ),
-                            }
-                        } else if let Some(ref yolo_format) = yolo_format_wait {
-                            match move_artifact(
-                                &source_path_wait,
-                                yolo_format,
-                                &output_dir_wait,
-                            ) {
-                                Ok(true) => (true, None),
-                                Ok(false) => (
-                                    false,
-                                    Some(format!(
-                                        "Export finished, but artifact was not moved to {}. \
-                                         Output may still be next to source model.",
-                                        output_dir_wait
-                                    )),
-                                ),
-                                Err(error) => (
-                                    false,
-                                    Some(format!(
-                                        "Export finished, but artifact move to {} failed: {}",
-                                        output_dir_wait, error
-                                    )),
-                                ),
-                            }
-                        } else {
-                            (false, None)
-                        };
-
+                        let artifact_status = providers::confirm_artifacts(&request_wait);
                         let _ = ah_wait.emit(
                             "export:finished",
                             ExportFinishedPayload {
                                 session_id: sid_wait,
                                 exit_code: 0,
-                                artifact_moved,
-                                artifact_warning,
+                                artifact_moved: artifact_status.artifact_moved,
+                                artifact_warning: artifact_status.artifact_warning,
                             },
                         );
                     } else {
@@ -567,108 +295,6 @@ pub async fn start_export(
     });
 
     Ok(session_id)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::move_artifact;
-    use std::fs;
-    use std::path::PathBuf;
-    use uuid::Uuid;
-
-    fn temp_dir(prefix: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "vision-export-studio-{}-{}",
-            prefix,
-            Uuid::new_v4()
-        ));
-        fs::create_dir_all(&dir).expect("create temp dir");
-        dir
-    }
-
-    #[test]
-    fn build_ultralytics_command_keeps_existing_onnx_args() {
-        let cmd = super::build_ultralytics_command(
-            "/tmp/yolo",
-            "/tmp/best.pt",
-            "onnx",
-            640,
-            1,
-            true,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            Some(13),
-            None,
-            "",
-            "ultralytics.pt.onnx",
-        );
-        let args: Vec<String> = cmd.get_args().map(|arg| arg.to_string_lossy().to_string()).collect();
-        assert_eq!(args, vec![
-            "export",
-            "model=/tmp/best.pt",
-            "format=onnx",
-            "imgsz=640",
-            "batch=1",
-            "half=True",
-            "simplify=True",
-            "opset=13",
-        ]);
-    }
-
-    #[test]
-    fn move_artifact_moves_file_into_output_dir() {
-        let root = temp_dir("export-file");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        let source_artifact = source_dir.join("best.onnx");
-        fs::write(&source_model, "model").expect("write source model");
-        fs::write(&source_artifact, "artifact").expect("write source artifact");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "onnx",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("move artifact");
-
-        assert!(moved);
-        assert!(!source_artifact.exists());
-        assert!(output_dir.join("best.onnx").exists());
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn move_artifact_reports_missing_artifact() {
-        let root = temp_dir("export-missing");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        fs::write(&source_model, "model").expect("write source model");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "onnx",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("missing artifact should not error");
-
-        assert!(!moved);
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
 }
 
 // ---------------------------------------------------------------------------
