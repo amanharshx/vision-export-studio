@@ -36,18 +36,17 @@ pub const ULTRALYTICS_ROUTES: &[&str] = &[
     "ultralytics.pt.pb",
 ];
 
-pub const RFDETR_ROUTES: &[&str] = &[
-    "rfdetr.pth.onnx",
-    "rfdetr.pth.engine",
-    "rfdetr.pth.tflite",
-];
+pub const RFDETR_ROUTES: &[&str] = &["rfdetr.pth.onnx", "rfdetr.pth.engine", "rfdetr.pth.tflite"];
 
 pub fn validate_provider_route(provider_id: &str, route_id: &str) -> Result<ProviderId, String> {
     let provider = ProviderId::parse(provider_id)?;
     match provider {
         ProviderId::Ultralytics if ULTRALYTICS_ROUTES.contains(&route_id) => Ok(provider),
         ProviderId::RfDetr if RFDETR_ROUTES.contains(&route_id) => Ok(provider),
-        _ => Err(format!("route {} does not belong to provider {}", route_id, provider_id)),
+        _ => Err(format!(
+            "route {} does not belong to provider {}",
+            route_id, provider_id
+        )),
     }
 }
 
@@ -60,17 +59,43 @@ pub fn validate_source_extension(provider: ProviderId, source_path: &str) -> Res
     match (provider, ext.as_str()) {
         (ProviderId::Ultralytics, "pt") => Ok(()),
         (ProviderId::RfDetr, "pth") => Ok(()),
-        (ProviderId::Ultralytics, other) => Err(format!("Ultralytics YOLO accepts .pt files only; got .{}", other)),
-        (ProviderId::RfDetr, other) => Err(format!("Roboflow RF-DETR accepts .pth files only; got .{}", other)),
+        (ProviderId::Ultralytics, other) => Err(format!(
+            "Ultralytics YOLO accepts .pt files only; got .{}",
+            other
+        )),
+        (ProviderId::RfDetr, other) => Err(format!(
+            "Roboflow RF-DETR accepts .pth files only; got .{}",
+            other
+        )),
     }
 }
 
-pub fn rfdetr_expected_artifacts(route_id: &str) -> Vec<&'static str> {
+pub enum RfDetrArtifactRule {
+    ExactList(&'static [&'static str]),
+    Named {
+        extension: &'static str,
+        prefix: &'static str,
+        exact: &'static str,
+    },
+}
+
+pub fn rfdetr_artifact_rule(route_id: &str) -> Option<RfDetrArtifactRule> {
     match route_id {
-        "rfdetr.pth.onnx" => vec!["inference_model.onnx"],
-        "rfdetr.pth.engine" => vec!["inference_model.engine"],
-        "rfdetr.pth.tflite" => vec!["inference_model_float32.tflite", "inference_model_float16.tflite"],
-        _ => vec![],
+        "rfdetr.pth.onnx" => Some(RfDetrArtifactRule::Named {
+            extension: ".onnx",
+            prefix: "rfdetr-",
+            exact: "inference_model",
+        }),
+        "rfdetr.pth.engine" => Some(RfDetrArtifactRule::Named {
+            extension: ".engine",
+            prefix: "rfdetr-",
+            exact: "inference_model",
+        }),
+        "rfdetr.pth.tflite" => Some(RfDetrArtifactRule::ExactList(&[
+            "inference_model_float32.tflite",
+            "inference_model_float16.tflite",
+        ])),
+        _ => None,
     }
 }
 
@@ -91,7 +116,10 @@ pub fn validate_rfdetr_manual_class(class_symbol: &str) -> Result<(), String> {
     if ALLOWED.contains(&class_symbol) {
         Ok(())
     } else if class_symbol == "RFDETRXLarge" || class_symbol == "RFDETR2XLarge" {
-        Err(format!("{} requires rfdetr_plus support and is not supported in v1.", class_symbol))
+        Err(format!(
+            "{} requires rfdetr_plus support and is not supported in v1.",
+            class_symbol
+        ))
     } else {
         Err(format!("unsupported RF-DETR class: {}", class_symbol))
     }
@@ -128,11 +156,27 @@ mod tests {
     }
 
     #[test]
-    fn rfdetr_tflite_expects_fp32_and_fp16_only() {
-        assert_eq!(
-            rfdetr_expected_artifacts("rfdetr.pth.tflite"),
-            vec!["inference_model_float32.tflite", "inference_model_float16.tflite"]
-        );
+    fn rfdetr_tflite_expects_exact_list_rule() {
+        assert!(matches!(
+            rfdetr_artifact_rule("rfdetr.pth.tflite"),
+            Some(RfDetrArtifactRule::ExactList(_))
+        ));
+    }
+
+    #[test]
+    fn rfdetr_onnx_expects_named_rule() {
+        assert!(matches!(
+            rfdetr_artifact_rule("rfdetr.pth.onnx"),
+            Some(RfDetrArtifactRule::Named { .. })
+        ));
+    }
+
+    #[test]
+    fn rfdetr_engine_expects_named_rule() {
+        assert!(matches!(
+            rfdetr_artifact_rule("rfdetr.pth.engine"),
+            Some(RfDetrArtifactRule::Named { .. })
+        ));
     }
 
     #[test]

@@ -698,6 +698,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         size: null,
         requires_plus: false,
         is_legacy: false,
+        recommended_imgsz: null,
+        patch_size: null,
+        token_grid: null,
         error: String(error),
       });
       setRfDetrInspectStatus("failed");

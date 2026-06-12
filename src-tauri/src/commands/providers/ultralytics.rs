@@ -90,16 +90,36 @@ pub fn build_command(request: &ExportRequest) -> Result<Command, String> {
     cmd.arg(format!("format={}", yolo_format));
     cmd.arg(format!("imgsz={}", request.imgsz));
     cmd.arg(format!("batch={}", request.batch));
-    if request.half { cmd.arg("half=True"); }
-    if request.int8 { cmd.arg("int8=True"); }
-    if request.dynamic { cmd.arg("dynamic=True"); }
-    if request.simplify { cmd.arg("simplify=True"); }
-    if request.optimize { cmd.arg("optimize=True"); }
-    if request.nms { cmd.arg("nms=True"); }
-    if request.end_to_end { cmd.arg("end2end=True"); }
-    if request.keras { cmd.arg("keras=True"); }
-    if let Some(v) = request.opset { cmd.arg(format!("opset={}", v)); }
-    if let Some(v) = request.workspace { cmd.arg(format!("workspace={}", v)); }
+    if request.half {
+        cmd.arg("half=True");
+    }
+    if request.int8 {
+        cmd.arg("int8=True");
+    }
+    if request.dynamic {
+        cmd.arg("dynamic=True");
+    }
+    if request.simplify {
+        cmd.arg("simplify=True");
+    }
+    if request.optimize {
+        cmd.arg("optimize=True");
+    }
+    if request.nms {
+        cmd.arg("nms=True");
+    }
+    if request.end_to_end {
+        cmd.arg("end2end=True");
+    }
+    if request.keras {
+        cmd.arg("keras=True");
+    }
+    if let Some(v) = request.opset {
+        cmd.arg(format!("opset={}", v));
+    }
+    if let Some(v) = request.workspace {
+        cmd.arg(format!("workspace={}", v));
+    }
     if request.route_id == "ultralytics.pt.rknn" && !request.chip.trim().is_empty() {
         cmd.arg(format!("name={}", request.chip.trim()));
     }
@@ -108,11 +128,19 @@ pub fn build_command(request: &ExportRequest) -> Result<Command, String> {
 
 pub fn confirm_artifacts(request: &ExportRequest) -> ArtifactStatus {
     if request.output_dir.is_empty() {
-        return ArtifactStatus { artifact_moved: false, artifact_warning: None };
+        return ArtifactStatus {
+            artifact_moved: false,
+            artifact_warning: None,
+        };
     }
     let yolo_format = match request.route_id.strip_prefix("ultralytics.pt.") {
         Some(value) => value,
-        None => return ArtifactStatus { artifact_moved: false, artifact_warning: None },
+        None => {
+            return ArtifactStatus {
+                artifact_moved: false,
+                artifact_warning: None,
+            }
+        }
     };
     match move_artifact(&request.source_path, yolo_format, &request.output_dir) {
         Ok(true) => ArtifactStatus { artifact_moved: true, artifact_warning: None },
@@ -141,7 +169,8 @@ mod tests {
     use uuid::Uuid;
 
     fn temp_dir(prefix: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("yolo-export-studio-{}-{}", prefix, Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("yolo-export-studio-{}-{}", prefix, Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("create temp dir");
         dir
     }
@@ -178,17 +207,23 @@ mod tests {
             rfdetr_manual_class_symbol: None,
         };
         let cmd = super::build_command(&request).expect("build command");
-        let args: Vec<String> = cmd.get_args().map(|arg| arg.to_string_lossy().to_string()).collect();
-        assert_eq!(args, vec![
-            "export",
-            &format!("model={}", source_path.to_string_lossy()),
-            "format=onnx",
-            "imgsz=640",
-            "batch=1",
-            "half=True",
-            "simplify=True",
-            "opset=13",
-        ]);
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            args,
+            vec![
+                "export",
+                &format!("model={}", source_path.to_string_lossy()),
+                "format=onnx",
+                "imgsz=640",
+                "batch=1",
+                "half=True",
+                "simplify=True",
+                "opset=13",
+            ]
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

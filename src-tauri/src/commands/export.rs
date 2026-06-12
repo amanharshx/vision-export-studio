@@ -7,11 +7,9 @@ use tauri::Emitter;
 use uuid::Uuid;
 
 use crate::commands::provider_registry::{
-    validate_provider_route, validate_source_extension,
+    validate_provider_route, validate_source_extension, ProviderId,
 };
 use crate::commands::providers::{self, ExportRequest};
-
-
 
 // ---------------------------------------------------------------------------
 // State
@@ -153,6 +151,19 @@ pub async fn start_export(
         rfdetr_variant_mode,
         rfdetr_manual_class_symbol,
     };
+    let pre_snapshot: Option<Vec<crate::commands::providers::rfdetr::ArtifactFingerprint>> =
+        if matches!(request.provider, ProviderId::RfDetr) {
+            Some(
+                providers::rfdetr::snapshot_rfdetr_artifacts(
+                    &request.route_id,
+                    &request.output_dir,
+                )
+                .map_err(|e| format!("failed to scan existing RF-DETR artifacts: {}", e))?,
+            )
+        } else {
+            None
+        };
+
     let mut cmd = providers::build_command(&request, &app_handle)?;
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -232,6 +243,7 @@ pub async fn start_export(
     let ah_wait = app_handle.clone();
     let sid_wait = session_id.clone();
     let request_wait = request.clone();
+    let pre_snapshot_wait = pre_snapshot.clone();
     std::thread::spawn(move || {
         // Wait for both stream readers to finish.
         let _ = stdout_handle.join();
@@ -260,7 +272,13 @@ pub async fn start_export(
             Some(mut child) => match child.wait() {
                 Ok(status) => {
                     if status.success() {
-                        let artifact_status = providers::confirm_artifacts(&request_wait);
+                        let artifact_status = match &pre_snapshot_wait {
+                            Some(ref before) => providers::rfdetr::confirm_artifacts_with_snapshot(
+                                &request_wait,
+                                before,
+                            ),
+                            None => providers::confirm_artifacts(&request_wait),
+                        };
                         let _ = ah_wait.emit(
                             "export:finished",
                             ExportFinishedPayload {

@@ -39,6 +39,9 @@ def empty_failure(message):
         "size": None,
         "requires_plus": False,
         "is_legacy": False,
+        "recommended_imgsz": None,
+        "patch_size": None,
+        "token_grid": None,
         "error": message,
     }
 
@@ -58,6 +61,42 @@ def class_size(class_symbol):
     return token.replace("XLarge", "xlarge").replace("2XLarge", "2xlarge").lower()
 
 
+def infer_native_export_shape(checkpoint_path, model):
+    try:
+        import torch
+        import math
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        args = checkpoint.get("args")
+        if isinstance(args, dict):
+            for key in ("imgsz", "img_size", "image_size"):
+                if key in args:
+                    imgsz = int(args[key])
+                    return {"recommended_imgsz": imgsz, "patch_size": 16, "token_grid": imgsz // 16}
+        state = checkpoint.get("state_dict") if isinstance(checkpoint.get("state_dict"), dict) else checkpoint
+        pos_emb_key = "model.backbone.0.encoder.encoder.embeddings.position_embeddings"
+        pos_emb = state.get(pos_emb_key, None) if isinstance(state, dict) else None
+        if pos_emb is not None:
+            num_tokens = int(pos_emb.shape[1]) - 1
+            tokens = int(math.isqrt(num_tokens))
+        else:
+            tokens = None
+        patch_size = getattr(model.backbone, "patch_size", None) if hasattr(model, "backbone") else None
+        if patch_size is None:
+            patch_size = 16
+        patch_size = int(patch_size)
+        if tokens is not None:
+            recommended = tokens * patch_size
+        else:
+            recommended = None
+        return {
+            "recommended_imgsz": recommended,
+            "patch_size": patch_size,
+            "token_grid": tokens,
+        }
+    except Exception:
+        return {"recommended_imgsz": None, "patch_size": None, "token_grid": None}
+
+
 def inspect_checkpoint(checkpoint_path):
     try:
         from rfdetr import from_checkpoint
@@ -67,6 +106,7 @@ def inspect_checkpoint(checkpoint_path):
         requires_plus = class_symbol in PLUS_ONLY_CLASSES
         family = class_family(class_symbol)
         success = family is not None and not requires_plus
+        native = infer_native_export_shape(checkpoint_path, model)
         emit({
             "success": success,
             "class_symbol": class_symbol,
@@ -74,6 +114,9 @@ def inspect_checkpoint(checkpoint_path):
             "size": class_size(class_symbol),
             "requires_plus": requires_plus,
             "is_legacy": class_symbol in LEGACY_CLASSES,
+            "recommended_imgsz": native["recommended_imgsz"],
+            "patch_size": native["patch_size"],
+            "token_grid": native["token_grid"],
             "error": (
                 f"{class_symbol} requires rfdetr_plus support and is not supported in v1."
                 if requires_plus else None

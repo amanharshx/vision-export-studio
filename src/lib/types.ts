@@ -110,6 +110,9 @@ export interface RfDetrInspectResult {
   size: string | null;
   requires_plus: boolean;
   is_legacy: boolean;
+  recommended_imgsz: number | null;
+  patch_size: number | null;
+  token_grid: number | null;
   error: string | null;
 }
 

@@ -36,7 +36,10 @@ pub struct ArtifactStatus {
     pub artifact_warning: Option<String>,
 }
 
-pub fn build_command(request: &ExportRequest, app_handle: &tauri::AppHandle) -> Result<Command, String> {
+pub fn build_command(
+    request: &ExportRequest,
+    app_handle: &tauri::AppHandle,
+) -> Result<Command, String> {
     match request.provider {
         ProviderId::Ultralytics => ultralytics::build_command(request),
         ProviderId::RfDetr => rfdetr::build_command(request, app_handle),

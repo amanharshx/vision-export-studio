@@ -581,10 +581,9 @@ fn validate_package_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("package name must not be empty".to_string());
     }
-    if !name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '[' || c == ']' || c == ',')
-    {
+    if !name.chars().all(|c| {
+        c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '[' || c == ']' || c == ','
+    }) {
         return Err(format!("invalid package name: {}", name));
     }
     Ok(())
@@ -775,7 +774,10 @@ mod tests {
     #[test]
     fn rfdetr_tflite_route_uses_tflite_extra_hint() {
         let deps = route_deps("rfdetr.pth.tflite").expect("route deps");
-        assert_eq!(deps.pip[0].install_hint, "pip install \"rfdetr[onnx,tflite]\"");
+        assert_eq!(
+            deps.pip[0].install_hint,
+            "pip install \"rfdetr[onnx,tflite]\""
+        );
     }
 
     #[test]
