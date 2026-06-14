@@ -90,7 +90,7 @@ export interface ExportOptions {
   chip: string;
 }
 
-export type ExportStatus = "idle" | "running" | "finished" | "failed" | "cancelled";
+export type ExportStatus = "idle" | "starting" | "running" | "finished" | "failed" | "cancelled";
 
 export type RfDetrInspectStatus =
   | "idle"

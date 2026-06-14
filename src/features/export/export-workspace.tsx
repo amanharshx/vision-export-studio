@@ -431,6 +431,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       return;
     }
     setInvokeError(null);
+    setExportStatus("starting");
+    setLogLines(["[info] Starting export..."]);
     const exportRoute = {
       routeId: selectedRoute.id,
       exportFormat: selectedRoute.targetFormat,
@@ -488,13 +490,17 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         failure_stage: "start_export",
         failure_kind: "start_export_failed",
       });
+      sessionIdRef.current = null;
+      setSessionId(null);
+      setExportStatus("failed");
       setInvokeError(String(e));
+      setLogLines((prev) => [...prev, "[error] " + String(e)]);
     }
   };
 
   // Export handler — gates on missing deps before starting
   const handleExport = async () => {
-    if (!sourcePath || !envInfo?.python_path || exportStatus === "running") return;
+    if (!sourcePath || !envInfo?.python_path || exportStatus === "running" || exportStatus === "starting") return;
     if (selectedProviderId === "ultralytics" && !envInfo.yolo_path) return;
     if (depCheckLoading) {
       setInvokeError("Dependency check still running. Wait for it to finish before export.");

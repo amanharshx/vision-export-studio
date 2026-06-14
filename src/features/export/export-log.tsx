@@ -11,11 +11,12 @@ interface ExportLogProps {
 
 function StatusBadge({ status }: { status: ExportStatus }) {
   switch (status) {
+    case "starting":
     case "running":
       return (
         <span className="flex items-center gap-1 text-xs text-teal-400">
           <Loader2 className="size-3 animate-spin" aria-hidden="true" />
-          running
+          {status}
         </span>
       );
     case "finished":

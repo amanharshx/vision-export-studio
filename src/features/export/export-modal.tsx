@@ -90,7 +90,9 @@ export function ExportModal({
     : null;
   const isPendingConsent = installPhase === "pending_consent";
   const isInstalling = installPhase === "installing";
-  const exportDisabled = exportStatus === "running" || !sourcePath || isInstalling;
+  const isStarting = exportStatus === "starting";
+  const isRunning = exportStatus === "running";
+  const exportDisabled = isRunning || isStarting || !sourcePath || isInstalling;
   const showLog = exportStatus !== "idle" || logLines.length > 0;
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
@@ -122,7 +124,7 @@ export function ExportModal({
   }, [open]);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => { if (next === false && isStarting) return; onOpenChange(next); }}>
       <DialogContent className="flex max-h-[720px] w-[450px] sm:max-w-none flex-col gap-0 p-0" onOpenAutoFocus={(e) => e.preventDefault()}>
         {/* Header */}
         <DialogHeader className="border-b px-6 py-4">
@@ -266,10 +268,15 @@ export function ExportModal({
 
         {/* Footer */}
         <div className="flex justify-end gap-2 border-t px-6 py-4">
-          {exportStatus === "running" ? (
+          {isRunning ? (
             <Button variant="outline" onClick={onStopExport}>
               <Square className="mr-2 h-4 w-4" />
               Stop
+            </Button>
+          ) : isStarting ? (
+            <Button variant="outline" disabled>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Starting…
             </Button>
           ) : (
             <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isInstalling}>
