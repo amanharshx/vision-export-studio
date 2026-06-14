@@ -19,6 +19,7 @@ import type {
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { AlertTriangle, ChevronDown, Download, Loader2, Play, Square } from "lucide-react";
+import { buildCommandPreview } from "./command-preview";
 import { DependencyPanel } from "./dependency-panel";
 import { ExportLog } from "./export-log";
 import { OptionsPanel } from "./options-panel";
@@ -45,6 +46,7 @@ interface ExportModalProps {
   installPhase: InstallPhase;
   missingPackageNames: string[];
   onInstallAndExport: () => void;
+  outputDir?: string;
   rfdetrSummary?: {
     variantMode: RfDetrVariantMode;
     detectedClass?: string | null;
@@ -74,6 +76,7 @@ export function ExportModal({
   installPhase,
   missingPackageNames,
   onInstallAndExport,
+  outputDir,
   rfdetrSummary,
 }: ExportModalProps) {
   const format = formats[route.targetFormat];
@@ -90,6 +93,29 @@ export function ExportModal({
   const exportDisabled = exportStatus === "running" || !sourcePath || isInstalling;
   const showLog = exportStatus !== "idle" || logLines.length > 0;
   const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  const collapsedSummary = (() => {
+    if (provider.id !== "rfdetr" || !rfdetrSummary?.recommendedImgsz) {
+      return "Converting with current options";
+    }
+    const patch = rfdetrSummary.patchSize ? ` \u00b7 patch ${rfdetrSummary.patchSize}` : "";
+    if (options.imgsz === rfdetrSummary.recommendedImgsz) {
+      return `Native settings applied: ${options.imgsz}px${patch}`;
+    }
+    return `Override active: ${options.imgsz}px \u00b7 native ${rfdetrSummary.recommendedImgsz}px${patch}`;
+  })();
+
+  const commandPreview = buildCommandPreview({
+    providerId: provider.id,
+    routeId: route.id,
+    targetFormat: route.targetFormat,
+    sourcePath,
+    options,
+    outputDir,
+    rfdetrVariantMode: rfdetrSummary?.variantMode,
+    rfdetrManualClassSymbol:
+      rfdetrSummary?.variantMode === "manual" ? rfdetrSummary.selectedClass ?? "" : undefined,
+  });
 
   useEffect(() => {
     if (open) setAdvancedOpen(false);
@@ -178,7 +204,7 @@ export function ExportModal({
             <div className="space-y-3">
               {!advancedOpen && (
                 <p className="text-sm text-zinc-500 text-center">
-                  Converting with default options
+                  {collapsedSummary}
                 </p>
               )}
               <button
@@ -232,7 +258,7 @@ export function ExportModal({
 
             {showLog && (
               <div className="rounded-md bg-zinc-950 p-4">
-                <ExportLog lines={logLines} status={exportStatus} route={route} />
+                <ExportLog lines={logLines} status={exportStatus} preview={commandPreview} />
               </div>
             )}
           </div>

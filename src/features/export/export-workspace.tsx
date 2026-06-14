@@ -77,6 +77,30 @@ function optionsForRoute(routeId: string): ExportOptions {
   return { ...defaultOptions, ...(routeDefaults[routeId] ?? {}) };
 }
 
+export function withRfDetrDetectedDefaults(
+  base: ExportOptions,
+  providerId: ProviderId,
+  inspect: RfDetrInspectResult | null,
+): ExportOptions {
+  if (providerId !== "rfdetr") return base;
+  if (!inspect?.success || !inspect.recommended_imgsz) return base;
+  return { ...base, imgsz: inspect.recommended_imgsz };
+}
+
+export function getRouteOptionsForOpen(
+  saved: ExportOptions | null,
+  routeId: string,
+  providerId: ProviderId,
+  inspect: RfDetrInspectResult | null,
+): ExportOptions {
+  if (saved) return saved;
+  return withRfDetrDetectedDefaults(
+    optionsForRoute(routeId),
+    providerId,
+    inspect,
+  );
+}
+
 function getInstallableMissingPackages(results: DepCheckResult[] | null): string[] {
   if (!results) {
     return [];
@@ -239,6 +263,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const [rfdetrManualClassSymbol, setRfDetrManualClassSymbol] = useState("");
   const rfdetrInspectRequestRef = useRef(0);
   const rfdetrAutofillRef = useRef<{ sourcePath: string; imgsz: number } | null>(null);
+  const routeOptionsRef = useRef<Record<string, ExportOptions>>({});
 
   const missingPackageNames = useMemo(() => {
     return getInstallableMissingPackages(depResults);
@@ -376,6 +401,15 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       for (const ul of unlisteners) ul();
     };
   }, []);
+
+  useEffect(() => {
+    if (!selectedRouteId) return;
+    routeOptionsRef.current[selectedRouteId] = options;
+  }, [selectedRouteId, options]);
+
+  useEffect(() => {
+    routeOptionsRef.current = {};
+  }, [sourcePath]);
 
   // Core export invocation — call only when deps are satisfied
   const doStartExport = async (missingDepCount: number) => {
@@ -734,7 +768,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   // Route row clicked — open modal for that route
   const handleActivateRoute = (routeId: string) => {
     setSelectedRouteId(routeId);
-    setOptions(optionsForRoute(routeId));
+
+    const saved = routeOptionsRef.current[routeId] ?? null;
+    setOptions(
+      getRouteOptionsForOpen(saved, routeId, selectedProvider.id, rfdetrInspectResult),
+    );
     setLogLines([]);
     setInvokeError(null);
     setExportStatus("idle");
@@ -1170,6 +1208,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         installPhase={installPhase}
         missingPackageNames={missingPackageNames}
         onInstallAndExport={handleInstallAndExport}
+        outputDir={(() => {
+          const out = outputDirOverride.trim();
+          if (out) return out;
+          const sep = sourcePath.includes("/") ? "/" : "\\";
+          const lastSep = sourcePath.lastIndexOf(sep);
+          const parentDir = lastSep > 0 ? sourcePath.substring(0, lastSep) : "";
+          return parentDir ? `${parentDir}${sep}vision-export-studio-exports` : "";
+        })()}
         rfdetrSummary={selectedProviderId === "rfdetr" ? {
           variantMode: rfdetrVariantMode,
           detectedClass: rfdetrInspectResult?.class_symbol ?? null,
