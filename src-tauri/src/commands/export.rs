@@ -1,102 +1,15 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::path::Path;
+use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
 use uuid::Uuid;
 
-// ---------------------------------------------------------------------------
-// Artifact helpers
-// ---------------------------------------------------------------------------
-
-/// Returns (suffix, is_directory) for each yolo format's output artifact.
-/// Suffix is appended to the model stem (e.g. "best" + ".onnx").
-fn artifact_info(format: &str) -> (&'static str, bool) {
-    match format {
-        "torchscript" => (".torchscript", false),
-        "onnx" => (".onnx", false),
-        "openvino" => ("_openvino_model", true),
-        "coreml" => (".mlpackage", true),
-        "ncnn" => ("_ncnn_model", true),
-        "mnn" => (".mnn", false),
-        "tflite" => (".tflite", false),
-        "engine" => (".engine", false),
-        "rknn" => (".rknn", false),
-        "executorch" => (".ptl", false),
-        "edgetpu" => ("_edgetpu.tflite", false),
-        "tfjs" => ("_web_model", true),
-        "paddle" => ("_paddle_model", true),
-        "saved_model" => ("_saved_model", true),
-        "pb" => (".pb", false),
-        _ => ("", false),
-    }
-}
-
-fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        if ty.is_dir() {
-            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
-        } else {
-            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
-        }
-    }
-    Ok(())
-}
-
-/// After a successful export, move the artifact from next to the source model
-/// into output_dir. Returns:
-/// - Ok(true): artifact moved
-/// - Ok(false): no known artifact found to move
-/// - Err(...): artifact move attempted but failed
-fn move_artifact(source_path: &str, format: &str, output_dir: &str) -> Result<bool, String> {
-    let (suffix, is_dir) = artifact_info(format);
-    if suffix.is_empty() {
-        return Ok(false);
-    }
-
-    let src_path = Path::new(source_path);
-    let stem = match src_path.file_stem().and_then(|s| s.to_str()) {
-        Some(s) => s,
-        None => return Ok(false),
-    };
-    let src_dir = match src_path.parent() {
-        Some(d) => d,
-        None => return Ok(false),
-    };
-
-    let artifact_name = format!("{}{}", stem, suffix);
-    let artifact_src: PathBuf = src_dir.join(&artifact_name);
-    let artifact_dst: PathBuf = Path::new(output_dir).join(&artifact_name);
-
-    if !artifact_src.exists() {
-        return Ok(false);
-    }
-
-    if is_dir {
-        copy_dir_all(&artifact_src, &artifact_dst)
-            .map_err(|e| format!("failed to copy artifact directory: {}", e))?;
-        std::fs::remove_dir_all(&artifact_src)
-            .map_err(|e| format!("failed to remove source artifact directory: {}", e))?;
-    } else {
-        // Try atomic rename first (same filesystem); fall back to copy+delete.
-        if let Err(rename_error) = std::fs::rename(&artifact_src, &artifact_dst) {
-            std::fs::copy(&artifact_src, &artifact_dst).map_err(|copy_error| {
-                format!(
-                    "failed to move artifact: rename error: {}; copy fallback error: {}",
-                    rename_error, copy_error
-                )
-            })?;
-            std::fs::remove_file(&artifact_src)
-                .map_err(|e| format!("failed to remove source artifact file: {}", e))?;
-        }
-    }
-
-    Ok(true)
-}
+use crate::commands::provider_registry::{
+    validate_provider_route, validate_source_extension, ProviderId,
+};
+use crate::commands::providers::{self, ExportRequest};
 
 // ---------------------------------------------------------------------------
 // State
@@ -145,10 +58,12 @@ struct ExportCancelledPayload {
 pub async fn start_export(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, ExportState>,
+    provider_id: String,
     source_path: String,
     route_id: String,
     output_dir: String,
     yolo_path: String,
+    python_path: String,
     imgsz: u32,
     batch: u32,
     half: bool,
@@ -162,6 +77,9 @@ pub async fn start_export(
     opset: Option<u32>,
     workspace: Option<u32>,
     chip: String,
+    rfdetr_trust_confirmed: bool,
+    rfdetr_variant_mode: Option<String>,
+    rfdetr_manual_class_symbol: Option<String>,
 ) -> Result<String, String> {
     // ------------------------------------------------------------------
     // Validation
@@ -174,28 +92,15 @@ pub async fn start_export(
         return Err("source path must not contain '='".to_string());
     }
 
-    const VALID_ROUTE_IDS: &[&str] = &[
-        "ultralytics.pt.torchscript",
-        "ultralytics.pt.onnx",
-        "ultralytics.pt.openvino",
-        "ultralytics.pt.coreml",
-        "ultralytics.pt.ncnn",
-        "ultralytics.pt.mnn",
-        "ultralytics.pt.tflite",
-        "ultralytics.pt.engine",
-        "ultralytics.pt.rknn",
-        "ultralytics.pt.executorch",
-        "ultralytics.pt.edgetpu",
-        "ultralytics.pt.tfjs",
-        "ultralytics.pt.paddle",
-        "ultralytics.pt.imx",
-        "ultralytics.pt.axelera",
-        "ultralytics.pt.saved_model",
-        "ultralytics.pt.pb",
-    ];
+    let provider = validate_provider_route(&provider_id, &route_id)?;
+    validate_source_extension(provider, &source_path)?;
 
-    if !VALID_ROUTE_IDS.contains(&route_id.as_str()) {
-        return Err(format!("route not supported in this build: {}", route_id));
+    if !output_dir.is_empty() {
+        if output_dir.contains('=') {
+            return Err("output dir must not contain '='".to_string());
+        }
+        std::fs::create_dir_all(&output_dir)
+            .map_err(|e| format!("failed to create output dir: {}", e))?;
     }
 
     // IMX500 only supports YOLOv8n and YOLO11n (nano) models.
@@ -214,27 +119,6 @@ pub async fn start_export(
         }
     }
 
-    let yolo_format = route_id
-        .strip_prefix("ultralytics.pt.")
-        .expect("route_id prefix validated above")
-        .to_string();
-
-    if yolo_path.is_empty() || !Path::new(&yolo_path).exists() {
-        return Err(format!("yolo not found at: {}", yolo_path));
-    }
-
-    if !output_dir.is_empty() {
-        if output_dir.contains('=') {
-            return Err("output dir must not contain '='".to_string());
-        }
-        std::fs::create_dir_all(&output_dir)
-            .map_err(|e| format!("failed to create output dir: {}", e))?;
-    }
-
-    let output_dir_for_move = output_dir.clone();
-    let source_path_for_move = source_path.clone();
-    let yolo_format_for_move = yolo_format.clone();
-
     // ------------------------------------------------------------------
     // Assign session id
     // ------------------------------------------------------------------
@@ -243,53 +127,50 @@ pub async fn start_export(
     // ------------------------------------------------------------------
     // Build and spawn child process
     // ------------------------------------------------------------------
-    let mut cmd = Command::new(&yolo_path);
-    cmd.arg("export");
-    cmd.arg(format!("model={}", source_path));
-    cmd.arg(format!("format={}", yolo_format));
-    cmd.arg(format!("imgsz={}", imgsz));
-    cmd.arg(format!("batch={}", batch));
-    if half {
-        cmd.arg("half=True");
-    }
-    if int8 {
-        cmd.arg("int8=True");
-    }
-    if dynamic {
-        cmd.arg("dynamic=True");
-    }
-    if simplify {
-        cmd.arg("simplify=True");
-    }
-    if optimize {
-        cmd.arg("optimize=True");
-    }
-    if nms {
-        cmd.arg("nms=True");
-    }
-    if end_to_end {
-        cmd.arg("end2end=True");
-    }
-    if keras {
-        cmd.arg("keras=True");
-    }
-    if let Some(v) = opset {
-        cmd.arg(format!("opset={}", v));
-    }
-    if let Some(v) = workspace {
-        cmd.arg(format!("workspace={}", v));
-    }
-    if route_id == "ultralytics.pt.rknn" && !chip.trim().is_empty() {
-        cmd.arg(format!("name={}", chip.trim()));
-    }
-    // output_dir is handled post-export via move_artifact (project= is not
-    // honoured by `yolo export` for artifact placement)
+    let request = ExportRequest {
+        provider,
+        source_path: source_path.clone(),
+        route_id: route_id.clone(),
+        output_dir: output_dir.clone(),
+        yolo_path,
+        python_path,
+        imgsz,
+        batch,
+        half,
+        int8,
+        dynamic,
+        simplify,
+        optimize,
+        nms,
+        end_to_end,
+        keras,
+        opset,
+        workspace,
+        chip,
+        rfdetr_trust_confirmed,
+        rfdetr_variant_mode,
+        rfdetr_manual_class_symbol,
+    };
+    let pre_snapshot: Option<Vec<crate::commands::providers::rfdetr::ArtifactFingerprint>> =
+        if matches!(request.provider, ProviderId::RfDetr) {
+            Some(
+                providers::rfdetr::snapshot_rfdetr_artifacts(
+                    &request.route_id,
+                    &request.output_dir,
+                )
+                .map_err(|e| format!("failed to scan existing RF-DETR artifacts: {}", e))?,
+            )
+        } else {
+            None
+        };
+
+    let mut cmd = providers::build_command(&request, &app_handle)?;
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("failed to spawn yolo: {}", e))?;
+        .map_err(|e| format!("failed to spawn export process: {}", e))?;
 
     // Take handles BEFORE storing the child (moving child into sessions map
     // would make the handles inaccessible).
@@ -361,9 +242,8 @@ pub async fn start_export(
     // waiter thread — joins both readers, then waits for the child process
     let ah_wait = app_handle.clone();
     let sid_wait = session_id.clone();
-    let output_dir_wait = output_dir_for_move;
-    let source_path_wait = source_path_for_move;
-    let yolo_format_wait = yolo_format_for_move;
+    let request_wait = request.clone();
+    let pre_snapshot_wait = pre_snapshot.clone();
     std::thread::spawn(move || {
         // Wait for both stream readers to finish.
         let _ = stdout_handle.join();
@@ -388,47 +268,24 @@ pub async fn start_export(
         };
 
         match child_opt {
-            None => {
-                // Child was already removed (cancelled). Nothing to emit — cancel
-                // path already emitted export:cancelled.
-            }
+            None => {}
             Some(mut child) => match child.wait() {
                 Ok(status) => {
                     if status.success() {
-                        let (artifact_moved, artifact_warning) = if output_dir_wait.is_empty() {
-                            (false, None)
-                        } else {
-                            match move_artifact(
-                                &source_path_wait,
-                                &yolo_format_wait,
-                                &output_dir_wait,
-                            ) {
-                                Ok(true) => (true, None),
-                                Ok(false) => (
-                                    false,
-                                    Some(format!(
-                                        "Export finished, but artifact was not moved to {}. \
-                                         Output may still be next to source model.",
-                                        output_dir_wait
-                                    )),
-                                ),
-                                Err(error) => (
-                                    false,
-                                    Some(format!(
-                                        "Export finished, but artifact move to {} failed: {}",
-                                        output_dir_wait, error
-                                    )),
-                                ),
-                            }
+                        let artifact_status = match &pre_snapshot_wait {
+                            Some(ref before) => providers::rfdetr::confirm_artifacts_with_snapshot(
+                                &request_wait,
+                                before,
+                            ),
+                            None => providers::confirm_artifacts(&request_wait),
                         };
-
                         let _ = ah_wait.emit(
                             "export:finished",
                             ExportFinishedPayload {
                                 session_id: sid_wait,
                                 exit_code: 0,
-                                artifact_moved,
-                                artifact_warning,
+                                artifact_moved: artifact_status.artifact_moved,
+                                artifact_warning: artifact_status.artifact_warning,
                             },
                         );
                     } else {
@@ -456,74 +313,6 @@ pub async fn start_export(
     });
 
     Ok(session_id)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::move_artifact;
-    use std::fs;
-    use std::path::PathBuf;
-    use uuid::Uuid;
-
-    fn temp_dir(prefix: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "vision-export-studio-{}-{}",
-            prefix,
-            Uuid::new_v4()
-        ));
-        fs::create_dir_all(&dir).expect("create temp dir");
-        dir
-    }
-
-    #[test]
-    fn move_artifact_moves_file_into_output_dir() {
-        let root = temp_dir("export-file");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        let source_artifact = source_dir.join("best.onnx");
-        fs::write(&source_model, "model").expect("write source model");
-        fs::write(&source_artifact, "artifact").expect("write source artifact");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "onnx",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("move artifact");
-
-        assert!(moved);
-        assert!(!source_artifact.exists());
-        assert!(output_dir.join("best.onnx").exists());
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn move_artifact_reports_missing_artifact() {
-        let root = temp_dir("export-missing");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        fs::write(&source_model, "model").expect("write source model");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "onnx",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("missing artifact should not error");
-
-        assert!(!moved);
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -13,10 +13,13 @@ import type {
   ExportOptions,
   ExportStatus,
   InstallPhase,
+  ProviderSpec,
+  RfDetrVariantMode,
   RouteSpec,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { AlertTriangle, ChevronDown, Download, Loader2, Play, Square } from "lucide-react";
+import { buildCommandPreview } from "./command-preview";
 import { DependencyPanel } from "./dependency-panel";
 import { ExportLog } from "./export-log";
 import { OptionsPanel } from "./options-panel";
@@ -27,6 +30,7 @@ import { categoryBg, categoryIcon } from "./route-card";
 interface ExportModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  provider: ProviderSpec;
   route: RouteSpec;
   sourcePath: string;
   exportStatus: ExportStatus;
@@ -42,11 +46,21 @@ interface ExportModalProps {
   installPhase: InstallPhase;
   missingPackageNames: string[];
   onInstallAndExport: () => void;
+  outputDir?: string;
+  rfdetrSummary?: {
+    variantMode: RfDetrVariantMode;
+    detectedClass?: string | null;
+    selectedClass?: string | null;
+    trusted: boolean;
+    recommendedImgsz?: number | null;
+    patchSize?: number | null;
+  } | null;
 }
 
 export function ExportModal({
   open,
   onOpenChange,
+  provider,
   route,
   sourcePath,
   exportStatus,
@@ -62,6 +76,8 @@ export function ExportModal({
   installPhase,
   missingPackageNames,
   onInstallAndExport,
+  outputDir,
+  rfdetrSummary,
 }: ExportModalProps) {
   const format = formats[route.targetFormat];
   const formatIcon = formatIconMap[format.id];
@@ -74,16 +90,41 @@ export function ExportModal({
     : null;
   const isPendingConsent = installPhase === "pending_consent";
   const isInstalling = installPhase === "installing";
-  const exportDisabled = exportStatus === "running" || !sourcePath || isInstalling;
+  const isStarting = exportStatus === "starting";
+  const isRunning = exportStatus === "running";
+  const exportDisabled = isRunning || isStarting || !sourcePath || isInstalling;
   const showLog = exportStatus !== "idle" || logLines.length > 0;
   const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  const collapsedSummary = (() => {
+    if (provider.id !== "rfdetr" || !rfdetrSummary?.recommendedImgsz) {
+      return "Converting with current options";
+    }
+    const patch = rfdetrSummary.patchSize ? ` \u00b7 patch ${rfdetrSummary.patchSize}` : "";
+    if (options.imgsz === rfdetrSummary.recommendedImgsz) {
+      return `Native settings applied: ${options.imgsz}px${patch}`;
+    }
+    return `Override active: ${options.imgsz}px \u00b7 native ${rfdetrSummary.recommendedImgsz}px${patch}`;
+  })();
+
+  const commandPreview = buildCommandPreview({
+    providerId: provider.id,
+    routeId: route.id,
+    targetFormat: route.targetFormat,
+    sourcePath,
+    options,
+    outputDir,
+    rfdetrVariantMode: rfdetrSummary?.variantMode,
+    rfdetrManualClassSymbol:
+      rfdetrSummary?.variantMode === "manual" ? rfdetrSummary.selectedClass ?? "" : undefined,
+  });
 
   useEffect(() => {
     if (open) setAdvancedOpen(false);
   }, [open]);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => { if (next === false && isStarting) return; onOpenChange(next); }}>
       <DialogContent className="flex max-h-[720px] w-[450px] sm:max-w-none flex-col gap-0 p-0" onOpenAutoFocus={(e) => e.preventDefault()}>
         {/* Header */}
         <DialogHeader className="border-b px-6 py-4">
@@ -123,6 +164,22 @@ export function ExportModal({
             </div>
           )}
           <p className="mt-2 text-sm leading-6 text-zinc-500">{route.notes}</p>
+          {rfdetrSummary && (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <p>
+                RF-DETR variant:{" "}
+                <span className="font-mono">
+                  {rfdetrSummary.variantMode === "manual"
+                    ? rfdetrSummary.selectedClass
+                    : rfdetrSummary.detectedClass ?? "Auto"}
+                </span>
+                {rfdetrSummary.recommendedImgsz
+                  ? ` · native ${rfdetrSummary.recommendedImgsz}px${rfdetrSummary.patchSize ? ` · patch ${rfdetrSummary.patchSize}` : ""}`
+                  : ""}
+              </p>
+              <p className="mt-1">Use checkpoints from trusted sources only. Local checkpoint loading may execute Python pickle data.</p>
+            </div>
+          )}
         </DialogHeader>
 
         {/* Scrollable body */}
@@ -134,6 +191,7 @@ export function ExportModal({
                 Dependencies
               </p>
               <DependencyPanel
+                provider={provider}
                 route={route}
                 depResults={depResults}
                 depCheckLoading={depCheckLoading}
@@ -145,7 +203,7 @@ export function ExportModal({
             <div className="space-y-3">
               {!advancedOpen && (
                 <p className="text-sm text-zinc-500 text-center">
-                  Converting with default options
+                  {collapsedSummary}
                 </p>
               )}
               <button
@@ -167,6 +225,8 @@ export function ExportModal({
                   route={route}
                   options={options}
                   onOptionsChange={onOptionsChange}
+                  recommendedImgsz={rfdetrSummary?.recommendedImgsz}
+                  patchSize={rfdetrSummary?.patchSize}
                 />
               )}
             </div>
@@ -197,7 +257,7 @@ export function ExportModal({
 
             {showLog && (
               <div className="rounded-md bg-zinc-950 p-4">
-                <ExportLog lines={logLines} status={exportStatus} route={route} />
+                <ExportLog lines={logLines} status={exportStatus} preview={commandPreview} />
               </div>
             )}
           </div>
@@ -205,10 +265,15 @@ export function ExportModal({
 
         {/* Footer */}
         <div className="flex justify-end gap-2 border-t px-6 py-4">
-          {exportStatus === "running" ? (
+          {isRunning ? (
             <Button variant="outline" onClick={onStopExport}>
               <Square className="mr-2 h-4 w-4" />
               Stop
+            </Button>
+          ) : isStarting ? (
+            <Button variant="outline" disabled>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Starting…
             </Button>
           ) : (
             <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isInstalling}>

@@ -6,6 +6,10 @@ import { openModelFilePicker } from "@/lib/tauri/dialog";
 
 interface DropZoneProps {
   path: string;
+  title: string;
+  helper: string;
+  pickerFilterName: string;
+  pickerExtensions: string[];
   onFileSelect: (path: string) => void;
   errorMsg?: string | null;
 }
@@ -15,7 +19,7 @@ function basename(fullPath: string): string {
   return fullPath.split(/[\\/]/).pop() ?? fullPath;
 }
 
-export function DropZone({ path, onFileSelect, errorMsg }: DropZoneProps) {
+export function DropZone({ path, title, helper, pickerFilterName, pickerExtensions, onFileSelect, errorMsg }: DropZoneProps) {
   const [isDragOver, setIsDragOver] = useState(false);
 
   // Register Tauri window drag-drop listener.
@@ -56,7 +60,10 @@ export function DropZone({ path, onFileSelect, errorMsg }: DropZoneProps) {
   }, [onFileSelect]);
 
   async function handleBrowse() {
-    const selected = await openModelFilePicker();
+    const selected = await openModelFilePicker(
+      pickerFilterName,
+      pickerExtensions.map((extension) => extension.replace(/^\./, "")),
+    );
     if (selected !== null) {
       onFileSelect(selected);
     }
@@ -104,11 +111,10 @@ export function DropZone({ path, onFileSelect, errorMsg }: DropZoneProps) {
           ) : (
             <>
               <h2 className="text-2xl font-semibold text-zinc-950">
-                {isDragOver ? "Release to select" : "Drop .pt model"}
+                {isDragOver ? "Release to select" : title}
               </h2>
               <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-600">
-                Ultralytics YOLO weights stay local. Export commands run in
-                selected Python environment.
+                {helper}
               </p>
             </>
           )}

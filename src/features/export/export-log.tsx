@@ -1,21 +1,22 @@
 import { ScrollArea } from "@/components/ui/scroll-area";
-import type { ExportStatus, RouteSpec } from "@/lib/types";
+import type { ExportStatus } from "@/lib/types";
 import { Check, Copy, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 interface ExportLogProps {
   lines: string[];
   status: ExportStatus;
-  route?: RouteSpec;
+  preview: string;
 }
 
 function StatusBadge({ status }: { status: ExportStatus }) {
   switch (status) {
+    case "starting":
     case "running":
       return (
         <span className="flex items-center gap-1 text-xs text-teal-400">
           <Loader2 className="size-3 animate-spin" aria-hidden="true" />
-          running
+          {status}
         </span>
       );
     case "finished":
@@ -30,7 +31,7 @@ function StatusBadge({ status }: { status: ExportStatus }) {
   }
 }
 
-export function ExportLog({ lines, status, route }: ExportLogProps) {
+export function ExportLog({ lines, status, preview }: ExportLogProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
 
@@ -54,7 +55,7 @@ export function ExportLog({ lines, status, route }: ExportLogProps) {
       <ScrollArea className="h-[152px] rounded-md bg-black/30">
         <pre className="p-3 text-xs leading-6 text-zinc-300">
           {lines.length === 0
-            ? `$ yolo export model=best.pt format=${route?.targetFormat ?? "onnx"}\nstdout and stderr will stream here.`
+            ? `$ ${preview}\nstdout and stderr will stream here.`
             : lines.join("\n")}
           <div ref={bottomRef} />
         </pre>

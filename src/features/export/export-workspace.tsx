@@ -2,7 +2,8 @@ import { detectEnvironment } from "@/lib/tauri/environment";
 import { captureAnalyticsEvent } from "@/lib/analytics";
 import { checkDependencies, installDependencies } from "@/lib/tauri/deps";
 import { cancelExport, startExport } from "@/lib/tauri/export";
-import { defaultRoute, ultralyticsRoutes } from "@/lib/routes";
+import { defaultRouteForProvider, hasAllowedSourceExtension, providers, providerList, routesForProvider } from "@/lib/providers";
+import { inspectRfDetrCheckpoint } from "@/lib/tauri/rfdetr";
 import type {
   DepCheckResult,
   EnvironmentInfo,
@@ -11,11 +12,17 @@ import type {
   ExportFinishedPayload,
   ExportLinePayload,
   ExportOptions,
+  ExportOptionsSource,
   ExportStatus,
   InstallFailedPayload,
   InstallFinishedPayload,
   InstallLinePayload,
   InstallPhase,
+  ProviderId,
+  RfDetrInspectResult,
+  RfDetrInspectStatus,
+  RfDetrVariantMode,
+  RouteOptionsState,
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -72,6 +79,35 @@ function optionsForRoute(routeId: string): ExportOptions {
   return { ...defaultOptions, ...(routeDefaults[routeId] ?? {}) };
 }
 
+export function withRfDetrDetectedDefaults(
+  base: ExportOptions,
+  providerId: ProviderId,
+  inspect: RfDetrInspectResult | null,
+): ExportOptions {
+  if (providerId !== "rfdetr") return base;
+  if (!inspect?.success || !inspect.recommended_imgsz) return base;
+  return { ...base, imgsz: inspect.recommended_imgsz };
+}
+
+export function getRouteOptionsForOpen(
+  saved: RouteOptionsState | null,
+  routeId: string,
+  providerId: ProviderId,
+  inspect: RfDetrInspectResult | null,
+  sourcePath: string,
+): RouteOptionsState {
+  if (saved && saved.sourcePath === sourcePath) return saved;
+
+  const base = optionsForRoute(routeId);
+  const detected = withRfDetrDetectedDefaults(base, providerId, inspect);
+
+  return {
+    options: detected,
+    source: providerId === "rfdetr" && inspect?.success && inspect.recommended_imgsz ? "detected" : "default",
+    sourcePath,
+  };
+}
+
 function getInstallableMissingPackages(results: DepCheckResult[] | null): string[] {
   if (!results) {
     return [];
@@ -79,7 +115,7 @@ function getInstallableMissingPackages(results: DepCheckResult[] | null): string
 
   const pipMissing = results
     .filter((r) => r.status === "missing_package")
-    .map((r) => r.item);
+    .map((r) => r.install_package ?? r.item);
   const binaryViaPip = results
     .filter(
       (r) =>
@@ -97,6 +133,63 @@ function hasBlockingDependencies(results: DepCheckResult[] | null): boolean {
   }
 
   return results.some((result) => result.status !== "ready" && result.status !== "warning");
+}
+
+export function applyDetectedRouteOptions(
+  saved: RouteOptionsState | null,
+  routeId: string,
+  detectedImgsz: number,
+  currentSourcePath: string,
+): RouteOptionsState | null {
+  if (!saved || saved.sourcePath !== currentSourcePath) {
+    return {
+      options: { ...optionsForRoute(routeId), imgsz: detectedImgsz },
+      source: "detected",
+      sourcePath: currentSourcePath,
+    };
+  }
+  if (saved.source === "user") {
+    return null;
+  }
+  return {
+    options: { ...saved.options, imgsz: detectedImgsz },
+    source: "detected",
+    sourcePath: currentSourcePath,
+  };
+}
+
+export function applyDetectedRouteOptionsToProviderRoutes(
+  savedByRoute: Record<string, RouteOptionsState>,
+  providerId: ProviderId,
+  detectedImgsz: number,
+  currentSourcePath: string,
+): Record<string, RouteOptionsState> {
+  if (providerId !== "rfdetr") return savedByRoute;
+
+  const next = { ...savedByRoute };
+  for (const route of routesForProvider(providerId)) {
+    const updated = applyDetectedRouteOptions(
+      next[route.id] ?? null,
+      route.id,
+      detectedImgsz,
+      currentSourcePath,
+    );
+    if (updated) {
+      next[route.id] = updated;
+    }
+  }
+  return next;
+}
+
+function isRfDetrExportReady(
+  inspectStatus: RfDetrInspectStatus,
+  variantMode: RfDetrVariantMode,
+  manualClassSymbol: string,
+): boolean {
+  if (variantMode === "manual") {
+    return manualClassSymbol.trim().length > 0;
+  }
+  return inspectStatus === "detected";
 }
 
 type EnvCardStatus = "ok" | "error" | "loading";
@@ -165,10 +258,13 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const [infoOpen, setInfoOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
 
-  const [selectedRouteId, setSelectedRouteId] = useState(defaultRoute.id);
+  const [selectedProviderId, setSelectedProviderId] = useState<ProviderId>("ultralytics");
+  const selectedProvider = providers[selectedProviderId];
+  const currentRoutes = useMemo(() => routesForProvider(selectedProviderId), [selectedProviderId]);
+  const [selectedRouteId, setSelectedRouteId] = useState(defaultRouteForProvider("ultralytics").id);
   const selectedRoute = useMemo(
-    () => ultralyticsRoutes.find((route) => route.id === selectedRouteId) ?? defaultRoute,
-    [selectedRouteId],
+    () => currentRoutes.find((route) => route.id === selectedRouteId) ?? defaultRouteForProvider(selectedProviderId),
+    [currentRoutes, selectedProviderId, selectedRouteId],
   );
 
   // Environment
@@ -200,6 +296,29 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
 
   // Install phase state
   const [installPhase, setInstallPhase] = useState<InstallPhase>("idle");
+
+  // RF-DETR inspect state
+  const [rfdetrInspectStatus, setRfDetrInspectStatus] = useState<RfDetrInspectStatus>("idle");
+  const [rfdetrInspectResult, setRfDetrInspectResult] = useState<RfDetrInspectResult | null>(null);
+  const [rfdetrTrustConfirmedPath, setRfDetrTrustConfirmedPath] = useState<string | null>(null);
+  const [rfdetrVariantMode, setRfDetrVariantMode] = useState<RfDetrVariantMode>("auto");
+  const [rfdetrManualClassSymbol, setRfDetrManualClassSymbol] = useState("");
+  const rfdetrInspectRequestRef = useRef(0);
+  const routeOptionsRef = useRef<Record<string, RouteOptionsState>>({});
+
+  const setOptionsWithSource = useCallback(
+    (next: ExportOptions, optsSource: ExportOptionsSource) => {
+      setOptions(next);
+      if (selectedRouteId) {
+        routeOptionsRef.current[selectedRouteId] = {
+          options: next,
+          source: optsSource,
+          sourcePath,
+        };
+      }
+    },
+    [selectedRouteId, sourcePath],
+  );
 
   const missingPackageNames = useMemo(() => {
     return getInstallableMissingPackages(depResults);
@@ -338,10 +457,32 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     };
   }, []);
 
+  useEffect(() => {
+    routeOptionsRef.current = {};
+  }, [sourcePath]);
+
   // Core export invocation — call only when deps are satisfied
   const doStartExport = async (missingDepCount: number) => {
-    if (!sourcePath || !envInfo?.yolo_path) return;
+    if (!sourcePath || !envInfo?.python_path) return;
+    if (selectedProviderId === "ultralytics" && !envInfo.yolo_path) return;
+    if (selectedProviderId === "rfdetr" && rfdetrTrustConfirmedPath !== sourcePath) {
+      setInvokeError("Confirm trusted RF-DETR checkpoint loading before export.");
+      return;
+    }
+    if (
+      selectedProviderId === "rfdetr" &&
+      !isRfDetrExportReady(rfdetrInspectStatus, rfdetrVariantMode, rfdetrManualClassSymbol)
+    ) {
+      setInvokeError("Inspect RF-DETR checkpoint successfully or select a manual variant before export.");
+      return;
+    }
+    if (selectedProviderId === "rfdetr" && rfdetrVariantMode === "manual" && !rfdetrManualClassSymbol) {
+      setInvokeError("Select an RF-DETR variant before export.");
+      return;
+    }
     setInvokeError(null);
+    setExportStatus("starting");
+    setLogLines(["[info] Starting export..."]);
     const exportRoute = {
       routeId: selectedRoute.id,
       exportFormat: selectedRoute.targetFormat,
@@ -359,7 +500,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         sourcePath,
         routeId: selectedRoute.id,
         outputDir,
-        yoloPath: envInfo.yolo_path,
+        providerId: selectedProviderId,
+        pythonPath: envInfo.python_path,
+        yoloPath: envInfo.yolo_path ?? "",
         imgsz: options.imgsz,
         batch: options.batch,
         half: options.half,
@@ -373,6 +516,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         opset: options.opset,
         workspace: options.workspace,
         chip: options.chip,
+        rfdetrTrustConfirmed: selectedProviderId === "rfdetr" && rfdetrTrustConfirmedPath === sourcePath,
+        rfdetrVariantMode: selectedProviderId === "rfdetr" ? rfdetrVariantMode : null,
+        rfdetrManualClassSymbol: selectedProviderId === "rfdetr" && rfdetrVariantMode === "manual" ? rfdetrManualClassSymbol : null,
       });
       sessionIdRef.current = id;
       setSessionId(id);
@@ -380,6 +526,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       captureAnalyticsEvent("export_started", {
         route_id: exportRoute.routeId,
         export_format: exportRoute.exportFormat,
+        provider_id: selectedProviderId,
+        rfdetr_variant_mode: selectedProviderId === "rfdetr" ? rfdetrVariantMode : undefined,
+        rfdetr_detected_class: rfdetrInspectResult?.class_symbol ?? undefined,
+        rfdetr_selected_class: rfdetrVariantMode === "manual" ? rfdetrManualClassSymbol : undefined,
+        rfdetr_family: rfdetrInspectResult?.family ?? undefined,
         missing_dep_count: missingDepCount,
       });
     } catch (e: unknown) {
@@ -389,13 +540,18 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         failure_stage: "start_export",
         failure_kind: "start_export_failed",
       });
+      sessionIdRef.current = null;
+      setSessionId(null);
+      setExportStatus("failed");
       setInvokeError(String(e));
+      setLogLines((prev) => [...prev, "[error] " + String(e)]);
     }
   };
 
   // Export handler — gates on missing deps before starting
   const handleExport = async () => {
-    if (!sourcePath || !envInfo?.yolo_path || exportStatus === "running") return;
+    if (!sourcePath || !envInfo?.python_path || exportStatus === "running" || exportStatus === "starting") return;
+    if (selectedProviderId === "ultralytics" && !envInfo.yolo_path) return;
     if (depCheckLoading) {
       setInvokeError("Dependency check still running. Wait for it to finish before export.");
       return;
@@ -569,16 +725,115 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     }
   };
 
-  // File select — advance to formats view
+  // Provider switch
+  function resetExportStateForProvider(providerId: ProviderId) {
+    setSelectedRouteId(defaultRouteForProvider(providerId).id);
+    setDialogOpen(false);
+    setSourcePath("");
+    setView("drop");
+    setLogLines([]);
+    setInvokeError(null);
+    setDepResults(null);
+    setDepCheckLoading(false);
+    setDepCheckError(null);
+    setInstallPhase("idle");
+    setExportStatus("idle");
+    setSessionId(null);
+    setRfDetrInspectStatus("idle");
+    setRfDetrInspectResult(null);
+    setRfDetrTrustConfirmedPath(null);
+    setRfDetrVariantMode("auto");
+    setRfDetrManualClassSymbol("");
+    rfdetrInspectRequestRef.current += 1;
+  }
+
+  const handleProviderChange = (providerId: ProviderId) => {
+    if (providerId === selectedProviderId) return;
+    setSelectedProviderId(providerId);
+    resetExportStateForProvider(providerId);
+  };
+
+  // File select — validate extension, then advance to formats view
   const handleFileSelect = useCallback((path: string) => {
-    setSourcePath(path);
-    if (path.trim()) setView("formats");
-  }, []);
+    const trimmed = path.trim();
+    if (!trimmed) return;
+    if (!hasAllowedSourceExtension(trimmed, selectedProvider)) {
+      setInvokeError(`${selectedProvider.displayName} accepts ${selectedProvider.sourceExtensions.join(", ")} files only.`);
+      setSourcePath("");
+      setView("drop");
+      return;
+    }
+    setInvokeError(null);
+    setSourcePath(trimmed);
+    if (selectedProvider.id === "rfdetr") {
+      setRfDetrInspectStatus("needs_trust");
+      setRfDetrInspectResult(null);
+      setRfDetrTrustConfirmedPath(null);
+      setRfDetrVariantMode("auto");
+      setRfDetrManualClassSymbol("");
+    }
+    setView("formats");
+  }, [selectedProvider]);
+
+  const handleConfirmRfDetrTrust = async () => {
+    if (!sourcePath || !envInfo?.python_path) return;
+    const requestId = rfdetrInspectRequestRef.current + 1;
+    rfdetrInspectRequestRef.current = requestId;
+    setRfDetrTrustConfirmedPath(sourcePath);
+    setRfDetrInspectStatus("inspecting");
+    setRfDetrInspectResult(null);
+    try {
+      const result = await inspectRfDetrCheckpoint({
+        checkpointPath: sourcePath,
+        pythonPath: envInfo.python_path,
+        trustConfirmed: true,
+      });
+      if (rfdetrInspectRequestRef.current !== requestId) return;
+      setRfDetrInspectResult(result);
+      setRfDetrInspectStatus(result.success ? "detected" : "failed");
+      if (result.success && result.recommended_imgsz) {
+        const recommended = result.recommended_imgsz;
+        const nextRouteOptions = applyDetectedRouteOptionsToProviderRoutes(
+          routeOptionsRef.current,
+          "rfdetr",
+          recommended,
+          sourcePath,
+        );
+        routeOptionsRef.current = nextRouteOptions;
+
+        if (selectedRouteId) {
+          const selectedState = nextRouteOptions[selectedRouteId];
+          if (selectedState && selectedState.source === "detected") {
+            setOptions(selectedState.options);
+          }
+        }
+      }
+    } catch (error) {
+      if (rfdetrInspectRequestRef.current !== requestId) return;
+      setRfDetrInspectResult({
+        success: false,
+        class_symbol: null,
+        family: null,
+        size: null,
+        requires_plus: false,
+        is_legacy: false,
+        recommended_imgsz: null,
+        patch_size: null,
+        token_grid: null,
+        error: String(error),
+      });
+      setRfDetrInspectStatus("failed");
+    }
+  };
 
   // Route row clicked — open modal for that route
   const handleActivateRoute = (routeId: string) => {
     setSelectedRouteId(routeId);
-    setOptions(optionsForRoute(routeId));
+
+    const saved = routeOptionsRef.current[routeId] ?? null;
+    const routeState = getRouteOptionsForOpen(saved, routeId, selectedProvider.id, rfdetrInspectResult, sourcePath);
+    setOptions(routeState.options);
+    routeOptionsRef.current[routeId] = routeState;
     setLogLines([]);
     setInvokeError(null);
     setExportStatus("idle");
@@ -590,6 +845,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const handleClearFile = () => {
     setSourcePath("");
     setView("drop");
+    setRfDetrInspectStatus("idle");
+    setRfDetrInspectResult(null);
+    setRfDetrTrustConfirmedPath(null);
+    setRfDetrVariantMode("auto");
+    setRfDetrManualClassSymbol("");
+    rfdetrInspectRequestRef.current += 1;
   };
 
   // Re-detect environment with current override
@@ -885,8 +1146,29 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         {header}
         <main className="flex flex-1 items-center justify-center px-4">
           <div className="w-full max-w-md">
+            <div className="mb-4 grid grid-cols-2 gap-2 rounded-lg border border-zinc-200 bg-white p-1">
+              {providerList().map((provider) => (
+                <button
+                  key={provider.id}
+                  type="button"
+                  onClick={() => handleProviderChange(provider.id)}
+                  className={[
+                    "rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                    provider.id === selectedProviderId
+                      ? "bg-zinc-950 text-white"
+                      : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-950",
+                  ].join(" ")}
+                >
+                  {provider.displayName}
+                </button>
+              ))}
+            </div>
             <DropZone
               path={sourcePath}
+              title={selectedProvider.dropTitle}
+              helper={selectedProvider.dropHelper}
+              pickerFilterName={selectedProvider.pickerFilterName}
+              pickerExtensions={selectedProvider.sourceExtensions}
               onFileSelect={handleFileSelect}
               errorMsg={invokeError}
             />
@@ -903,11 +1185,61 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       <div className="flex-1 overflow-y-auto">
         <main className="mx-auto w-full max-w-2xl space-y-6 px-5 py-8">
           {filePill}
+          {selectedProviderId === "rfdetr" && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              {rfdetrInspectStatus === "needs_trust" && (
+                <div className="space-y-3">
+                  <p className="font-medium">Trusted checkpoint required</p>
+                  <p>RF-DETR checkpoint inspection loads local PyTorch checkpoint data. Use checkpoints from trusted sources only.</p>
+                  <Button size="sm" onClick={handleConfirmRfDetrTrust} disabled={!envInfo?.python_path}>
+                    Trust and inspect
+                  </Button>
+                </div>
+              )}
+              {rfdetrInspectStatus === "inspecting" && <p>Inspecting RF-DETR checkpoint...</p>}
+              {rfdetrInspectStatus === "detected" && rfdetrInspectResult && (
+                <p>Detected: <span className="font-mono">{rfdetrInspectResult.class_symbol}</span>{rfdetrInspectResult.is_legacy ? " (legacy)" : ""}</p>
+              )}
+              {rfdetrInspectStatus === "failed" && (
+                <div className="space-y-3">
+                  <p>{rfdetrInspectResult?.error ?? "RF-DETR inspection failed."}</p>
+                  <label className="block text-xs font-medium uppercase tracking-wide">Manual variant</label>
+                  <select
+                    value={rfdetrManualClassSymbol}
+                    onChange={(event) => {
+                      setRfDetrVariantMode("manual");
+                      setRfDetrManualClassSymbol(event.target.value);
+                    }}
+                    className="h-9 w-full rounded-md border border-amber-300 bg-white px-3 text-sm"
+                  >
+                    <option value="">Select RF-DETR variant</option>
+                    <optgroup label="Detection">
+                      <option value="RFDETRNano">RFDETRNano</option>
+                      <option value="RFDETRSmall">RFDETRSmall</option>
+                      <option value="RFDETRMedium">RFDETRMedium</option>
+                      <option value="RFDETRLarge">RFDETRLarge</option>
+                    </optgroup>
+                    <optgroup label="Detection legacy">
+                      <option value="RFDETRBase">RFDETRBase (legacy)</option>
+                    </optgroup>
+                    <optgroup label="Segmentation">
+                      <option value="RFDETRSegNano">RFDETRSegNano</option>
+                      <option value="RFDETRSegSmall">RFDETRSegSmall</option>
+                      <option value="RFDETRSegMedium">RFDETRSegMedium</option>
+                      <option value="RFDETRSegLarge">RFDETRSegLarge</option>
+                      <option value="RFDETRSegXLarge">RFDETRSegXLarge</option>
+                      <option value="RFDETRSeg2XLarge">RFDETRSeg2XLarge</option>
+                    </optgroup>
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
           <div>
             <h2 className="mb-3 text-sm font-medium uppercase text-zinc-400">
               Export Target
             </h2>
-            <RouteGrid onSelectRoute={handleActivateRoute} />
+            <RouteGrid routes={currentRoutes} onSelectRoute={handleActivateRoute} />
           </div>
         </main>
       </div>
@@ -921,12 +1253,13 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
             setInvokeError(null);
           }
         }}
+        provider={selectedProvider}
         route={selectedRoute}
         sourcePath={sourcePath}
         exportStatus={exportStatus}
         logLines={logLines}
         options={options}
-        onOptionsChange={setOptions}
+        onOptionsChange={(next) => setOptionsWithSource(next, "user")}
         onExport={handleExport}
         onStopExport={handleCancel}
         depResults={depResults ?? undefined}
@@ -936,6 +1269,22 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         installPhase={installPhase}
         missingPackageNames={missingPackageNames}
         onInstallAndExport={handleInstallAndExport}
+        outputDir={(() => {
+          const out = outputDirOverride.trim();
+          if (out) return out;
+          const sep = sourcePath.includes("/") ? "/" : "\\";
+          const lastSep = sourcePath.lastIndexOf(sep);
+          const parentDir = lastSep > 0 ? sourcePath.substring(0, lastSep) : "";
+          return parentDir ? `${parentDir}${sep}vision-export-studio-exports` : "";
+        })()}
+        rfdetrSummary={selectedProviderId === "rfdetr" ? {
+          variantMode: rfdetrVariantMode,
+          detectedClass: rfdetrInspectResult?.class_symbol ?? null,
+          selectedClass: rfdetrVariantMode === "manual" ? rfdetrManualClassSymbol : null,
+          trusted: rfdetrTrustConfirmedPath === sourcePath,
+          recommendedImgsz: rfdetrInspectResult?.recommended_imgsz ?? null,
+          patchSize: rfdetrInspectResult?.patch_size ?? null,
+        } : null}
       />
     </div>
   );
