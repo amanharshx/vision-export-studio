@@ -78,11 +78,7 @@ pub async fn inspect_rfdetr_checkpoint(
         .map_err(|e| format!("failed to run RF-DETR inspect helper: {}", e))?;
 
     let parsed = parse_inspect_stdout(&output.stdout)?;
-    if output.status.success() {
-        Ok(parsed)
-    } else if parsed.requires_plus {
-        Ok(parsed)
-    } else if parsed.error.is_some() {
+    if output.status.success() || parsed.requires_plus || parsed.error.is_some() {
         Ok(parsed)
     } else {
         Err(format!(
