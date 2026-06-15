@@ -90,6 +90,14 @@ export interface ExportOptions {
   chip: string;
 }
 
+export type ExportOptionsSource = "default" | "detected" | "user";
+
+export interface RouteOptionsState {
+  options: ExportOptions;
+  source: ExportOptionsSource;
+  sourcePath: string;
+}
+
 export type ExportStatus = "idle" | "starting" | "running" | "finished" | "failed" | "cancelled";
 
 export type RfDetrInspectStatus =

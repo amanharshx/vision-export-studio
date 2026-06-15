@@ -12,6 +12,7 @@ import type {
   ExportFinishedPayload,
   ExportLinePayload,
   ExportOptions,
+  ExportOptionsSource,
   ExportStatus,
   InstallFailedPayload,
   InstallFinishedPayload,
@@ -21,6 +22,7 @@ import type {
   RfDetrInspectResult,
   RfDetrInspectStatus,
   RfDetrVariantMode,
+  RouteOptionsState,
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -88,17 +90,22 @@ export function withRfDetrDetectedDefaults(
 }
 
 export function getRouteOptionsForOpen(
-  saved: ExportOptions | null,
+  saved: RouteOptionsState | null,
   routeId: string,
   providerId: ProviderId,
   inspect: RfDetrInspectResult | null,
-): ExportOptions {
-  if (saved) return saved;
-  return withRfDetrDetectedDefaults(
-    optionsForRoute(routeId),
-    providerId,
-    inspect,
-  );
+  sourcePath: string,
+): RouteOptionsState {
+  if (saved && saved.sourcePath === sourcePath) return saved;
+
+  const base = optionsForRoute(routeId);
+  const detected = withRfDetrDetectedDefaults(base, providerId, inspect);
+
+  return {
+    options: detected,
+    source: providerId === "rfdetr" && inspect?.success && inspect.recommended_imgsz ? "detected" : "default",
+    sourcePath,
+  };
 }
 
 function getInstallableMissingPackages(results: DepCheckResult[] | null): string[] {
@@ -128,15 +135,50 @@ function hasBlockingDependencies(results: DepCheckResult[] | null): boolean {
   return results.some((result) => result.status !== "ready" && result.status !== "warning");
 }
 
-export function shouldAutofillRfDetrImgsz(
-  prevImgsz: number,
-  lastAuto: { sourcePath: string; imgsz: number } | null,
-  fileAtInspect: string,
-): boolean {
-  if (!lastAuto) return true;
-  if (lastAuto.sourcePath !== fileAtInspect) return true;
-  if (prevImgsz === lastAuto.imgsz) return true;
-  return false;
+export function applyDetectedRouteOptions(
+  saved: RouteOptionsState | null,
+  routeId: string,
+  detectedImgsz: number,
+  currentSourcePath: string,
+): RouteOptionsState | null {
+  if (!saved || saved.sourcePath !== currentSourcePath) {
+    return {
+      options: { ...optionsForRoute(routeId), imgsz: detectedImgsz },
+      source: "detected",
+      sourcePath: currentSourcePath,
+    };
+  }
+  if (saved.source === "user") {
+    return null;
+  }
+  return {
+    options: { ...saved.options, imgsz: detectedImgsz },
+    source: "detected",
+    sourcePath: currentSourcePath,
+  };
+}
+
+export function applyDetectedRouteOptionsToProviderRoutes(
+  savedByRoute: Record<string, RouteOptionsState>,
+  providerId: ProviderId,
+  detectedImgsz: number,
+  currentSourcePath: string,
+): Record<string, RouteOptionsState> {
+  if (providerId !== "rfdetr") return savedByRoute;
+
+  const next = { ...savedByRoute };
+  for (const route of routesForProvider(providerId)) {
+    const updated = applyDetectedRouteOptions(
+      next[route.id] ?? null,
+      route.id,
+      detectedImgsz,
+      currentSourcePath,
+    );
+    if (updated) {
+      next[route.id] = updated;
+    }
+  }
+  return next;
 }
 
 function isRfDetrExportReady(
@@ -262,8 +304,21 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const [rfdetrVariantMode, setRfDetrVariantMode] = useState<RfDetrVariantMode>("auto");
   const [rfdetrManualClassSymbol, setRfDetrManualClassSymbol] = useState("");
   const rfdetrInspectRequestRef = useRef(0);
-  const rfdetrAutofillRef = useRef<{ sourcePath: string; imgsz: number } | null>(null);
-  const routeOptionsRef = useRef<Record<string, ExportOptions>>({});
+  const routeOptionsRef = useRef<Record<string, RouteOptionsState>>({});
+
+  const setOptionsWithSource = useCallback(
+    (next: ExportOptions, optsSource: ExportOptionsSource) => {
+      setOptions(next);
+      if (selectedRouteId) {
+        routeOptionsRef.current[selectedRouteId] = {
+          options: next,
+          source: optsSource,
+          sourcePath,
+        };
+      }
+    },
+    [selectedRouteId, sourcePath],
+  );
 
   const missingPackageNames = useMemo(() => {
     return getInstallableMissingPackages(depResults);
@@ -401,11 +456,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       for (const ul of unlisteners) ul();
     };
   }, []);
-
-  useEffect(() => {
-    if (!selectedRouteId) return;
-    routeOptionsRef.current[selectedRouteId] = options;
-  }, [selectedRouteId, options]);
 
   useEffect(() => {
     routeOptionsRef.current = {};
@@ -743,15 +793,20 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       setRfDetrInspectStatus(result.success ? "detected" : "failed");
       if (result.success && result.recommended_imgsz) {
         const recommended = result.recommended_imgsz;
-        const fileAtInspect = sourcePath;
+        const nextRouteOptions = applyDetectedRouteOptionsToProviderRoutes(
+          routeOptionsRef.current,
+          "rfdetr",
+          recommended,
+          sourcePath,
+        );
+        routeOptionsRef.current = nextRouteOptions;
 
-        setOptions((prev) => {
-          if (shouldAutofillRfDetrImgsz(prev.imgsz, rfdetrAutofillRef.current, fileAtInspect)) {
-            rfdetrAutofillRef.current = { sourcePath: fileAtInspect, imgsz: recommended };
-            return { ...prev, imgsz: recommended };
+        if (selectedRouteId) {
+          const selectedState = nextRouteOptions[selectedRouteId];
+          if (selectedState && selectedState.source === "detected") {
+            setOptions(selectedState.options);
           }
-          return prev;
-        });
+        }
       }
     } catch (error) {
       if (rfdetrInspectRequestRef.current !== requestId) return;
@@ -776,9 +831,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     setSelectedRouteId(routeId);
 
     const saved = routeOptionsRef.current[routeId] ?? null;
-    setOptions(
-      getRouteOptionsForOpen(saved, routeId, selectedProvider.id, rfdetrInspectResult),
-    );
+    const routeState = getRouteOptionsForOpen(saved, routeId, selectedProvider.id, rfdetrInspectResult, sourcePath);
+    setOptions(routeState.options);
+    routeOptionsRef.current[routeId] = routeState;
     setLogLines([]);
     setInvokeError(null);
     setExportStatus("idle");
@@ -1204,7 +1259,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         exportStatus={exportStatus}
         logLines={logLines}
         options={options}
-        onOptionsChange={setOptions}
+        onOptionsChange={(next) => setOptionsWithSource(next, "user")}
         onExport={handleExport}
         onStopExport={handleCancel}
         depResults={depResults ?? undefined}
