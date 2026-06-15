@@ -331,14 +331,6 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
                 install_hint: "Install NVIDIA TensorRT and ensure trtexec is on PATH.",
             }],
         }),
-        "rfdetr.pth.tflite" => Some(RouteDeps {
-            pip: &[PipDep {
-                package_name: "rfdetr",
-                install_hint: "pip install \"rfdetr[onnx,tflite]\"",
-                optional: false,
-            }],
-            sys: &[],
-        }),
         _ => None,
     }
 }
@@ -435,14 +427,6 @@ pub async fn check_dependencies(
             "import importlib.util; ok = importlib.util.find_spec('rfdetr') is not None and importlib.util.find_spec('onnx') is not None; print(ok)",
             "pip install \"rfdetr[onnx]\"",
             "rfdetr[onnx]",
-        ));
-    } else if route_id == "rfdetr.pth.tflite" {
-        results.push(check_python_probe_dep(
-            &python_path,
-            "rfdetr[onnx,tflite]",
-            "import importlib.util; mods = ['rfdetr', 'onnx', 'onnx2tf', 'ai_edge_litert']; print(all(importlib.util.find_spec(m) is not None for m in mods))",
-            "pip install \"rfdetr[onnx,tflite]\"",
-            "rfdetr[onnx,tflite]",
         ));
     } else {
         for dep in deps.pip {
@@ -772,12 +756,8 @@ mod tests {
     }
 
     #[test]
-    fn rfdetr_tflite_route_uses_tflite_extra_hint() {
-        let deps = route_deps("rfdetr.pth.tflite").expect("route deps");
-        assert_eq!(
-            deps.pip[0].install_hint,
-            "pip install \"rfdetr[onnx,tflite]\""
-        );
+    fn rfdetr_tflite_route_is_unknown() {
+        assert!(route_deps("rfdetr.pth.tflite").is_none());
     }
 
     #[test]

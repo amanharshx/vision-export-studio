@@ -61,52 +61,161 @@ def class_size(class_symbol):
     return token.replace("XLarge", "xlarge").replace("2XLarge", "2xlarge").lower()
 
 
-def infer_native_export_shape(checkpoint_path, model):
+def load_checkpoint(checkpoint_path):
+    import torch
+
+    return torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+
+def resolve_model_class_symbol(checkpoint):
+    if not isinstance(checkpoint, dict):
+        return None
+
+    model_name = checkpoint.get("model_name")
+    if isinstance(model_name, str) and model_name:
+        return model_name
+
+    args = checkpoint.get("args")
+    if isinstance(args, dict):
+        for key in ("model_name", "model_type", "variant", "class_name"):
+            value = args.get(key)
+            if isinstance(value, str) and value:
+                return value
+
+    return None
+
+
+def load_model_for_inspect(checkpoint_path, checkpoint=None):
+    module = __import__("rfdetr", fromlist=["from_checkpoint"])
+    from_checkpoint = getattr(module, "from_checkpoint", None)
+    if callable(from_checkpoint):
+        return from_checkpoint(checkpoint_path)
+
+    checkpoint = checkpoint if checkpoint is not None else load_checkpoint(checkpoint_path)
+    class_symbol = resolve_model_class_symbol(checkpoint)
+    if not class_symbol:
+        raise RuntimeError("unable to resolve RF-DETR class from checkpoint metadata")
+
+    model_class = import_class(class_symbol)
+    return model_class(pretrain_weights=checkpoint_path)
+
+
+def resolve_patch_size(model):
+    model_config = getattr(model, "model_config", None)
+    patch_size = getattr(model_config, "patch_size", None)
+    if patch_size is None:
+        patch_size = 16
+    return int(patch_size)
+
+
+def infer_native_export_shape(checkpoint_path, model, checkpoint=None):
+    import math
+
+    # primary: model.model_config
     try:
-        import torch
-        import math
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        cfg = model.model_config
+        resolution = int(cfg.resolution)
+        patch_size = int(cfg.patch_size)
+        if resolution > 0 and patch_size > 0:
+            token_grid = resolution // patch_size
+            print(
+                "[rfdetr-inspect] source=model_config resolution={} patch_size={} token_grid={}".format(
+                    resolution, patch_size, token_grid
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+            return {
+                "recommended_imgsz": resolution,
+                "patch_size": patch_size,
+                "token_grid": token_grid,
+            }
+    except Exception:
+        pass
+
+    # fallback: checkpoint args / position_embeddings
+    try:
+        checkpoint = checkpoint if checkpoint is not None else load_checkpoint(checkpoint_path)
+
+        # try args
         args = checkpoint.get("args")
-        if isinstance(args, dict):
-            for key in ("imgsz", "img_size", "image_size"):
-                if key in args:
-                    imgsz = int(args[key])
-                    return {"recommended_imgsz": imgsz, "patch_size": 16, "token_grid": imgsz // 16}
-        state = checkpoint.get("state_dict") if isinstance(checkpoint.get("state_dict"), dict) else checkpoint
-        pos_emb_key = "model.backbone.0.encoder.encoder.embeddings.position_embeddings"
-        pos_emb = state.get(pos_emb_key, None) if isinstance(state, dict) else None
+        if args is not None:
+            resolution = None
+            if hasattr(args, "resolution"):
+                resolution = int(args.resolution)
+            elif isinstance(args, dict):
+                if "resolution" in args:
+                    resolution = int(args["resolution"])
+                else:
+                    for key in ("imgsz", "img_size", "image_size"):
+                        if key in args:
+                            resolution = int(args[key])
+                            break
+            if resolution is not None:
+                patch_size = resolve_patch_size(model)
+                print(
+                    "[rfdetr-inspect] source=args resolution={} patch_size={} token_grid={}".format(
+                        resolution,
+                        patch_size,
+                        resolution // patch_size,
+                    ),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return {
+                    "recommended_imgsz": resolution,
+                    "patch_size": patch_size,
+                    "token_grid": resolution // patch_size,
+                }
+
+        # try position embeddings
+        state_dict = checkpoint.get("state_dict") if isinstance(checkpoint.get("state_dict"), dict) else None
+        model_dict = checkpoint.get("model") if isinstance(checkpoint.get("model"), dict) else None
+
+        pos_emb = None
+        for state, key in (
+            (model_dict, "backbone.0.encoder.encoder.embeddings.position_embeddings"),
+            (state_dict, "model.backbone.0.encoder.encoder.embeddings.position_embeddings"),
+        ):
+            if isinstance(state, dict) and key in state:
+                pos_emb = state[key]
+                break
+
         if pos_emb is not None:
             num_tokens = int(pos_emb.shape[1]) - 1
             tokens = int(math.isqrt(num_tokens))
-        else:
-            tokens = None
-        patch_size = getattr(model.backbone, "patch_size", None) if hasattr(model, "backbone") else None
-        if patch_size is None:
-            patch_size = 16
-        patch_size = int(patch_size)
-        if tokens is not None:
+            patch_size = resolve_patch_size(model)
             recommended = tokens * patch_size
-        else:
-            recommended = None
-        return {
-            "recommended_imgsz": recommended,
-            "patch_size": patch_size,
-            "token_grid": tokens,
-        }
+            print(
+                "[rfdetr-inspect] source=position_embeddings tokens={} patch_size={} recommended={}".format(
+                    tokens,
+                    patch_size,
+                    recommended,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+            return {
+                "recommended_imgsz": recommended,
+                "patch_size": patch_size,
+                "token_grid": tokens,
+            }
     except Exception:
-        return {"recommended_imgsz": None, "patch_size": None, "token_grid": None}
+        pass
+
+    print("[rfdetr-inspect] source=failed", file=sys.stderr, flush=True)
+    return {"recommended_imgsz": None, "patch_size": None, "token_grid": None}
 
 
 def inspect_checkpoint(checkpoint_path):
     try:
-        from rfdetr import from_checkpoint
-
-        model = from_checkpoint(checkpoint_path)
+        checkpoint = load_checkpoint(checkpoint_path)
+        model = load_model_for_inspect(checkpoint_path, checkpoint)
         class_symbol = model.__class__.__name__
         requires_plus = class_symbol in PLUS_ONLY_CLASSES
         family = class_family(class_symbol)
         success = family is not None and not requires_plus
-        native = infer_native_export_shape(checkpoint_path, model)
+        native = infer_native_export_shape(checkpoint_path, model, checkpoint)
         emit({
             "success": success,
             "class_symbol": class_symbol,
@@ -141,41 +250,71 @@ def resolve_model(args):
     if args.variant_mode == "manual":
         model_class = import_class(args.manual_class_symbol)
         return model_class(pretrain_weights=args.checkpoint)
-    from rfdetr import from_checkpoint
-    return from_checkpoint(args.checkpoint)
+    return load_model_for_inspect(args.checkpoint)
+
+
+def resolve_exported_onnx(output_dir, exported):
+    """Locate the ONNX file produced by ``model.export(format="onnx")``.
+
+    rf-detr's output filename is version-dependent: 1.6.x writes
+    ``inference_model.onnx`` while 1.7.x writes ``rfdetr-<variant>.onnx``
+    (PR #910). Older ``export()`` returns ``None``; newer returns the ``Path``.
+    Resolve in this order so TensorRT conversion finds the right file on any
+    version, and never picks the GridSample-patched intermediate
+    (``*_gs_patched.onnx``) used by the TFLite path.
+    """
+    # 1) Trust the return value when it is a real .onnx path.
+    if exported:
+        candidate = str(exported)
+        if candidate.endswith(".onnx") and os.path.isfile(candidate):
+            return candidate
+
+    # 2) Canonical 1.6.x name.
+    legacy = os.path.join(output_dir, "inference_model.onnx")
+    if os.path.isfile(legacy):
+        return legacy
+
+    # 3) Any .onnx in the dir, preferring non-_gs_patched files.
+    import glob
+
+    onnx_files = sorted(glob.glob(os.path.join(output_dir, "*.onnx")))
+    preferred = [f for f in onnx_files if "_gs_patched" not in os.path.basename(f)]
+    pool = preferred or onnx_files
+    if pool:
+        return pool[0]
+
+    raise RuntimeError(
+        f"could not locate an exported ONNX file for TensorRT conversion in {output_dir}"
+    )
 
 
 def export_checkpoint(args):
     os.makedirs(args.output_dir, exist_ok=True)
     try:
+        if args.route_id not in ("rfdetr.pth.onnx", "rfdetr.pth.engine"):
+            raise RuntimeError(f"unsupported RF-DETR route: {args.route_id}")
+
         model = resolve_model(args)
         shape = (args.imgsz, args.imgsz)
-        if args.route_id in ("rfdetr.pth.onnx", "rfdetr.pth.engine"):
-            kwargs = {
-                "format": "onnx",
-                "output_dir": args.output_dir,
-                "shape": shape,
-                "batch_size": args.batch,
-            }
-            if args.opset is not None:
-                kwargs["opset_version"] = args.opset
-            model.export(**kwargs)
-        elif args.route_id == "rfdetr.pth.tflite":
-            model.export(
-                format="tflite",
-                output_dir=args.output_dir,
-                shape=shape,
-                batch_size=args.batch,
-            )
-        else:
-            raise RuntimeError(f"unsupported RF-DETR route: {args.route_id}")
+        exported = None
+        kwargs = {
+            "format": "onnx",
+            "output_dir": args.output_dir,
+            "shape": shape,
+            "batch_size": args.batch,
+        }
+        if args.opset is not None:
+            kwargs["opset_version"] = args.opset
+        exported = model.export(**kwargs)
 
         if args.route_id == "rfdetr.pth.engine":
             try:
                 from rfdetr.export._tensorrt import trtexec
             except Exception as exc:
                 raise RuntimeError(f"RF-DETR TensorRT wrapper unavailable: {exc}") from exc
-            trtexec(os.path.join(args.output_dir, "inference_model.onnx"), Namespace(verbose=True, profile=False, dry_run=False))
+            onnx_path = resolve_exported_onnx(args.output_dir, exported)
+            print(f"[rfdetr-export] TensorRT input ONNX: {onnx_path}", file=sys.stderr, flush=True)
+            trtexec(onnx_path, Namespace(verbose=True, profile=False, dry_run=False))
 
         return 0
     except Exception as exc:

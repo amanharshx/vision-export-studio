@@ -72,49 +72,29 @@ pub fn build_command(
 }
 
 fn confirm_rfdetr_artifacts(route_id: &str, output_dir: &str) -> Result<bool, String> {
-    let rule =
-        rfdetr_artifact_rule(route_id).ok_or_else(|| format!("unknown route: {}", route_id))?;
+    let RfDetrArtifactRule::Named {
+        extension,
+        prefix,
+        exact,
+    } = rfdetr_artifact_rule(route_id).ok_or_else(|| format!("unknown route: {}", route_id))?;
     let output = Path::new(output_dir);
-    match rule {
-        RfDetrArtifactRule::Named {
-            extension,
-            prefix,
-            exact,
-        } => {
-            let exists = std::fs::read_dir(output)
-                .map_err(|e| format!("failed to read output dir: {}", e))?
-                .filter_map(|entry| entry.ok())
-                .filter_map(|entry| {
-                    let name = entry.file_name();
-                    let name = name.to_str()?;
-                    let stem = name.strip_suffix(extension)?;
-                    Some(stem.to_owned())
-                })
-                .any(|ref stem| stem == exact || stem.starts_with(prefix));
-            if exists {
-                Ok(true)
-            } else {
-                Err(format!(
-                    "no matching {} artifact found in output directory",
-                    extension
-                ))
-            }
-        }
-        RfDetrArtifactRule::ExactList(names) => {
-            let missing: Vec<&str> = names
-                .iter()
-                .copied()
-                .filter(|name| !output.join(name).exists())
-                .collect();
-            if missing.is_empty() {
-                Ok(true)
-            } else {
-                Err(format!(
-                    "RF-DETR export missing expected artifact(s): {}",
-                    missing.join(", ")
-                ))
-            }
-        }
+    let exists = std::fs::read_dir(output)
+        .map_err(|e| format!("failed to read output dir: {}", e))?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let name = name.to_str()?;
+            let stem = name.strip_suffix(extension)?;
+            Some(stem.to_owned())
+        })
+        .any(|ref stem| stem == exact || stem.starts_with(prefix));
+    if exists {
+        Ok(true)
+    } else {
+        Err(format!(
+            "no matching {} artifact found in output directory",
+            extension
+        ))
     }
 }
 
@@ -150,8 +130,11 @@ pub fn snapshot_rfdetr_artifacts(
     route_id: &str,
     output_dir: &str,
 ) -> Result<Vec<ArtifactFingerprint>, String> {
-    let rule =
-        rfdetr_artifact_rule(route_id).ok_or_else(|| format!("unknown route: {}", route_id))?;
+    let RfDetrArtifactRule::Named {
+        extension,
+        prefix,
+        exact,
+    } = rfdetr_artifact_rule(route_id).ok_or_else(|| format!("unknown route: {}", route_id))?;
     let output = Path::new(output_dir);
     let mut fingerprints = Vec::new();
 
@@ -168,19 +151,10 @@ pub fn snapshot_rfdetr_artifacts(
         }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-        let matches = match &rule {
-            RfDetrArtifactRule::Named {
-                extension,
-                prefix,
-                exact,
-            } => {
-                if let Some(stem) = name.strip_suffix(extension) {
-                    stem == *exact || stem.starts_with(prefix)
-                } else {
-                    false
-                }
-            }
-            RfDetrArtifactRule::ExactList(names) => names.contains(&name),
+        let matches = if let Some(stem) = name.strip_suffix(extension) {
+            stem == exact || stem.starts_with(prefix)
+        } else {
+            false
         };
 
         if matches {
@@ -306,19 +280,6 @@ mod tests {
     }
 
     #[test]
-    fn confirm_artifacts_requires_tflite_fp32_and_fp16() {
-        let root = std::env::temp_dir().join(format!("rfdetr-artifacts-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).expect("create temp dir");
-        std::fs::write(root.join("inference_model_float32.tflite"), b"fp32").expect("write fp32");
-        let result = confirm_rfdetr_artifacts("rfdetr.pth.tflite", root.to_str().expect("path"));
-        assert!(result.is_err());
-        std::fs::write(root.join("inference_model_float16.tflite"), b"fp16").expect("write fp16");
-        let result = confirm_rfdetr_artifacts("rfdetr.pth.tflite", root.to_str().expect("path"));
-        assert_eq!(result, Ok(true));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
     fn confirm_artifacts_accepts_variant_named_onnx_file() {
         let root = std::env::temp_dir().join(format!("rfdetr-onnx-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("create temp dir");
@@ -423,18 +384,6 @@ mod tests {
             .expect("snapshot");
         assert_eq!(snap.len(), 1);
         assert_eq!(snap[0].name, "rfdetr-large.engine");
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn snapshot_captures_tflite_files() {
-        let root = std::env::temp_dir().join(format!("rfdetr-tf-snap-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).expect("create temp dir");
-        std::fs::write(root.join("inference_model_float32.tflite"), b"fp32").expect("write fp32");
-        std::fs::write(root.join("inference_model_float16.tflite"), b"fp16").expect("write fp16");
-        let snap = snapshot_rfdetr_artifacts("rfdetr.pth.tflite", root.to_str().expect("path"))
-            .expect("snapshot");
-        assert_eq!(snap.len(), 2);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -544,77 +493,6 @@ mod tests {
     }
 
     #[test]
-    fn with_snapshot_tflite_requires_both_files() {
-        let root =
-            std::env::temp_dir().join(format!("rfdetr-tflite-miss-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).expect("create temp dir");
-        let before: Vec<ArtifactFingerprint> = vec![];
-        std::fs::write(root.join("inference_model_float32.tflite"), b"fp32").expect("write fp32");
-        let req = make_request("rfdetr.pth.tflite", root.to_str().expect("path"));
-        let status = confirm_artifacts_with_snapshot(&req, &before);
-        assert!(!status.artifact_moved, "tflite should require both files");
-        assert!(status.artifact_warning.is_some());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn with_snapshot_tflite_accepts_both_files_new() {
-        let root = std::env::temp_dir().join(format!("rfdetr-tflite-new-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).expect("create temp dir");
-        let before: Vec<ArtifactFingerprint> = vec![];
-        std::fs::write(root.join("inference_model_float32.tflite"), b"fp32").expect("write fp32");
-        std::fs::write(root.join("inference_model_float16.tflite"), b"fp16").expect("write fp16");
-        let req = make_request("rfdetr.pth.tflite", root.to_str().expect("path"));
-        let status = confirm_artifacts_with_snapshot(&req, &before);
-        assert!(
-            status.artifact_moved,
-            "both tflite files should be accepted"
-        );
-        assert!(status.artifact_warning.is_none());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn with_snapshot_tflite_rejects_stale_both_files() {
-        let root =
-            std::env::temp_dir().join(format!("rfdetr-tflite-stale-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).expect("create temp dir");
-        std::fs::write(root.join("inference_model_float32.tflite"), b"fp32").expect("write fp32");
-        std::fs::write(root.join("inference_model_float16.tflite"), b"fp16").expect("write fp16");
-
-        let before = snapshot_rfdetr_artifacts("rfdetr.pth.tflite", root.to_str().expect("path"))
-            .expect("snapshot");
-        let req = make_request("rfdetr.pth.tflite", root.to_str().expect("path"));
-        let status = confirm_artifacts_with_snapshot(&req, &before);
-        assert!(
-            !status.artifact_moved,
-            "stale tflite files should be rejected"
-        );
-        assert!(status.artifact_warning.is_some());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn with_snapshot_tflite_accepts_one_updated_file() {
-        let root = std::env::temp_dir().join(format!("rfdetr-tflite-upd-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).expect("create temp dir");
-        std::fs::write(root.join("inference_model_float32.tflite"), b"fp32-v1")
-            .expect("write fp32");
-        std::fs::write(root.join("inference_model_float16.tflite"), b"fp16").expect("write fp16");
-
-        let before = snapshot_rfdetr_artifacts("rfdetr.pth.tflite", root.to_str().expect("path"))
-            .expect("snapshot");
-        std::fs::write(root.join("inference_model_float32.tflite"), b"fp32-v2")
-            .expect("write fp32 v2");
-
-        let req = make_request("rfdetr.pth.tflite", root.to_str().expect("path"));
-        let status = confirm_artifacts_with_snapshot(&req, &before);
-        assert!(status.artifact_moved, "updated tflite should be accepted");
-        assert!(status.artifact_warning.is_none());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
     fn with_snapshot_accepts_same_size_onnx_rewrite() {
         let root =
             std::env::temp_dir().join(format!("rfdetr-samesz-onnx-{}", uuid::Uuid::new_v4()));
@@ -652,31 +530,6 @@ mod tests {
         assert!(
             status.artifact_moved,
             "same-size engine rewrite should be detected via digest"
-        );
-        assert!(status.artifact_warning.is_none());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn with_snapshot_accepts_same_size_tflite_rewrite() {
-        let root = std::env::temp_dir().join(format!("rfdetr-samesz-tf-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).expect("create temp dir");
-        std::fs::write(root.join("inference_model_float32.tflite"), b"AAAA")
-            .expect("write fp32 v1");
-        std::fs::write(root.join("inference_model_float16.tflite"), b"AAAA")
-            .expect("write fp16 v1");
-
-        let before = snapshot_rfdetr_artifacts("rfdetr.pth.tflite", root.to_str().expect("path"))
-            .expect("snapshot");
-        // Rewrite fp32 to same size but different content
-        std::fs::write(root.join("inference_model_float32.tflite"), b"BBBB")
-            .expect("write fp32 v2");
-
-        let req = make_request("rfdetr.pth.tflite", root.to_str().expect("path"));
-        let status = confirm_artifacts_with_snapshot(&req, &before);
-        assert!(
-            status.artifact_moved,
-            "same-size tflite rewrite should be detected via digest"
         );
         assert!(status.artifact_warning.is_none());
         let _ = std::fs::remove_dir_all(root);

@@ -178,9 +178,6 @@ export function ExportModal({
                   : ""}
               </p>
               <p className="mt-1">Use checkpoints from trusted sources only. Local checkpoint loading may execute Python pickle data.</p>
-              {route.id === "rfdetr.pth.tflite" && (
-                <p className="mt-1">TFLite is experimental. Validate FP32 and FP16 outputs before deployment.</p>
-              )}
             </div>
           )}
         </DialogHeader>

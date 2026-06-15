@@ -36,7 +36,7 @@ pub const ULTRALYTICS_ROUTES: &[&str] = &[
     "ultralytics.pt.pb",
 ];
 
-pub const RFDETR_ROUTES: &[&str] = &["rfdetr.pth.onnx", "rfdetr.pth.engine", "rfdetr.pth.tflite"];
+pub const RFDETR_ROUTES: &[&str] = &["rfdetr.pth.onnx", "rfdetr.pth.engine"];
 
 pub fn validate_provider_route(provider_id: &str, route_id: &str) -> Result<ProviderId, String> {
     let provider = ProviderId::parse(provider_id)?;
@@ -71,7 +71,6 @@ pub fn validate_source_extension(provider: ProviderId, source_path: &str) -> Res
 }
 
 pub enum RfDetrArtifactRule {
-    ExactList(&'static [&'static str]),
     Named {
         extension: &'static str,
         prefix: &'static str,
@@ -91,10 +90,6 @@ pub fn rfdetr_artifact_rule(route_id: &str) -> Option<RfDetrArtifactRule> {
             prefix: "rfdetr-",
             exact: "inference_model",
         }),
-        "rfdetr.pth.tflite" => Some(RfDetrArtifactRule::ExactList(&[
-            "inference_model_float32.tflite",
-            "inference_model_float16.tflite",
-        ])),
         _ => None,
     }
 }
@@ -133,6 +128,7 @@ mod tests {
     fn validates_provider_route_match() {
         assert!(validate_provider_route("ultralytics", "ultralytics.pt.onnx").is_ok());
         assert!(validate_provider_route("rfdetr", "rfdetr.pth.onnx").is_ok());
+        assert!(validate_provider_route("rfdetr", "rfdetr.pth.tflite").is_err());
         assert!(validate_provider_route("rfdetr", "ultralytics.pt.onnx").is_err());
     }
 
@@ -153,14 +149,6 @@ mod tests {
         assert!(validate_source_extension(ProviderId::Ultralytics, "/tmp/best.pth").is_err());
         assert!(validate_source_extension(ProviderId::RfDetr, "/tmp/checkpoint.pth").is_ok());
         assert!(validate_source_extension(ProviderId::RfDetr, "/tmp/checkpoint.pt").is_err());
-    }
-
-    #[test]
-    fn rfdetr_tflite_expects_exact_list_rule() {
-        assert!(matches!(
-            rfdetr_artifact_rule("rfdetr.pth.tflite"),
-            Some(RfDetrArtifactRule::ExactList(_))
-        ));
     }
 
     #[test]

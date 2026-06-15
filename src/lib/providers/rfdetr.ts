@@ -51,15 +51,4 @@ export const rfdetrRoutes: RouteSpec[] = [
     notes: "Exports ONNX first, then compiles TensorRT engine for NVIDIA deployment hardware.",
     unsupportedNote: "TensorRT requires an NVIDIA GPU. NVIDIA does not support macOS.",
   }),
-  rfdetrRoute({
-    id: "rfdetr.pth.tflite",
-    targetFormat: "tflite",
-    title: "TFLite Experimental",
-    displayPath: "checkpoint.pth -> inference_model_float32.tflite + inference_model_float16.tflite",
-    pipDeps: [{ packageName: "rfdetr[onnx,tflite]", installHint: 'pip install "rfdetr[onnx,tflite]"' }],
-    oneWay: true,
-    lossy: true,
-    experimental: true,
-    notes: "Experimental RF-DETR route. Validate FP32 and FP16 outputs carefully before deployment.",
-  }),
 ];

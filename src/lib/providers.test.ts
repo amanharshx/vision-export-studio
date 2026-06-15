@@ -1,7 +1,14 @@
 // @ts-expect-error Bun provides this module at test runtime.
 import { describe, expect, test } from "bun:test";
-import { shouldAutofillRfDetrImgsz, withRfDetrDetectedDefaults, getRouteOptionsForOpen } from "@/features/export/export-workspace";
-import type { RfDetrInspectResult } from "@/lib/types";
+import { renderToStaticMarkup } from "react-dom/server";
+import { createElement, Fragment } from "react";
+import {
+  withRfDetrDetectedDefaults,
+  getRouteOptionsForOpen,
+  applyDetectedRouteOptions,
+  applyDetectedRouteOptionsToProviderRoutes,
+} from "@/features/export/export-workspace";
+import type { RfDetrInspectResult, RouteOptionsState } from "@/lib/types";
 
 import {
   defaultRouteForProvider,
@@ -19,7 +26,6 @@ describe("provider route registry", () => {
     expect(routesForProvider("rfdetr").map((route) => route.id)).toEqual([
       "rfdetr.pth.onnx",
       "rfdetr.pth.engine",
-      "rfdetr.pth.tflite",
     ]);
   });
 
@@ -47,26 +53,21 @@ describe("provider route registry", () => {
   test("Ultralytics routes keep Ultralytics base dependency", () => {
     expect(providers.ultralytics.baseDeps.map((dep) => dep.packageName)).toContain("ultralytics");
   });
-});
 
-describe("shouldAutofillRfDetrImgsz", () => {
-  test("autofills when no prior autofill", () => {
-    expect(shouldAutofillRfDetrImgsz(640, null, "/tmp/model.pth")).toBe(true);
-  });
+  test("RF-DETR rendered route list does not show TFLite UI", () => {
+    const markup = renderToStaticMarkup(
+      createElement(
+        Fragment,
+        null,
+        ...routesForProvider("rfdetr").map((route) =>
+          createElement("button", { key: route.id }, route.title),
+        ),
+      ),
+    );
 
-  test("autofills when file changes", () => {
-    const lastAuto = { sourcePath: "/tmp/old.pth", imgsz: 512 };
-    expect(shouldAutofillRfDetrImgsz(640, lastAuto, "/tmp/new.pth")).toBe(true);
-  });
-
-  test("autofills when current value still equals last autofilled value", () => {
-    const lastAuto = { sourcePath: "/tmp/model.pth", imgsz: 512 };
-    expect(shouldAutofillRfDetrImgsz(512, lastAuto, "/tmp/model.pth")).toBe(true);
-  });
-
-  test("does not autofill when user overrode away from autofilled value", () => {
-    const lastAuto = { sourcePath: "/tmp/model.pth", imgsz: 512 };
-    expect(shouldAutofillRfDetrImgsz(640, lastAuto, "/tmp/model.pth")).toBe(false);
+    expect(markup).toContain("ONNX");
+    expect(markup).toContain("TensorRT via ONNX");
+    expect(markup).not.toContain("TFLite");
   });
 });
 
@@ -147,20 +148,136 @@ describe("withRfDetrDetectedDefaults", () => {
 });
 
 describe("getRouteOptionsForOpen", () => {
+  const sourcePath = "/tmp/model.pth";
+
   test("returns detected defaults when no saved options", () => {
-    const result = getRouteOptionsForOpen(null, "rfdetr.pth.onnx", "rfdetr", rfdInspect512);
-    expect(result.imgsz).toBe(512);
+    const result = getRouteOptionsForOpen(null, "rfdetr.pth.onnx", "rfdetr", rfdInspect512, sourcePath);
+    expect(result.options.imgsz).toBe(512);
+    expect(result.source).toBe("detected");
+    expect(result.sourcePath).toBe(sourcePath);
   });
 
-  test("returns saved options when present, ignoring detected defaults", () => {
-    const saved = { ...defaultOpts, imgsz: 640, half: true };
-    const result = getRouteOptionsForOpen(saved, "rfdetr.pth.onnx", "rfdetr", rfdInspect512);
-    expect(result.imgsz).toBe(640);
-    expect(result.half).toBe(true);
+  test("returns saved options when sourcePath matches and source is user", () => {
+    const saved: RouteOptionsState = {
+      options: { ...defaultOpts, imgsz: 640, half: true },
+      source: "user",
+      sourcePath,
+    };
+    const result = getRouteOptionsForOpen(saved, "rfdetr.pth.onnx", "rfdetr", rfdInspect512, sourcePath);
+    expect(result).toBe(saved);
+  });
+
+  test("ignores saved options when sourcePath differs", () => {
+    const saved: RouteOptionsState = {
+      options: { ...defaultOpts, imgsz: 640 },
+      source: "user",
+      sourcePath: "/tmp/other.pth",
+    };
+    const result = getRouteOptionsForOpen(saved, "rfdetr.pth.onnx", "rfdetr", rfdInspect512, sourcePath);
+    expect(result.options.imgsz).toBe(512);
+    expect(result.source).toBe("detected");
+    expect(result.sourcePath).toBe(sourcePath);
   });
 
   test("returns base defaults when no saved and no inspect for non-RF-DETR", () => {
-    const result = getRouteOptionsForOpen(null, "ultralytics.pt.onnx", "ultralytics", null);
-    expect(result.imgsz).toBe(640);
+    const result = getRouteOptionsForOpen(null, "ultralytics.pt.onnx", "ultralytics", null, sourcePath);
+    expect(result.options.imgsz).toBe(640);
+    expect(result.source).toBe("default");
+  });
+});
+
+describe("applyDetectedRouteOptions", () => {
+  const sourcePath = "/tmp/model.pth";
+  const routeId = "rfdetr.pth.onnx";
+
+  test("replaces default saved state with detected imgsz", () => {
+    const saved: RouteOptionsState = {
+      options: { ...defaultOpts, imgsz: 640 },
+      source: "default",
+      sourcePath,
+    };
+    const result = applyDetectedRouteOptions(saved, routeId, 512, sourcePath);
+    expect(result).not.toBeNull();
+    expect(result!.options.imgsz).toBe(512);
+    expect(result!.source).toBe("detected");
+  });
+
+  test("refreshes detected saved state with new detected imgsz", () => {
+    const saved: RouteOptionsState = {
+      options: { ...defaultOpts, imgsz: 512, half: true },
+      source: "detected",
+      sourcePath,
+    };
+    const result = applyDetectedRouteOptions(saved, routeId, 640, sourcePath);
+    expect(result).not.toBeNull();
+    expect(result!.options.imgsz).toBe(640);
+    expect(result!.options.half).toBe(true);
+    expect(result!.source).toBe("detected");
+  });
+
+  test("preserves user saved state", () => {
+    const saved: RouteOptionsState = {
+      options: { ...defaultOpts, imgsz: 640, half: true },
+      source: "user",
+      sourcePath,
+    };
+    const result = applyDetectedRouteOptions(saved, routeId, 512, sourcePath);
+    expect(result).toBeNull();
+  });
+
+  test("creates fresh detected state when no saved state exists", () => {
+    const result = applyDetectedRouteOptions(null, routeId, 512, sourcePath);
+    expect(result).not.toBeNull();
+    expect(result!.options.imgsz).toBe(512);
+    expect(result!.source).toBe("detected");
+    expect(result!.sourcePath).toBe(sourcePath);
+  });
+
+  test("creates fresh detected state when sourcePath differs", () => {
+    const saved: RouteOptionsState = {
+      options: { ...defaultOpts, imgsz: 640 },
+      source: "user",
+      sourcePath: "/tmp/other.pth",
+    };
+    const result = applyDetectedRouteOptions(saved, routeId, 512, sourcePath);
+    expect(result).not.toBeNull();
+    expect(result!.options.imgsz).toBe(512);
+    expect(result!.source).toBe("detected");
+    expect(result!.sourcePath).toBe(sourcePath);
+  });
+});
+
+describe("applyDetectedRouteOptionsToProviderRoutes", () => {
+  const sourcePath = "/tmp/model.pth";
+
+  test("fans out detected imgsz across RF-DETR routes while preserving user state", () => {
+    const result = applyDetectedRouteOptionsToProviderRoutes(
+      {
+        "rfdetr.pth.onnx": {
+          options: { ...defaultOpts, imgsz: 640 },
+          source: "default",
+          sourcePath,
+        },
+        "rfdetr.pth.engine": {
+          options: { ...defaultOpts, imgsz: 768, half: true },
+          source: "user",
+          sourcePath,
+        },
+      },
+      "rfdetr",
+      512,
+      sourcePath,
+    );
+
+    expect(result["rfdetr.pth.onnx"]).toEqual({
+      options: { ...defaultOpts, imgsz: 512 },
+      source: "detected",
+      sourcePath,
+    });
+    expect(result["rfdetr.pth.engine"]).toEqual({
+      options: { ...defaultOpts, imgsz: 768, half: true },
+      source: "user",
+      sourcePath,
+    });
   });
 });
