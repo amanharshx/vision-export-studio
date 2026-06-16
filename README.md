@@ -2,7 +2,7 @@
 
 # Vision Export Studio
 
-Desktop studio for exporting Ultralytics YOLO `.pt` models into deployment-ready formats.
+Desktop studio for exporting Ultralytics YOLO `.pt` and Roboflow RF-DETR `.pth` models into deployment-ready formats.
 
 [![Platforms](https://img.shields.io/badge/Platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)](#installation)
 [![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040?logo=homebrew)](#installation)
@@ -23,7 +23,7 @@ Desktop studio for exporting Ultralytics YOLO `.pt` models into deployment-ready
 
 <br>
 
-> Select your Ultralytics YOLO `.pt` model, pick an export target, and generate deployment-ready output locally - everything runs on your machine, nothing leaves your environment.
+> Select your Ultralytics YOLO `.pt` or Roboflow RF-DETR `.pth` model, pick an export target, and generate deployment-ready output locally - everything runs on your machine, nothing leaves your environment.
 
 ---
 
@@ -42,7 +42,7 @@ Desktop studio for exporting Ultralytics YOLO `.pt` models into deployment-ready
 
 ---
 
-[**Vision Export Studio**](https://github.com/amanharshx/vision-export-studio) is a desktop app that exports [Ultralytics](https://www.ultralytics.com/) YOLO `.pt` weights into deployment-ready formats like ONNX, TensorRT, CoreML, TFLite, and more. Select your model, pick a target, and generate the export locally - model files stay on your machine.
+[**Vision Export Studio**](https://github.com/amanharshx/vision-export-studio) is a desktop app that exports computer-vision model weights into deployment-ready formats. It supports two model families: [Ultralytics](https://www.ultralytics.com/) YOLO `.pt` weights with full target coverage (ONNX, TensorRT, CoreML, TFLite, and more), and [Roboflow](https://roboflow.com/) RF-DETR `.pth` checkpoints with a focused set of targets (ONNX and TensorRT). Select your model, pick a target, and generate the export locally - model files stay on your machine.
 
 ## Features
 
@@ -50,6 +50,7 @@ Desktop studio for exporting Ultralytics YOLO `.pt` models into deployment-ready
 - **Managed runtime** - app creates and uses `~/.vision-export-studio/.venv` for Python tooling by default
 - **Optional Python override** - power users can point the app at a different interpreter
 - **Automatic route installs** - route-specific Python dependencies install when needed for most export paths
+- **Two model families** - Ultralytics YOLO (`.pt`) with full target coverage, and Roboflow RF-DETR (`.pth`) for ONNX and TensorRT
 - **Multiple export targets** - ONNX, TensorRT, CoreML, OpenVINO, TFLite, Paddle, NCNN, RKNN, and more
 - **Safer process execution** - export commands run through Tauri/Rust with argv-based subprocess handling
 
@@ -65,17 +66,19 @@ source format -> supported route -> target format
 
 Current source support is intentionally narrow:
 
-- Ultralytics-compatible `.pt` weights only
+- Ultralytics-compatible `.pt` weights (full target coverage)
+- Roboflow RF-DETR `.pth` checkpoints (ONNX and TensorRT only)
 - Generic PyTorch checkpoints not supported
 - Reverse conversion not supported
 
-Current source format:
+Current source formats:
 
-| Format | Status | Notes |
-| --- | :---: | --- |
-| `.pt` | ✅ | Ultralytics-compatible weights only. |
+| Format | Provider | Status | Notes |
+| --- | --- | :---: | --- |
+| `.pt` | Ultralytics YOLO | ✅ | Ultralytics-compatible weights only. |
+| `.pth` | Roboflow RF-DETR | ✅ | RF-DETR checkpoints. Exports to ONNX and TensorRT only. |
 
-Current target formats:
+Ultralytics YOLO (`.pt`) target formats:
 
 | Format | Status | Notes |
 | --- | :---: | --- |
@@ -97,6 +100,16 @@ Current target formats:
 | `.pt -> axelera` | ✅ | Linux-only. |
 | `.pt -> executorch` | ✅ | Edge runtime output. |
 
+Roboflow RF-DETR (`.pth`) target formats:
+
+| Format | Status | Notes |
+| --- | :---: | --- |
+| `.pth -> onnx` | ✅ | Recommended RF-DETR target and primary path. |
+| `.pth -> engine` | ✅ | TensorRT. NVIDIA GPU and `trtexec` required. No macOS. |
+
+> [!NOTE]
+> RF-DETR support is intentionally focused on ONNX and TensorRT. TFLite export was evaluated and dropped because the ONNX → TFLite conversion failed consistently across macOS and Linux.
+
 ---
 
 ## Target Caveats
@@ -110,6 +123,7 @@ Some targets are one-way deployment artifacts or platform-locked:
 - `imx` export is Linux-only and requires Java `>= 17`.
 - `axelera` export is Linux-only.
 - `tflite`, `engine`, `mnn`, `rknn`, `imx`, `axelera`, `edgetpu`, and some `coreml` outputs should be treated as one-way deployment outputs.
+- **Roboflow RF-DETR (`.pth`)** exports only to `onnx` and `engine`. Its `engine` (TensorRT) path is NVIDIA-only and requires `trtexec`, identical to the Ultralytics `engine` caveat.
 
 ---
 
@@ -192,7 +206,7 @@ Vision Export Studio now defaults to managed runtime in:
 ~/.vision-export-studio/.venv
 ```
 
-Vision Export Studio creates this environment automatically and installs `ultralytics` there.
+Vision Export Studio creates this environment automatically and installs `ultralytics` there for the base runtime. Roboflow RF-DETR dependencies (`rfdetr`) install on demand the first time you pick an RF-DETR route.
 
 Current bootstrap limitation:
 

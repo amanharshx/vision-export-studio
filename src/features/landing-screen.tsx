@@ -33,8 +33,8 @@ export function LandingScreen({
             Vision Export Studio
           </h1>
           <p className="mb-10 max-w-sm text-center text-base leading-7 text-muted-foreground">
-            Local Ultralytics YOLO export. Fast, private, and runs entirely on
-            your machine.
+            Local export for Ultralytics YOLO and Roboflow RF-DETR. Fast,
+            private, and runs entirely on your machine.
           </p>
 
           <div className="w-full max-w-sm space-y-4">
@@ -52,7 +52,7 @@ export function LandingScreen({
                 <Layers className="h-4 w-4 text-primary" />
               </div>
               <span className="text-sm text-muted-foreground">
-                <span className="font-semibold text-foreground">15</span>{" "}
+                <span className="font-semibold text-foreground">{ultralyticsRoutes.length}</span>{" "}
                 export targets across runtimes and vendors
               </span>
             </div>
