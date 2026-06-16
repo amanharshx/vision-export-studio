@@ -291,7 +291,7 @@ export function SetupScreen({
           </p>
           <p className="mt-2 font-mono text-sm text-zinc-800">{managedVenvPath}</p>
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-            Vision Export Studio creates this environment automatically and installs Ultralytics here.
+            Vision Export Studio creates this environment automatically and installs Ultralytics for the base runtime. Roboflow RF-DETR dependencies install on demand when you pick an RF-DETR route.
           </p>
         </div>
 
