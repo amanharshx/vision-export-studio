@@ -541,6 +541,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     setRuntimeInstallLines([]);
     setRuntimeInstallError(null);
     setRuntimeInstalledThisSession(false);
+    setDepCheckLoading(true);
+    setDepCheckError(null);
 
     try {
       const result = await streamDependencyInstall(["ultralytics"], pythonPath, (line) => {
@@ -553,8 +555,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         return;
       }
 
-      const detectPath = pythonOverride.trim() || pythonPath;
-      const freshEnv = await detectEnvironment(detectPath);
+      const freshEnv = await detectEnvironment(pythonPath);
       setEnvInfo(freshEnv);
 
       if (!freshEnv.yolo_path) {
@@ -563,13 +564,27 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         return;
       }
 
+      try {
+        const refreshed = await checkDependencies(selectedRoute.id, freshEnv.python_path);
+        setDepResults(refreshed.results);
+        setDepCheckError(null);
+      } catch (error) {
+        setDepResults(null);
+        setDepCheckError(String(error));
+        setRuntimeInstallPhase("failed");
+        setRuntimeInstallError("Ultralytics runtime installed, but dependency refresh failed. Re-detect environment and try again.");
+        return;
+      }
+
       setRuntimeInstalledThisSession(true);
       setRuntimeInstallPhase("ready");
     } catch (error) {
       setRuntimeInstallPhase("failed");
       setRuntimeInstallError(String(error));
+    } finally {
+      setDepCheckLoading(false);
     }
-  }, [envInfo?.python_path, pythonOverride, streamDependencyInstall, ultralyticsRuntimeInstalling]);
+  }, [envInfo?.python_path, selectedRoute.id, streamDependencyInstall, ultralyticsRuntimeInstalling]);
 
   // Core export invocation — call only when deps are satisfied
   const doStartExport = async (missingDepCount: number, envOverride?: EnvironmentInfo) => {
@@ -984,6 +999,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     try {
       const info = await detectEnvironment(trimmedOverride || undefined);
       setEnvInfo(info);
+      setRuntimeInstallPhase("idle");
+      setRuntimeInstallLines([]);
+      setRuntimeInstallError(null);
+      setRuntimeInstalledThisSession(false);
     } catch (e: unknown) {
       setEnvError(String(e));
     } finally {
