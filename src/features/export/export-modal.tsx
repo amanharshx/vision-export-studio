@@ -191,7 +191,6 @@ export function ExportModal({
                 Dependencies
               </p>
               <DependencyPanel
-                provider={provider}
                 route={route}
                 depResults={depResults}
                 depCheckLoading={depCheckLoading}
