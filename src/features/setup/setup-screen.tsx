@@ -40,7 +40,7 @@ interface SetupScreenProps {
 }
 
 function verifyEnvironmentReadyMessage() {
-  return "runtime verification failed after install; retry setup";
+  return "managed Python runtime verification failed; retry setup";
 }
 
 function captureSetupFailed(failureStage: string, failureKind: string) {
@@ -197,7 +197,7 @@ export function SetupScreen({
     });
   }, [defaultRuntimeDir]);
 
-  const isRunning = phase === "venv";
+  const isRunning = phase === "venv" || phase === "verify";
   const managedVenvPath = defaultRuntimeDir.trim()
     ? `${defaultRuntimeDir}/.venv`
     : "~/.vision-export-studio/.venv";
@@ -240,7 +240,7 @@ export function SetupScreen({
           </p>
           <p className="mt-2 font-mono text-sm text-zinc-800">{managedVenvPath}</p>
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-            Vision Export Studio creates this environment automatically. Provider-specific dependencies install later when you pick runtime route.
+            Vision Export Studio creates this environment automatically. Provider runtimes and export target dependencies install on demand when needed.
           </p>
         </div>
 
@@ -256,7 +256,7 @@ export function SetupScreen({
             </div>
             {(isRunning || phase === "idle") && (
               <p className="text-center text-xs text-muted-foreground">
-                This may take a few minutes on first install.
+                This may take a few minutes while setup creates and verifies managed runtime.
               </p>
             )}
             {phase === "error" && (
