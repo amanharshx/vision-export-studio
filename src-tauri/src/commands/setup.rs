@@ -456,6 +456,7 @@ pub fn save_output_dir_override(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::{self, File};
 
     #[test]
     fn default_runtime_dir_uses_vision_export_studio_dir_in_home() {
@@ -483,6 +484,39 @@ mod tests {
 
         #[cfg(not(windows))]
         assert_eq!(yolo, "/tmp/vision-export-studio/.venv/bin/yolo");
+    }
+
+    fn test_runtime_dir(name: &str) -> String {
+        std::env::temp_dir()
+            .join(format!("vision-export-studio-{}-{}", name, Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn managed_runtime_is_ready_when_venv_python_exists_and_yolo_missing() {
+        let runtime_dir = test_runtime_dir("managed-runtime-ready");
+        let python_path = venv_python(&runtime_dir);
+        let python_parent = Path::new(&python_path).parent().unwrap();
+        fs::create_dir_all(python_parent).unwrap();
+        File::create(&python_path).unwrap();
+
+        assert!(managed_runtime_is_ready(&runtime_dir));
+
+        fs::remove_dir_all(&runtime_dir).unwrap();
+    }
+
+    #[test]
+    fn managed_runtime_is_not_ready_when_venv_python_missing() {
+        let runtime_dir = test_runtime_dir("managed-runtime-missing-python");
+        let yolo_path = venv_yolo(&runtime_dir);
+        let yolo_parent = Path::new(&yolo_path).parent().unwrap();
+        fs::create_dir_all(yolo_parent).unwrap();
+        File::create(&yolo_path).unwrap();
+
+        assert!(!managed_runtime_is_ready(&runtime_dir));
+
+        fs::remove_dir_all(&runtime_dir).unwrap();
     }
 
     #[test]
@@ -522,22 +556,6 @@ mod tests {
             normalized.runtime_dir,
             "/Users/tester/.vision-export-studio"
         );
-        assert!(normalized.setup_complete);
-    }
-
-    #[test]
-    fn normalize_loaded_settings_marks_complete_when_managed_runtime_ready() {
-        let settings = AppSettings {
-            runtime_dir: "/Users/tester/.vision-export-studio".to_string(),
-            setup_complete: false,
-            python_path_override: None,
-            output_dir_override: None,
-        };
-
-        let (normalized, changed) =
-            normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio", true);
-
-        assert!(changed);
         assert!(normalized.setup_complete);
     }
 
