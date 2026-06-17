@@ -355,6 +355,30 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       .catch((e: unknown) => setEnvError(String(e)));
   }, []);
 
+  const refreshRouteDependencies = useCallback(async (routeId: string | null, pythonPath: string | null) => {
+    if (!routeId || !pythonPath) {
+      setDepResults(null);
+      setDepCheckError(null);
+      setDepCheckLoading(false);
+      return;
+    }
+
+    setDepResults(null);
+    setDepCheckLoading(true);
+    setDepCheckError(null);
+
+    try {
+      const response = await checkDependencies(routeId, pythonPath);
+      setDepResults(response.results);
+    } catch (error) {
+      setDepResults(null);
+      setDepCheckError(String(error));
+      throw error;
+    } finally {
+      setDepCheckLoading(false);
+    }
+  }, []);
+
   // Check dependencies whenever the selected route or resolved python path changes
   useEffect(() => {
     const pythonPath = envInfo?.python_path;
@@ -363,32 +387,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       return;
     }
 
-    let cancelled = false;
-    setDepResults(null);
-    setDepCheckLoading(true);
-    setDepCheckError(null);
-
-    checkDependencies(selectedRouteId, pythonPath)
-      .then((response) => {
-        if (!cancelled) {
-          setDepResults(response.results);
-        }
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) {
-          setDepCheckError(String(e));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setDepCheckLoading(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedRouteId, envInfo?.python_path]);
+    void refreshRouteDependencies(selectedRouteId, pythonPath).catch(() => {
+      // State handled in helper; avoid unhandled promise noise.
+    });
+  }, [selectedRouteId, envInfo?.python_path, refreshRouteDependencies]);
 
   // Set up event listeners; re-register when sessionId changes
   useEffect(() => {
@@ -999,6 +1001,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     try {
       const info = await detectEnvironment(trimmedOverride || undefined);
       setEnvInfo(info);
+      await refreshRouteDependencies(selectedRouteId, info.python_path || null);
       setRuntimeInstallPhase("idle");
       setRuntimeInstallLines([]);
       setRuntimeInstallError(null);
@@ -1008,7 +1011,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     } finally {
       setRedetecting(false);
     }
-  }, []);
+  }, [refreshRouteDependencies, selectedRouteId]);
 
   // Save python path override and re-detect
   const handleSaveAndRedetect = useCallback(async () => {
