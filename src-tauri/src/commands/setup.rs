@@ -155,7 +155,7 @@ fn normalize_python_override(python_path_override: Option<String>) -> Option<Str
 }
 
 fn managed_runtime_is_ready(runtime_dir: &str) -> bool {
-    Path::new(&venv_python(runtime_dir)).exists() && Path::new(&venv_yolo(runtime_dir)).exists()
+    Path::new(&venv_python(runtime_dir)).exists()
 }
 
 fn normalize_loaded_settings(
@@ -413,34 +413,6 @@ pub async fn create_runtime_venv(
 }
 
 #[tauri::command]
-pub async fn install_ultralytics(
-    app_handle: tauri::AppHandle,
-    state: tauri::State<'_, SetupState>,
-    runtime_dir: String,
-) -> Result<String, String> {
-    let managed_runtime_dir = ensure_managed_runtime_dir(&app_handle, &runtime_dir)?;
-
-    let python = venv_python(&managed_runtime_dir);
-
-    if !Path::new(&python).exists() {
-        return Err(format!(
-            "venv python not found at {}; run create_runtime_venv first",
-            python
-        ));
-    }
-
-    // Build argv: {venv_python} -m pip install ultralytics
-    let mut cmd = Command::new(&python);
-    cmd.arg("-m");
-    cmd.arg("pip");
-    cmd.arg("install");
-    cmd.arg("ultralytics");
-
-    let sessions = Arc::clone(&state.sessions);
-    spawn_and_stream(app_handle, sessions, cmd)
-}
-
-#[tauri::command]
 pub fn mark_setup_complete(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, SettingsState>,
@@ -567,5 +539,37 @@ mod tests {
 
         assert!(changed);
         assert!(normalized.setup_complete);
+    }
+
+    #[test]
+    fn normalize_loaded_settings_marks_complete_when_managed_venv_python_exists() {
+        let settings = AppSettings {
+            runtime_dir: "/Users/tester/.vision-export-studio".to_string(),
+            setup_complete: false,
+            python_path_override: None,
+            output_dir_override: None,
+        };
+
+        let (normalized, changed) =
+            normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio", true);
+
+        assert!(changed);
+        assert!(normalized.setup_complete);
+    }
+
+    #[test]
+    fn normalize_loaded_settings_marks_incomplete_when_managed_venv_python_missing() {
+        let settings = AppSettings {
+            runtime_dir: "/Users/tester/.vision-export-studio".to_string(),
+            setup_complete: true,
+            python_path_override: None,
+            output_dir_override: None,
+        };
+
+        let (normalized, changed) =
+            normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio", false);
+
+        assert!(changed);
+        assert!(!normalized.setup_complete);
     }
 }

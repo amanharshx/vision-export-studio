@@ -36,7 +36,6 @@ pub fn run() {
             commands::rfdetr::inspect_rfdetr_checkpoint,
             commands::setup::load_settings,
             commands::setup::create_runtime_venv,
-            commands::setup::install_ultralytics,
             commands::setup::mark_setup_complete,
             commands::setup::save_python_override,
             commands::setup::save_output_dir_override,
