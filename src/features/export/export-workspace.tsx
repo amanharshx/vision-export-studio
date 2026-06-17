@@ -309,6 +309,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const [rfdetrVariantMode, setRfDetrVariantMode] = useState<RfDetrVariantMode>("auto");
   const [rfdetrManualClassSymbol, setRfDetrManualClassSymbol] = useState("");
   const rfdetrInspectRequestRef = useRef(0);
+  const depRefreshRequestRef = useRef(0);
   const routeOptionsRef = useRef<Record<string, RouteOptionsState>>({});
 
   const setOptionsWithSource = useCallback(
@@ -356,26 +357,41 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   }, []);
 
   const refreshRouteDependencies = useCallback(async (routeId: string | null, pythonPath: string | null) => {
+    const requestId = depRefreshRequestRef.current + 1;
+    depRefreshRequestRef.current = requestId;
+
     if (!routeId || !pythonPath) {
-      setDepResults(null);
-      setDepCheckError(null);
-      setDepCheckLoading(false);
+      if (depRefreshRequestRef.current === requestId) {
+        setDepResults(null);
+        setDepCheckError(null);
+        setDepCheckLoading(false);
+      }
       return;
     }
 
-    setDepResults(null);
-    setDepCheckLoading(true);
-    setDepCheckError(null);
+    if (depRefreshRequestRef.current === requestId) {
+      setDepResults(null);
+      setDepCheckLoading(true);
+      setDepCheckError(null);
+    }
 
     try {
       const response = await checkDependencies(routeId, pythonPath);
+      if (depRefreshRequestRef.current !== requestId) {
+        return;
+      }
       setDepResults(response.results);
     } catch (error) {
+      if (depRefreshRequestRef.current !== requestId) {
+        return;
+      }
       setDepResults(null);
       setDepCheckError(String(error));
       throw error;
     } finally {
-      setDepCheckLoading(false);
+      if (depRefreshRequestRef.current === requestId) {
+        setDepCheckLoading(false);
+      }
     }
   }, []);
 
@@ -567,12 +583,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       }
 
       try {
-        const refreshed = await checkDependencies(selectedRoute.id, freshEnv.python_path);
-        setDepResults(refreshed.results);
-        setDepCheckError(null);
+        await refreshRouteDependencies(selectedRoute.id, freshEnv.python_path);
       } catch (error) {
-        setDepResults(null);
-        setDepCheckError(String(error));
         setRuntimeInstallPhase("failed");
         setRuntimeInstallError("Ultralytics runtime installed, but dependency refresh failed. Re-detect environment and try again.");
         return;
@@ -586,7 +598,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     } finally {
       setDepCheckLoading(false);
     }
-  }, [envInfo?.python_path, selectedRoute.id, streamDependencyInstall, ultralyticsRuntimeInstalling]);
+  }, [envInfo?.python_path, refreshRouteDependencies, selectedRoute.id, streamDependencyInstall, ultralyticsRuntimeInstalling]);
 
   // Core export invocation — call only when deps are satisfied
   const doStartExport = async (missingDepCount: number, envOverride?: EnvironmentInfo) => {
