@@ -7,9 +7,11 @@ const os = getOS();
 interface RouteGridProps {
   routes: RouteSpec[];
   onSelectRoute: (routeId: string) => void;
+  disabled?: boolean;
+  disabledReason?: string;
 }
 
-export function RouteGrid({ routes, onSelectRoute }: RouteGridProps) {
+export function RouteGrid({ routes, onSelectRoute, disabled = false, disabledReason }: RouteGridProps) {
   const compatible = routes.filter((r) => isCompatible(r.platformLock, os));
   const incompatible = routes.filter((r) => !isCompatible(r.platformLock, os));
 
@@ -20,6 +22,8 @@ export function RouteGrid({ routes, onSelectRoute }: RouteGridProps) {
           key={route.id}
           route={route}
           onSelect={() => onSelectRoute(route.id)}
+          disabled={disabled}
+          disabledReason={disabledReason}
         />
       ))}
       {incompatible.length > 0 && (
@@ -30,6 +34,8 @@ export function RouteGrid({ routes, onSelectRoute }: RouteGridProps) {
               key={route.id}
               route={route}
               onSelect={() => onSelectRoute(route.id)}
+              disabled={disabled}
+              disabledReason={disabledReason}
             />
           ))}
         </>

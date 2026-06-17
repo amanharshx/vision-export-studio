@@ -30,9 +30,11 @@ const os = getOS();
 interface RouteRowProps {
   route: RouteSpec;
   onSelect: () => void;
+  disabled?: boolean;
+  disabledReason?: string;
 }
 
-export function RouteRow({ route, onSelect }: RouteRowProps) {
+export function RouteRow({ route, onSelect, disabled = false, disabledReason }: RouteRowProps) {
   const format = formats[route.targetFormat];
   const formatIcon = formatIconMap[format.id];
   const Icon = formatIcon ?? categoryIcon(format.category);
@@ -42,10 +44,13 @@ export function RouteRow({ route, onSelect }: RouteRowProps) {
   return (
     <button
       type="button"
-      onClick={onSelect}
+      onClick={disabled ? undefined : onSelect}
+      disabled={disabled}
+      title={disabledReason}
       className={cn(
         "flex w-full items-center gap-4 rounded-lg border border-zinc-900/10 bg-white px-4 py-3 text-left transition-colors hover:bg-zinc-50",
         !compatible && "opacity-50",
+        disabled && "cursor-not-allowed opacity-45 hover:bg-white",
       )}
     >
       <ChevronRight className="h-4 w-4 shrink-0 text-zinc-300" />
