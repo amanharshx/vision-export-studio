@@ -8,6 +8,10 @@ import { Loader2 } from "lucide-react";
 import { detectEnvironment } from "@/lib/tauri/environment";
 import { captureAnalyticsEvent } from "@/lib/analytics";
 import {
+  getManagedPythonPath,
+  isManagedPythonEnvironment,
+} from "./managed-runtime";
+import {
   createRuntimeVenv,
   markSetupComplete,
 } from "@/lib/tauri/setup";
@@ -146,7 +150,27 @@ export function SetupScreen({
     }
 
     // ------------------------------------------------------------------
-    // Step 2: mark complete
+    // Step 2: verify managed runtime before persisting setup success
+    // ------------------------------------------------------------------
+    if (!mountedRef.current) return;
+    setPhase("verify");
+
+    try {
+      const managedPythonPath = getManagedPythonPath(defaultRuntimeDir);
+      const envInfo = await detectEnvironment(managedPythonPath);
+      if (!isManagedPythonEnvironment(envInfo.python_path, managedPythonPath)) {
+        throw new Error(verifyEnvironmentReadyMessage());
+      }
+    } catch (e: unknown) {
+      if (!mountedRef.current) return;
+      captureSetupFailed("verify", "environment_verify_failed");
+      setPhase("error");
+      setErrorMessage(`environment verify failed: ${String(e)}`);
+      return;
+    }
+
+    // ------------------------------------------------------------------
+    // Step 3: mark complete
     // ------------------------------------------------------------------
     try {
       await markSetupComplete(defaultRuntimeDir);
@@ -155,25 +179,6 @@ export function SetupScreen({
       captureSetupFailed("save_settings", "settings_save_failed");
       setPhase("error");
       setErrorMessage(`failed to save settings: ${String(e)}`);
-      return;
-    }
-
-    // ------------------------------------------------------------------
-    // Step 3: verify environment is actually ready before redirect
-    // ------------------------------------------------------------------
-    if (!mountedRef.current) return;
-    setPhase("verify");
-
-    try {
-      const envInfo = await detectEnvironment();
-      if (!envInfo.python_path) {
-        throw new Error(verifyEnvironmentReadyMessage());
-      }
-    } catch (e: unknown) {
-      if (!mountedRef.current) return;
-      captureSetupFailed("verify", "environment_verify_failed");
-      setPhase("error");
-      setErrorMessage(`environment verify failed: ${String(e)}`);
       return;
     }
 
