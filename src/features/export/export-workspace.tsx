@@ -26,7 +26,7 @@ import type {
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, FileBox, FolderOpen, Info, RefreshCw, RotateCcw, X, CircleHelp } from "lucide-react";
+import { ArrowLeft, FileBox, FolderOpen, Info, RefreshCw, RotateCcw, X, CircleHelp, Loader2 } from "lucide-react";
 import { UpdateChecker } from "@/components/update-checker";
 import {
   Sheet,
@@ -45,6 +45,7 @@ import { ExportModal } from "./export-modal";
 import { RouteGrid } from "./route-grid";
 
 type WorkspaceView = "drop" | "formats";
+type RuntimeInstallPhase = "idle" | "installing" | "ready" | "failed";
 
 const defaultOptions: ExportOptions = {
   imgsz: 640,
@@ -296,6 +297,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
 
   // Install phase state
   const [installPhase, setInstallPhase] = useState<InstallPhase>("idle");
+  const [runtimeInstallPhase, setRuntimeInstallPhase] = useState<RuntimeInstallPhase>("idle");
+  const [runtimeInstallLines, setRuntimeInstallLines] = useState<string[]>([]);
+  const [runtimeInstallError, setRuntimeInstallError] = useState<string | null>(null);
+  const [runtimeInstalledThisSession, setRuntimeInstalledThisSession] = useState(false);
 
   // RF-DETR inspect state
   const [rfdetrInspectStatus, setRfDetrInspectStatus] = useState<RfDetrInspectStatus>("idle");
@@ -323,6 +328,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const missingPackageNames = useMemo(() => {
     return getInstallableMissingPackages(depResults);
   }, [depResults]);
+  const ultralyticsRuntimeReady = selectedProviderId !== "ultralytics" || Boolean(envInfo?.yolo_path);
+  const ultralyticsRuntimeInstalling = runtimeInstallPhase === "installing";
+  const ultralyticsRuntimeBlocking =
+    selectedProviderId === "ultralytics" && (!ultralyticsRuntimeReady || ultralyticsRuntimeInstalling);
 
   // Ref to current sessionId for use inside event listener closures
   const sessionIdRef = useRef<string | null>(null);
@@ -461,10 +470,115 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     routeOptionsRef.current = {};
   }, [sourcePath]);
 
+  useEffect(() => {
+    setRuntimeInstallPhase("idle");
+    setRuntimeInstallLines([]);
+    setRuntimeInstallError(null);
+  }, [selectedProviderId, sourcePath]);
+
+  useEffect(() => {
+    if (runtimeInstallPhase !== "ready") return;
+    const timeoutId = window.setTimeout(() => {
+      setRuntimeInstallPhase("idle");
+    }, 4000);
+    return () => window.clearTimeout(timeoutId);
+  }, [runtimeInstallPhase]);
+
+  const streamDependencyInstall = useCallback(async (
+    packages: string[],
+    pythonPath: string,
+    appendLine: (line: string) => void,
+  ): Promise<"ok" | string> => {
+    let installSessionId = "";
+    let resolveInstall!: (result: "ok" | string) => void;
+    const installPromise = new Promise<"ok" | string>((resolve) => {
+      resolveInstall = resolve;
+    });
+
+    const [unOut, unErr, unDone, unFail] = await Promise.all([
+      listen<InstallLinePayload>("install:stdout", (ev) => {
+        if (!installSessionId || ev.payload.session_id !== installSessionId) return;
+        appendLine("[stdout] " + ev.payload.line);
+      }),
+      listen<InstallLinePayload>("install:stderr", (ev) => {
+        if (!installSessionId || ev.payload.session_id !== installSessionId) return;
+        appendLine("[stderr] " + ev.payload.line);
+      }),
+      listen<InstallFinishedPayload>("install:finished", (ev) => {
+        if (!installSessionId || ev.payload.session_id !== installSessionId) return;
+        resolveInstall("ok");
+      }),
+      listen<InstallFailedPayload>("install:failed", (ev) => {
+        if (!installSessionId || ev.payload.session_id !== installSessionId) return;
+        resolveInstall(ev.payload.error);
+      }),
+    ]);
+
+    const cleanup = () => {
+      unOut();
+      unErr();
+      unDone();
+      unFail();
+    };
+
+    try {
+      installSessionId = await installDependencies(packages, pythonPath);
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
+
+    const result = await installPromise;
+    cleanup();
+    return result;
+  }, []);
+
+  const handleInstallUltralyticsRuntime = useCallback(async () => {
+    const pythonPath = envInfo?.python_path;
+    if (!pythonPath || ultralyticsRuntimeInstalling) return;
+
+    setRuntimeInstallPhase("installing");
+    setRuntimeInstallLines([]);
+    setRuntimeInstallError(null);
+    setRuntimeInstalledThisSession(false);
+
+    try {
+      const result = await streamDependencyInstall(["ultralytics"], pythonPath, (line) => {
+        setRuntimeInstallLines((prev) => [...prev, line]);
+      });
+
+      if (result !== "ok") {
+        setRuntimeInstallPhase("failed");
+        setRuntimeInstallError("Ultralytics runtime install failed: " + result);
+        return;
+      }
+
+      const detectPath = pythonOverride.trim() || pythonPath;
+      const freshEnv = await detectEnvironment(detectPath);
+      setEnvInfo(freshEnv);
+
+      if (!freshEnv.yolo_path) {
+        setRuntimeInstallPhase("failed");
+        setRuntimeInstallError("Ultralytics runtime install finished, but YOLO CLI was still not detected.");
+        return;
+      }
+
+      setRuntimeInstalledThisSession(true);
+      setRuntimeInstallPhase("ready");
+    } catch (error) {
+      setRuntimeInstallPhase("failed");
+      setRuntimeInstallError(String(error));
+    }
+  }, [envInfo?.python_path, pythonOverride, streamDependencyInstall, ultralyticsRuntimeInstalling]);
+
   // Core export invocation — call only when deps are satisfied
-  const doStartExport = async (missingDepCount: number) => {
-    if (!sourcePath || !envInfo?.python_path) return;
-    if (selectedProviderId === "ultralytics" && !envInfo.yolo_path) return;
+  const doStartExport = async (missingDepCount: number, envOverride?: EnvironmentInfo) => {
+    const activeEnv = envOverride ?? envInfo;
+    if (!sourcePath || !activeEnv?.python_path) return;
+    if (selectedProviderId === "ultralytics" && !activeEnv.yolo_path) {
+      setInvokeError("YOLO CLI not found. Install the Ultralytics runtime or re-detect the environment.");
+      return;
+    }
     if (selectedProviderId === "rfdetr" && rfdetrTrustConfirmedPath !== sourcePath) {
       setInvokeError("Confirm trusted RF-DETR checkpoint loading before export.");
       return;
@@ -501,8 +615,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         routeId: selectedRoute.id,
         outputDir,
         providerId: selectedProviderId,
-        pythonPath: envInfo.python_path,
-        yoloPath: envInfo.yolo_path ?? "",
+        pythonPath: activeEnv.python_path,
+        yoloPath: activeEnv.yolo_path ?? "",
         imgsz: options.imgsz,
         batch: options.batch,
         half: options.half,
@@ -551,7 +665,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   // Export handler — gates on missing deps before starting
   const handleExport = async () => {
     if (!sourcePath || !envInfo?.python_path || exportStatus === "running" || exportStatus === "starting") return;
-    if (selectedProviderId === "ultralytics" && !envInfo.yolo_path) return;
+    if (selectedProviderId === "ultralytics" && !envInfo.yolo_path) {
+      setInvokeError("Install the Ultralytics runtime before starting a YOLO export.");
+      return;
+    }
     if (depCheckLoading) {
       setInvokeError("Dependency check still running. Wait for it to finish before export.");
       return;
@@ -595,42 +712,23 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     setInstallPhase("installing");
     setLogLines([]);
 
-    let installSessionId = "";
-    let resolveInstall!: (result: "ok" | string) => void;
-    const installPromise = new Promise<"ok" | string>((r) => {
-      resolveInstall = r;
-    });
-
-    const [unOut, unErr, unDone, unFail] = await Promise.all([
-      listen<InstallLinePayload>("install:stdout", (ev) => {
-        if (!installSessionId || ev.payload.session_id !== installSessionId) return;
-        setLogLines((prev) => [...prev, "[stdout] " + ev.payload.line]);
-      }),
-      listen<InstallLinePayload>("install:stderr", (ev) => {
-        if (!installSessionId || ev.payload.session_id !== installSessionId) return;
-        setLogLines((prev) => [...prev, "[stderr] " + ev.payload.line]);
-      }),
-      listen<InstallFinishedPayload>("install:finished", (ev) => {
-        if (!installSessionId || ev.payload.session_id !== installSessionId) return;
-        resolveInstall("ok");
-      }),
-      listen<InstallFailedPayload>("install:failed", (ev) => {
-        if (!installSessionId || ev.payload.session_id !== installSessionId) return;
-        resolveInstall(ev.payload.error);
-      }),
-    ]);
-
-    const cleanup = () => {
-      unOut();
-      unErr();
-      unDone();
-      unFail();
-    };
-
     try {
-      installSessionId = await installDependencies(missingPkgs, pythonPath);
+      const result = await streamDependencyInstall(missingPkgs, pythonPath, (line) => {
+        setLogLines((prev) => [...prev, line]);
+      });
+
+      if (result !== "ok") {
+        captureAnalyticsEvent("export_failed", {
+          route_id: exportRoute.routeId,
+          export_format: exportRoute.exportFormat,
+          failure_stage: "install_dependencies",
+          failure_kind: "install_failed",
+        });
+        setInstallPhase("failed");
+        setLogLines((prev) => [...prev, "[error] Install failed: " + result]);
+        return;
+      }
     } catch (e: unknown) {
-      cleanup();
       captureAnalyticsEvent("export_failed", {
         route_id: exportRoute.routeId,
         export_format: exportRoute.exportFormat,
@@ -642,25 +740,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       return;
     }
 
-    const result = await installPromise;
-    cleanup();
-
-    if (result !== "ok") {
-      captureAnalyticsEvent("export_failed", {
-        route_id: exportRoute.routeId,
-        export_format: exportRoute.exportFormat,
-        failure_stage: "install_dependencies",
-        failure_kind: "install_failed",
-      });
-      setInstallPhase("failed");
-      setLogLines((prev) => [...prev, "[error] Install failed: " + result]);
-      return;
-    }
-
     setInstallPhase("done");
     setDepCheckLoading(true);
     setDepCheckError(null);
     let refreshedMissingPkgs: string[] = [];
+    let freshEnv: EnvironmentInfo | undefined;
     try {
       const refreshed = await checkDependencies(selectedRoute.id, pythonPath);
       setDepResults(refreshed.results);
@@ -687,6 +771,35 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         setInvokeError("Non-installable dependency blockers remain after install. Export blocked.");
         return;
       }
+
+      if (selectedProviderId === "ultralytics") {
+        try {
+          freshEnv = await detectEnvironment(pythonOverride.trim() || pythonPath);
+          setEnvInfo(freshEnv);
+        } catch {
+          captureAnalyticsEvent("export_failed", {
+            route_id: exportRoute.routeId,
+            export_format: exportRoute.exportFormat,
+            failure_stage: "redetect_environment",
+            failure_kind: "environment_redetect_failed_after_install",
+          });
+          setInstallPhase("failed");
+          setInvokeError("Environment re-detect failed after install. Re-detect the environment before export.");
+          return;
+        }
+
+        if (!freshEnv.yolo_path) {
+          captureAnalyticsEvent("export_failed", {
+            route_id: exportRoute.routeId,
+            export_format: exportRoute.exportFormat,
+            failure_stage: "redetect_environment",
+            failure_kind: "yolo_missing_after_install",
+          });
+          setInstallPhase("failed");
+          setInvokeError("YOLO CLI still missing after install. Re-detect the environment or reinstall the Ultralytics runtime.");
+          return;
+        }
+      }
     } catch (e: unknown) {
       captureAnalyticsEvent("export_failed", {
         route_id: exportRoute.routeId,
@@ -703,7 +816,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       setDepCheckLoading(false);
     }
 
-    await doStartExport(refreshedMissingPkgs.length);
+    await doStartExport(refreshedMissingPkgs.length, freshEnv);
   };
 
   // Cancel handler
@@ -744,6 +857,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     setRfDetrTrustConfirmedPath(null);
     setRfDetrVariantMode("auto");
     setRfDetrManualClassSymbol("");
+    setRuntimeInstallPhase("idle");
+    setRuntimeInstallLines([]);
+    setRuntimeInstallError(null);
     rfdetrInspectRequestRef.current += 1;
   }
 
@@ -772,6 +888,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       setRfDetrVariantMode("auto");
       setRfDetrManualClassSymbol("");
     }
+    setRuntimeInstallPhase("idle");
+    setRuntimeInstallLines([]);
+    setRuntimeInstallError(null);
     setView("formats");
   }, [selectedProvider]);
 
@@ -850,6 +969,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     setRfDetrTrustConfirmedPath(null);
     setRfDetrVariantMode("auto");
     setRfDetrManualClassSymbol("");
+    setRuntimeInstallPhase("idle");
+    setRuntimeInstallLines([]);
+    setRuntimeInstallError(null);
     rfdetrInspectRequestRef.current += 1;
   };
 
@@ -1235,11 +1357,63 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
               )}
             </div>
           )}
+          {selectedProviderId === "ultralytics" && ultralyticsRuntimeInstalling && (
+            <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              <div className="flex items-center gap-2 font-medium">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Installing Ultralytics runtime
+              </div>
+              <p>This may take a few minutes.</p>
+              <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-amber-200 bg-white/80 p-3 font-mono text-xs text-amber-950">
+                {runtimeInstallLines.length > 0 ? runtimeInstallLines.join("\n") : "[info] Starting runtime install..."}
+              </div>
+            </div>
+          )}
+          {selectedProviderId === "ultralytics" && runtimeInstallPhase === "failed" && (
+            <div className="space-y-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+              <div>
+                <p className="font-medium">Ultralytics runtime install failed</p>
+                <p className="mt-1">{runtimeInstallError ?? "Runtime install failed."}</p>
+              </div>
+              {runtimeInstallLines.length > 0 && (
+                <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-red-200 bg-white/80 p-3 font-mono text-xs text-red-950">
+                  {runtimeInstallLines.join("\n")}
+                </div>
+              )}
+              <div>
+                <Button size="sm" onClick={handleInstallUltralyticsRuntime} disabled={!envInfo?.python_path}>
+                  Install Runtime
+                </Button>
+              </div>
+            </div>
+          )}
+          {selectedProviderId === "ultralytics" && runtimeInstallPhase === "ready" && runtimeInstalledThisSession && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+              <p className="font-medium">Ultralytics runtime ready</p>
+              <p className="mt-1">YOLO export targets are enabled for this session.</p>
+            </div>
+          )}
+          {selectedProviderId === "ultralytics" && !ultralyticsRuntimeReady && runtimeInstallPhase === "idle" && (
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              <div>
+                <p className="font-medium">Ultralytics runtime required</p>
+                <p className="mt-1">Install once to enable YOLO exports on this machine.</p>
+              </div>
+              <Button size="sm" onClick={handleInstallUltralyticsRuntime} disabled={!envInfo?.python_path}>
+                Install Runtime
+              </Button>
+            </div>
+          )}
           <div>
             <h2 className="mb-3 text-sm font-medium uppercase text-zinc-400">
               Export Target
             </h2>
-            <RouteGrid routes={currentRoutes} onSelectRoute={handleActivateRoute} />
+            <RouteGrid
+              routes={currentRoutes}
+              onSelectRoute={handleActivateRoute}
+              disabled={ultralyticsRuntimeBlocking}
+              disabledReason="Install the Ultralytics runtime before choosing a YOLO export target."
+            />
           </div>
         </main>
       </div>
