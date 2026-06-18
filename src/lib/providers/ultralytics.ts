@@ -35,7 +35,7 @@ export const ultralyticsRoutes: RouteSpec[] = [
     displayPath: "model.pt → model.onnx",
     pipDeps: [
       { packageName: "onnx", installHint: "pip install onnx" },
-      { packageName: "onnxslim", installHint: "pip install onnxslim" },
+      { packageName: "onnxslim", installHint: "pip install onnxslim", optional: true },
     ],
     supportsHalf: true,
     supportsDynamic: true,
