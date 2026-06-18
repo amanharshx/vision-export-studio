@@ -13,17 +13,11 @@ Desktop studio for exporting Ultralytics YOLO `.pt` and Roboflow RF-DETR `.pth` 
 [![CI](https://github.com/amanharshx/vision-export-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/amanharshx/vision-export-studio/actions/workflows/ci.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/amanharshx/vision-export-studio)](https://github.com/amanharshx/vision-export-studio/releases)
 
-</div>
-
-> [!IMPORTANT]
-> **This project is currently under active development.** Some features may be incomplete or subject to change. Bug reports and feature requests are appreciated!
-
 <br>
 
-<div align="center">
-  <img src="assets/readme-demo.gif" width="720" alt="Vision Export Studio demo">
-</div>
+<img src="assets/readme-demo.gif" width="720" alt="Vision Export Studio demo">
 
+</div>
 <br>
 
 > Select your Ultralytics YOLO `.pt` or Roboflow RF-DETR `.pth` model, pick an export target, and generate deployment-ready output locally - everything runs on your machine, nothing leaves your environment.
@@ -52,9 +46,13 @@ Desktop studio for exporting Ultralytics YOLO `.pt` and Roboflow RF-DETR `.pth` 
 - **Local-first** - exports run on your machine; model files do not leave your environment
 - **Managed runtime** - app creates and uses `~/.vision-export-studio/.venv` for Python tooling by default
 - **Optional Python override** - power users can point the app at a different interpreter
+- **Optional output directory** - choose where exported artifacts are written, or use the default next to the source model
 - **Automatic route installs** - route-specific Python dependencies install when needed for most export paths
+- **Dependency status checks** - each route reports missing Python packages or system binaries before you export, with install hints
 - **Two model families** - Ultralytics YOLO (`.pt`) with full target coverage, and Roboflow RF-DETR (`.pth`) for ONNX and TensorRT
 - **Multiple export targets** - ONNX, TensorRT, CoreML, OpenVINO, TFLite, Paddle, NCNN, RKNN, and more
+- **Configurable export options** - tune target-specific settings such as image size, batch size, FP16 (`half`), INT8, dynamic axes, ONNX opset, TensorRT workspace, and RKNN target chip
+- **RF-DETR checkpoint inspection** - after trusted-checkpoint confirmation, auto-detects model family (detection vs segmentation), size, and recommended native image size from the `.pth` checkpoint
 - **Safer process execution** - export commands run through Tauri/Rust with argv-based subprocess handling
 
 ---
