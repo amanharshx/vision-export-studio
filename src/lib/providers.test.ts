@@ -7,6 +7,8 @@ import {
   getRouteOptionsForOpen,
   applyDetectedRouteOptions,
   applyDetectedRouteOptionsToProviderRoutes,
+  getUltralyticsRuntimeDisabledReason,
+  shouldShowUltralyticsRuntimeInstallDetails,
 } from "@/features/export/export-workspace";
 import type { RfDetrInspectResult, RouteOptionsState } from "@/lib/types";
 
@@ -279,5 +281,31 @@ describe("applyDetectedRouteOptionsToProviderRoutes", () => {
       source: "user",
       sourcePath,
     });
+  });
+});
+
+describe("getUltralyticsRuntimeDisabledReason", () => {
+  test("suppresses disabled tooltip while ultralytics runtime is installing", () => {
+    expect(getUltralyticsRuntimeDisabledReason("installing")).toBeUndefined();
+  });
+
+  test("shows disabled tooltip before ultralytics runtime install starts", () => {
+    expect(getUltralyticsRuntimeDisabledReason("idle")).toBe(
+      "Install the Ultralytics runtime before choosing a YOLO export target.",
+    );
+  });
+});
+
+describe("shouldShowUltralyticsRuntimeInstallDetails", () => {
+  test("keeps install details collapsed by default while runtime is installing", () => {
+    expect(shouldShowUltralyticsRuntimeInstallDetails("installing", false)).toBe(false);
+  });
+
+  test("shows install details when user explicitly opens them during install", () => {
+    expect(shouldShowUltralyticsRuntimeInstallDetails("installing", true)).toBe(true);
+  });
+
+  test("forces install details open after runtime install failure", () => {
+    expect(shouldShowUltralyticsRuntimeInstallDetails("failed", false)).toBe(true);
   });
 });

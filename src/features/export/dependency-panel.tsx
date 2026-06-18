@@ -9,24 +9,32 @@ interface DependencyPanelProps {
   depCheckError?: string | null;
 }
 
-interface DepItem {
+export interface DepItem {
   name: string;
   installHint: string;
+  optional: boolean;
 }
 
-// 0 = ready/warning, 1 = auto-installable missing, 2 = manual-only missing, 3 = unknown
-function depGroup(result: DepCheckResult | undefined, installHint: string): number {
+function findDepResult(depResults: DepCheckResult[] | undefined, name: string): DepCheckResult | undefined {
+  return depResults?.find((result) => result.item === name);
+}
+
+// 0 = installed/ready, 1 = required missing package/unknown/auto-installable binary,
+// 2 = required manual-only missing binary, 3 = optional
+export function depGroup(dep: DepItem, result: DepCheckResult | undefined): number {
+  if (dep.optional) return 3;
   if (!result) return 0;
   switch (result.status) {
     case "ready":
     case "warning":
       return 0;
     case "missing_package":
+    case "unknown":
       return 1;
     case "missing_binary":
-      return installHint.startsWith("pip install ") ? 1 : 2;
+      return dep.installHint.startsWith("pip install ") ? 1 : 2;
     default:
-      return 3;
+      return 0;
   }
 }
 
@@ -50,6 +58,34 @@ function depIcon(result: DepCheckResult | undefined, installHint: string) {
   }
 }
 
+export function buildDependencyItems(provider: ProviderSpec, route: RouteSpec): DepItem[] {
+  return [
+    ...provider.baseDeps.map((dep) => ({
+      name: dep.packageName,
+      installHint: dep.installHint,
+      optional: dep.optional ?? false,
+    })),
+    ...route.pipDeps.map((dep) => ({
+      name: dep.packageName,
+      installHint: dep.installHint,
+      optional: dep.optional ?? false,
+    })),
+    ...route.sysDeps.map((dep) => ({
+      name: dep.binaryName,
+      installHint: dep.installHint,
+      optional: dep.optional ?? false,
+    })),
+  ];
+}
+
+export function sortDependencyItems(depItems: DepItem[], depResults?: DepCheckResult[]): DepItem[] {
+  return [...depItems].sort((a, b) => {
+    const ra = findDepResult(depResults, a.name);
+    const rb = findDepResult(depResults, b.name);
+    return depGroup(a, ra) - depGroup(b, rb);
+  });
+}
+
 export function DependencyPanel({
   provider,
   route,
@@ -57,17 +93,7 @@ export function DependencyPanel({
   depCheckLoading,
   depCheckError,
 }: DependencyPanelProps) {
-  const allItems: DepItem[] = [
-    ...provider.baseDeps.map((d) => ({ name: d.packageName, installHint: d.installHint })),
-    ...route.pipDeps.map((d) => ({ name: d.packageName, installHint: d.installHint })),
-    ...route.sysDeps.map((d) => ({ name: d.binaryName, installHint: d.installHint })),
-  ];
-
-  const sorted = [...allItems].sort((a, b) => {
-    const ra = depResults?.find((r) => r.item === a.name);
-    const rb = depResults?.find((r) => r.item === b.name);
-    return depGroup(ra, a.installHint) - depGroup(rb, b.installHint);
-  });
+  const sorted = sortDependencyItems(buildDependencyItems(provider, route), depResults);
 
   return (
     <div className="space-y-2">
@@ -83,8 +109,8 @@ export function DependencyPanel({
         </p>
       )}
       {sorted.map((dep) => {
-        const result = depResults?.find((r) => r.item === dep.name);
-        const isManualBinary = depGroup(result, dep.installHint) === 2;
+        const result = findDepResult(depResults, dep.name);
+        const isManualBinary = depGroup(dep, result) === 1;
 
         return isManualBinary ? (
           <div

@@ -9,10 +9,6 @@ export function createRuntimeVenv(runtimeDir: string): Promise<string> {
   return invoke<string>("create_runtime_venv", { runtimeDir });
 }
 
-export function installUltralytics(runtimeDir: string): Promise<string> {
-  return invoke<string>("install_ultralytics", { runtimeDir });
-}
-
 export function markSetupComplete(runtimeDir: string): Promise<void> {
   return invoke<void>("mark_setup_complete", { runtimeDir });
 }
@@ -24,4 +20,3 @@ export function savePythonOverride(pythonPathOverride: string | null): Promise<v
 export function saveOutputDirOverride(outputDirOverride: string | null): Promise<void> {
   return invoke<void>("save_output_dir_override", { outputDirOverride });
 }
-

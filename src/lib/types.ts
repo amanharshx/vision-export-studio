@@ -11,6 +11,7 @@ export type SourceFormat = "pt" | "pth";
 export interface ProviderDependency {
   packageName: string;
   installHint: string;
+  optional?: boolean;
 }
 
 export interface ProviderSpec {
@@ -48,8 +49,8 @@ export interface RouteSpec {
   targetFormat: string;
   title: string;
   displayPath: string;
-  pipDeps: Array<{ packageName: string; installHint: string }>;
-  sysDeps: Array<{ binaryName: string; installHint: string }>;
+  pipDeps: Array<{ packageName: string; installHint: string; optional?: boolean }>;
+  sysDeps: Array<{ binaryName: string; installHint: string; optional?: boolean }>;
   platformLock: PlatformLock;
   intermediates: string[];
   requiresGpu: boolean;

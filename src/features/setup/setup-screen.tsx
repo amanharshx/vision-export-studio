@@ -8,8 +8,11 @@ import { Loader2 } from "lucide-react";
 import { detectEnvironment } from "@/lib/tauri/environment";
 import { captureAnalyticsEvent } from "@/lib/analytics";
 import {
+  getManagedPythonPath,
+  isManagedPythonEnvironment,
+} from "./managed-runtime";
+import {
   createRuntimeVenv,
-  installUltralytics,
   markSetupComplete,
 } from "@/lib/tauri/setup";
 
@@ -31,7 +34,7 @@ interface SetupFailedPayload {
   error: string;
 }
 
-type SetupPhase = "idle" | "venv" | "pip" | "verify" | "done" | "error";
+type SetupPhase = "idle" | "venv" | "verify" | "done" | "error";
 
 interface SetupScreenProps {
   defaultRuntimeDir: string;
@@ -41,7 +44,7 @@ interface SetupScreenProps {
 }
 
 function verifyEnvironmentReadyMessage() {
-  return "runtime verification failed after install; retry setup";
+  return "managed Python runtime verification failed; retry setup";
 }
 
 function captureSetupFailed(failureStage: string, failureKind: string) {
@@ -147,51 +150,22 @@ export function SetupScreen({
     }
 
     // ------------------------------------------------------------------
-    // Step 2: install ultralytics
+    // Step 2: verify managed runtime before persisting setup success
     // ------------------------------------------------------------------
     if (!mountedRef.current) return;
-    setPhase("pip");
-
-    let pipSessionId = "";
-    let pipResolve!: (v: "ok" | string) => void;
-    const pipResultPromise = new Promise<"ok" | string>((r) => { pipResolve = r; });
-
-    const [unPipOut, unPipErr, unPipDone, unPipFail] = await Promise.all([
-      // Keep stdout/stderr listeners registered so stream events are drained even
-      // when this screen does not render setup logs.
-      listen<SetupLinePayload>("setup:stdout", () => {}),
-      listen<SetupLinePayload>("setup:stderr", () => {}),
-      listen<SetupFinishedPayload>("setup:finished", (ev) => {
-        if (pipSessionId && ev.payload.session_id === pipSessionId) {
-          cleanupPip(); pipResolve("ok");
-        }
-      }),
-      listen<SetupFailedPayload>("setup:failed", (ev) => {
-        if (pipSessionId && ev.payload.session_id === pipSessionId) {
-          cleanupPip(); pipResolve(ev.payload.error);
-        }
-      }),
-    ]);
-    const cleanupPip = () => { unPipOut(); unPipErr(); unPipDone(); unPipFail(); };
+    setPhase("verify");
 
     try {
-      pipSessionId = await installUltralytics(defaultRuntimeDir);
+      const managedPythonPath = getManagedPythonPath(defaultRuntimeDir);
+      const envInfo = await detectEnvironment(managedPythonPath);
+      if (!isManagedPythonEnvironment(envInfo.python_path, managedPythonPath)) {
+        throw new Error(verifyEnvironmentReadyMessage());
+      }
     } catch (e: unknown) {
-      cleanupPip();
       if (!mountedRef.current) return;
-      captureSetupFailed("pip", "pip_install_start_failed");
+      captureSetupFailed("verify", "environment_verify_failed");
       setPhase("error");
-      setErrorMessage(String(e));
-      return;
-    }
-
-    const pipResult = await pipResultPromise;
-
-    if (pipResult !== "ok") {
-      if (!mountedRef.current) return;
-      captureSetupFailed("pip", "pip_install_failed");
-      setPhase("error");
-      setErrorMessage(`ultralytics install failed: ${pipResult}`);
+      setErrorMessage(`environment verify failed: ${String(e)}`);
       return;
     }
 
@@ -205,25 +179,6 @@ export function SetupScreen({
       captureSetupFailed("save_settings", "settings_save_failed");
       setPhase("error");
       setErrorMessage(`failed to save settings: ${String(e)}`);
-      return;
-    }
-
-    // ------------------------------------------------------------------
-    // Step 4: verify environment is actually ready before redirect
-    // ------------------------------------------------------------------
-    if (!mountedRef.current) return;
-    setPhase("verify");
-
-    try {
-      const envInfo = await detectEnvironment();
-      if (!envInfo.python_path || !envInfo.ultralytics_version || !envInfo.yolo_path) {
-        throw new Error(verifyEnvironmentReadyMessage());
-      }
-    } catch (e: unknown) {
-      if (!mountedRef.current) return;
-      captureSetupFailed("verify", "environment_verify_failed");
-      setPhase("error");
-      setErrorMessage(`environment verify failed: ${String(e)}`);
       return;
     }
 
@@ -247,7 +202,7 @@ export function SetupScreen({
     });
   }, [defaultRuntimeDir]);
 
-  const isRunning = phase === "venv" || phase === "pip";
+  const isRunning = phase === "venv" || phase === "verify";
   const managedVenvPath = defaultRuntimeDir.trim()
     ? `${defaultRuntimeDir}/.venv`
     : "~/.vision-export-studio/.venv";
@@ -255,7 +210,6 @@ export function SetupScreen({
   const phaseLabel: Record<SetupPhase, string> = {
     idle: "Preparing managed runtime...",
     venv: "Creating Python virtual environment...",
-    pip: "Installing ultralytics...",
     verify: "Verifying managed runtime...",
     done: "Setup complete.",
     error: "Setup failed.",
@@ -291,7 +245,7 @@ export function SetupScreen({
           </p>
           <p className="mt-2 font-mono text-sm text-zinc-800">{managedVenvPath}</p>
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-            Vision Export Studio creates this environment automatically and installs Ultralytics for the base runtime. Roboflow RF-DETR dependencies install on demand when you pick an RF-DETR route.
+            Vision Export Studio creates this environment automatically. Provider runtimes and export target dependencies install on demand when needed.
           </p>
         </div>
 
@@ -307,7 +261,7 @@ export function SetupScreen({
             </div>
             {(isRunning || phase === "idle") && (
               <p className="text-center text-xs text-muted-foreground">
-                This may take a few minutes on first install.
+                This may take a few minutes while setup creates and verifies managed runtime.
               </p>
             )}
             {phase === "error" && (
