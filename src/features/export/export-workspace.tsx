@@ -47,6 +47,24 @@ import { RouteGrid } from "./route-grid";
 type WorkspaceView = "drop" | "formats";
 type RuntimeInstallPhase = "idle" | "installing" | "ready" | "failed";
 
+export function getUltralyticsRuntimeDisabledReason(runtimeInstallPhase: RuntimeInstallPhase): string | undefined {
+  return runtimeInstallPhase === "installing"
+    ? undefined
+    : "Install the Ultralytics runtime before choosing a YOLO export target.";
+}
+
+export function shouldShowUltralyticsRuntimeInstallDetails(
+  runtimeInstallPhase: RuntimeInstallPhase,
+  runtimeInstallDetailsOpen: boolean,
+): boolean {
+  return runtimeInstallPhase === "failed"
+    || (runtimeInstallPhase === "installing" && runtimeInstallDetailsOpen);
+}
+
+export function getUltralyticsRuntimeReadyDescription(): string {
+  return "YOLO export targets are enabled on this machine.";
+}
+
 const defaultOptions: ExportOptions = {
   imgsz: 640,
   batch: 1,
@@ -300,6 +318,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const [runtimeInstallPhase, setRuntimeInstallPhase] = useState<RuntimeInstallPhase>("idle");
   const [runtimeInstallLines, setRuntimeInstallLines] = useState<string[]>([]);
   const [runtimeInstallError, setRuntimeInstallError] = useState<string | null>(null);
+  const [runtimeInstallDetailsOpen, setRuntimeInstallDetailsOpen] = useState(false);
   const [runtimeInstalledThisSession, setRuntimeInstalledThisSession] = useState(false);
 
   // RF-DETR inspect state
@@ -492,6 +511,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     setRuntimeInstallPhase("idle");
     setRuntimeInstallLines([]);
     setRuntimeInstallError(null);
+    setRuntimeInstallDetailsOpen(false);
   }, [selectedProviderId, sourcePath]);
 
   useEffect(() => {
@@ -500,6 +520,16 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       setRuntimeInstallPhase("idle");
     }, 4000);
     return () => window.clearTimeout(timeoutId);
+  }, [runtimeInstallPhase]);
+
+  useEffect(() => {
+    if (runtimeInstallPhase === "failed") {
+      setRuntimeInstallDetailsOpen(true);
+      return;
+    }
+    if (runtimeInstallPhase === "idle" || runtimeInstallPhase === "ready") {
+      setRuntimeInstallDetailsOpen(false);
+    }
   }, [runtimeInstallPhase]);
 
   const streamDependencyInstall = useCallback(async (
@@ -558,6 +588,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     setRuntimeInstallPhase("installing");
     setRuntimeInstallLines([]);
     setRuntimeInstallError(null);
+    setRuntimeInstallDetailsOpen(false);
     setRuntimeInstalledThisSession(false);
     setDepCheckLoading(true);
     setDepCheckError(null);
@@ -889,6 +920,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     setRuntimeInstallPhase("idle");
     setRuntimeInstallLines([]);
     setRuntimeInstallError(null);
+    setRuntimeInstallDetailsOpen(false);
     rfdetrInspectRequestRef.current += 1;
   }
 
@@ -1001,6 +1033,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     setRuntimeInstallPhase("idle");
     setRuntimeInstallLines([]);
     setRuntimeInstallError(null);
+    setRuntimeInstallDetailsOpen(false);
     rfdetrInspectRequestRef.current += 1;
   };
 
@@ -1017,6 +1050,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       setRuntimeInstallPhase("idle");
       setRuntimeInstallLines([]);
       setRuntimeInstallError(null);
+      setRuntimeInstallDetailsOpen(false);
       setRuntimeInstalledThisSession(false);
     } catch (e: unknown) {
       setEnvError(String(e));
@@ -1398,9 +1432,18 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                 Installing Ultralytics runtime
               </div>
               <p>This may take a few minutes.</p>
-              <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-amber-200 bg-white/80 p-3 font-mono text-xs text-amber-950">
-                {runtimeInstallLines.length > 0 ? runtimeInstallLines.join("\n") : "[info] Starting runtime install..."}
-              </div>
+              <button
+                type="button"
+                className="text-left text-xs font-medium text-amber-800 underline underline-offset-2"
+                onClick={() => setRuntimeInstallDetailsOpen((open) => !open)}
+              >
+                {runtimeInstallDetailsOpen ? "Hide details" : "Show details"}
+              </button>
+              {shouldShowUltralyticsRuntimeInstallDetails(runtimeInstallPhase, runtimeInstallDetailsOpen) && (
+                <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-amber-200 bg-white/80 p-3 font-mono text-xs text-amber-950">
+                  {runtimeInstallLines.length > 0 ? runtimeInstallLines.join("\n") : "[info] Starting runtime install..."}
+                </div>
+              )}
             </div>
           )}
           {selectedProviderId === "ultralytics" && runtimeInstallPhase === "failed" && (
@@ -1410,6 +1453,15 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                 <p className="mt-1">{runtimeInstallError ?? "Runtime install failed."}</p>
               </div>
               {runtimeInstallLines.length > 0 && (
+                <button
+                  type="button"
+                  className="text-left text-xs font-medium text-red-800 underline underline-offset-2"
+                  onClick={() => setRuntimeInstallDetailsOpen((open) => !open)}
+                >
+                  {runtimeInstallDetailsOpen ? "Hide details" : "Show details"}
+                </button>
+              )}
+              {runtimeInstallLines.length > 0 && shouldShowUltralyticsRuntimeInstallDetails(runtimeInstallPhase, runtimeInstallDetailsOpen) && (
                 <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-red-200 bg-white/80 p-3 font-mono text-xs text-red-950">
                   {runtimeInstallLines.join("\n")}
                 </div>
@@ -1424,7 +1476,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
           {selectedProviderId === "ultralytics" && runtimeInstallPhase === "ready" && runtimeInstalledThisSession && (
             <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
               <p className="font-medium">Ultralytics runtime ready</p>
-              <p className="mt-1">YOLO export targets are enabled for this session.</p>
+              <p className="mt-1">{getUltralyticsRuntimeReadyDescription()}</p>
             </div>
           )}
           {selectedProviderId === "ultralytics" && !ultralyticsRuntimeReady && runtimeInstallPhase === "idle" && (
@@ -1446,7 +1498,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
               routes={currentRoutes}
               onSelectRoute={handleActivateRoute}
               disabled={ultralyticsRuntimeBlocking}
-              disabledReason="Install the Ultralytics runtime before choosing a YOLO export target."
+              disabledReason={getUltralyticsRuntimeDisabledReason(runtimeInstallPhase)}
             />
           </div>
         </main>
