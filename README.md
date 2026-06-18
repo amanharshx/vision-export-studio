@@ -10,6 +10,9 @@ Desktop studio for exporting Ultralytics YOLO `.pt` and Roboflow RF-DETR `.pth` 
 [![Rust](https://img.shields.io/badge/Rust-%23dea584.svg?logo=rust&logoColor=black)](#build-from-source)
 [![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC.svg?logo=typescript&logoColor=white)](#build-from-source)
 
+[![CI](https://github.com/amanharshx/vision-export-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/amanharshx/vision-export-studio/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/amanharshx/vision-export-studio)](https://github.com/amanharshx/vision-export-studio/releases)
+
 </div>
 
 > [!IMPORTANT]
