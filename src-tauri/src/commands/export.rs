@@ -36,6 +36,7 @@ struct ExportFinishedPayload {
     exit_code: i32,
     artifact_moved: bool,
     artifact_warning: Option<String>,
+    output_dir: Option<String>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -286,6 +287,11 @@ pub async fn start_export(
                                 exit_code: 0,
                                 artifact_moved: artifact_status.artifact_moved,
                                 artifact_warning: artifact_status.artifact_warning,
+                                output_dir: if request_wait.output_dir.is_empty() {
+                                    None
+                                } else {
+                                    Some(request_wait.output_dir.clone())
+                                },
                             },
                         );
                     } else {
@@ -357,4 +363,47 @@ pub async fn cancel_export(
             Ok(true)
         }
     }
+}
+
+#[tauri::command]
+pub async fn open_export_folder(path: String) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("export folder path is empty".to_string());
+    }
+
+    let folder = Path::new(trimmed);
+    if !folder.exists() {
+        return Err(format!("export folder does not exist: {}", trimmed));
+    }
+    if !folder.is_dir() {
+        return Err(format!("export folder is not a directory: {}", trimmed));
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut cmd = std::process::Command::new("open");
+        cmd.arg(folder);
+        cmd
+    };
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut cmd = std::process::Command::new("explorer");
+        cmd.arg(folder);
+        cmd
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut cmd = std::process::Command::new("xdg-open");
+        cmd.arg(folder);
+        cmd
+    };
+
+    command
+        .spawn()
+        .map_err(|e| format!("failed to open export folder: {}", e))?;
+
+    Ok(())
 }

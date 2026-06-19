@@ -18,7 +18,7 @@ import type {
   RouteSpec,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { AlertTriangle, ChevronDown, Download, Loader2, Play, Square } from "lucide-react";
+import { AlertTriangle, ChevronDown, Download, FolderOpen, Loader2, Play, Square } from "lucide-react";
 import { buildCommandPreview } from "./command-preview";
 import { DependencyPanel } from "./dependency-panel";
 import { ExportLog } from "./export-log";
@@ -47,6 +47,8 @@ interface ExportModalProps {
   missingPackageNames: string[];
   onInstallAndExport: () => void;
   outputDir?: string;
+  completedOutputDir?: string | null;
+  onShowExportFolder: () => void;
   rfdetrSummary?: {
     variantMode: RfDetrVariantMode;
     detectedClass?: string | null;
@@ -55,6 +57,27 @@ interface ExportModalProps {
     recommendedImgsz?: number | null;
     patchSize?: number | null;
   } | null;
+}
+
+type FooterAction = "cancel" | "export" | "export_again" | "show_folder" | "starting" | "stop";
+
+export function getExportFooterActions({
+  exportStatus,
+  hasCompletedOutputDir,
+}: {
+  exportStatus: ExportStatus;
+  hasCompletedOutputDir: boolean;
+}): { secondary: FooterAction; primary: FooterAction } {
+  if (exportStatus === "running") {
+    return { secondary: "stop", primary: "export" };
+  }
+  if (exportStatus === "starting") {
+    return { secondary: "starting", primary: "export" };
+  }
+  if (exportStatus === "finished" && hasCompletedOutputDir) {
+    return { secondary: "export_again", primary: "show_folder" };
+  }
+  return { secondary: "cancel", primary: "export" };
 }
 
 export function ExportModal({
@@ -77,6 +100,8 @@ export function ExportModal({
   missingPackageNames,
   onInstallAndExport,
   outputDir,
+  completedOutputDir,
+  onShowExportFolder,
   rfdetrSummary,
 }: ExportModalProps) {
   const format = formats[route.targetFormat];
@@ -95,6 +120,10 @@ export function ExportModal({
   const exportDisabled = isRunning || isStarting || !sourcePath || isInstalling;
   const showLog = exportStatus !== "idle" || logLines.length > 0;
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const footerActions = getExportFooterActions({
+    exportStatus,
+    hasCompletedOutputDir: Boolean(completedOutputDir),
+  });
 
   const collapsedSummary = (() => {
     if (provider.id !== "rfdetr" || !rfdetrSummary?.recommendedImgsz) {
@@ -265,43 +294,58 @@ export function ExportModal({
 
         {/* Footer */}
         <div className="flex justify-end gap-2 border-t px-6 py-4">
-          {isRunning ? (
+          {footerActions.secondary === "stop" ? (
             <Button variant="outline" onClick={onStopExport}>
               <Square className="mr-2 h-4 w-4" />
               Stop
             </Button>
-          ) : isStarting ? (
+          ) : footerActions.secondary === "starting" ? (
             <Button variant="outline" disabled>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               Starting…
+            </Button>
+          ) : footerActions.secondary === "export_again" ? (
+            <Button variant="outline" onClick={onExport} disabled={isInstalling}>
+              <Play className="mr-2 h-4 w-4" />
+              Export Again
             </Button>
           ) : (
             <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isInstalling}>
               Cancel
             </Button>
           )}
-          <Button
-            disabled={exportDisabled}
-            onClick={isPendingConsent ? onInstallAndExport : onExport}
-            className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-          >
-            {isInstalling ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Installing...
-              </>
-            ) : isPendingConsent ? (
-              <>
-                <Download className="mr-2 h-4 w-4" />
-                Install &amp; Export
-              </>
-            ) : (
-              <>
-                <Play className="mr-2 h-4 w-4" />
-                Start Export
-              </>
-            )}
-          </Button>
+          {footerActions.primary === "show_folder" ? (
+            <Button
+              onClick={onShowExportFolder}
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              <FolderOpen className="mr-2 h-4 w-4" />
+              Show in Folder
+            </Button>
+          ) : (
+            <Button
+              disabled={exportDisabled}
+              onClick={isPendingConsent ? onInstallAndExport : onExport}
+              className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            >
+              {isInstalling ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Installing...
+                </>
+              ) : isPendingConsent ? (
+                <>
+                  <Download className="mr-2 h-4 w-4" />
+                  Install &amp; Export
+                </>
+              ) : (
+                <>
+                  <Play className="mr-2 h-4 w-4" />
+                  Start Export
+                </>
+              )}
+            </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>

@@ -33,3 +33,7 @@ export async function startExport(input: StartExportInput): Promise<string> {
 export async function cancelExport(sessionId: string): Promise<boolean> {
   return invoke<boolean>("cancel_export", { sessionId });
 }
+
+export async function openExportFolder(path: string): Promise<void> {
+  return invoke<void>("open_export_folder", { path });
+}
