@@ -86,12 +86,16 @@ jobs:
           PUBKEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
           PRIVKEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           PRIVKEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
+          POSTHOG_HOST: ${{ secrets.VITE_POSTHOG_HOST }}
         run: |
           set -euo pipefail
 
           test -n "${PUBKEY}" || { echo "TAURI_SIGNING_PUBLIC_KEY missing" >&2; exit 1; }
           test -n "${PRIVKEY}" || { echo "TAURI_SIGNING_PRIVATE_KEY missing" >&2; exit 1; }
           test -n "${PRIVKEY_PASSWORD}" || { echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD missing" >&2; exit 1; }
+          test -n "${POSTHOG_KEY}" || { echo "VITE_POSTHOG_KEY missing" >&2; exit 1; }
+          test -n "${POSTHOG_HOST}" || { echo "VITE_POSTHOG_HOST missing" >&2; exit 1; }
 
       - name: Create release config with signing pubkey
         shell: bash
@@ -113,6 +117,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
+          VITE_POSTHOG_HOST: ${{ secrets.VITE_POSTHOG_HOST }}
+          VITE_INSTALL_CHANNEL: github_release
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: '${{ inputs.tag || github.ref_name }}'
