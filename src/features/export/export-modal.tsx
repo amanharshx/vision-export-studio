@@ -286,7 +286,12 @@ export function ExportModal({
 
             {showLog && (
               <div className="rounded-md bg-zinc-950 p-4">
-                <ExportLog lines={logLines} status={exportStatus} preview={commandPreview} />
+                <ExportLog
+                  lines={logLines}
+                  status={exportStatus}
+                  installPhase={installPhase}
+                  preview={commandPreview}
+                />
               </div>
             )}
           </div>
