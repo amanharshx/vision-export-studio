@@ -1,7 +1,7 @@
 import { detectEnvironment } from "@/lib/tauri/environment";
 import { captureAnalyticsEvent } from "@/lib/analytics";
 import { checkDependencies, installDependencies } from "@/lib/tauri/deps";
-import { cancelExport, startExport } from "@/lib/tauri/export";
+import { cancelExport, openExportFolder, startExport } from "@/lib/tauri/export";
 import { defaultRouteForProvider, hasAllowedSourceExtension, providers, providerList, routesForProvider } from "@/lib/providers";
 import { inspectRfDetrCheckpoint } from "@/lib/tauri/rfdetr";
 import type {
@@ -96,6 +96,15 @@ const routeDefaults: Partial<Record<string, Partial<ExportOptions>>> = {
 
 function optionsForRoute(routeId: string): ExportOptions {
   return { ...defaultOptions, ...(routeDefaults[routeId] ?? {}) };
+}
+
+export function getResolvedOutputDir(sourcePath: string, outputDirOverride: string): string {
+  const out = outputDirOverride.trim();
+  if (out) return out;
+  const sep = sourcePath.includes("/") ? "/" : "\\";
+  const lastSep = sourcePath.lastIndexOf(sep);
+  const parentDir = lastSep > 0 ? sourcePath.substring(0, lastSep) : "";
+  return parentDir ? `${parentDir}${sep}vision-export-studio-exports` : "";
 }
 
 export function withRfDetrDetectedDefaults(
@@ -304,6 +313,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const [exportStatus, setExportStatus] = useState<ExportStatus>("idle");
   const [logLines, setLogLines] = useState<string[]>([]);
   const [invokeError, setInvokeError] = useState<string | null>(null);
+  const [completedOutputDir, setCompletedOutputDir] = useState<string | null>(null);
 
   // Export options
   const [options, setOptions] = useState<ExportOptions>(defaultOptions);
@@ -357,6 +367,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = sessionId;
   const currentExportRouteRef = useRef<{ routeId: string; exportFormat: string } | null>(null);
+  const currentExportOutputDirRef = useRef<string | null>(null);
 
   // Load settings + detect environment on mount
   useEffect(() => {
@@ -458,6 +469,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
               export_format: exportRoute.exportFormat,
             });
           }
+          setCompletedOutputDir(event.payload.output_dir || currentExportOutputDirRef.current);
           setExportStatus("finished");
         }
       });
@@ -655,6 +667,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       return;
     }
     setInvokeError(null);
+    setCompletedOutputDir(null);
     setExportStatus("starting");
     setLogLines(["[info] Starting export..."]);
     const exportRoute = {
@@ -662,13 +675,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       exportFormat: selectedRoute.targetFormat,
     };
     currentExportRouteRef.current = exportRoute;
-    let outputDir = outputDirOverride.trim();
-    if (!outputDir) {
-      const sep = sourcePath.includes("/") ? "/" : "\\";
-      const lastSep = sourcePath.lastIndexOf(sep);
-      const parentDir = lastSep > 0 ? sourcePath.substring(0, lastSep) : "";
-      outputDir = parentDir ? `${parentDir}${sep}vision-export-studio-exports` : "";
-    }
+    const outputDir = getResolvedOutputDir(sourcePath, outputDirOverride);
+    currentExportOutputDirRef.current = outputDir || null;
     try {
       const id = await startExport({
         sourcePath,
@@ -716,6 +724,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       });
       sessionIdRef.current = null;
       setSessionId(null);
+      currentExportOutputDirRef.current = null;
       setExportStatus("failed");
       setInvokeError(String(e));
       setLogLines((prev) => [...prev, "[error] " + String(e)]);
@@ -898,6 +907,15 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     }
   };
 
+  const handleShowExportFolder = useCallback(async () => {
+    if (!completedOutputDir) return;
+    try {
+      await openExportFolder(completedOutputDir);
+    } catch (error) {
+      setInvokeError(String(error));
+    }
+  }, [completedOutputDir]);
+
   // Provider switch
   function resetExportStateForProvider(providerId: ProviderId) {
     setSelectedRouteId(defaultRouteForProvider(providerId).id);
@@ -906,12 +924,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     setView("drop");
     setLogLines([]);
     setInvokeError(null);
+    setCompletedOutputDir(null);
     setDepResults(null);
     setDepCheckLoading(false);
     setDepCheckError(null);
     setInstallPhase("idle");
     setExportStatus("idle");
     setSessionId(null);
+    currentExportOutputDirRef.current = null;
     setRfDetrInspectStatus("idle");
     setRfDetrInspectResult(null);
     setRfDetrTrustConfirmedPath(null);
@@ -1016,6 +1036,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     routeOptionsRef.current[routeId] = routeState;
     setLogLines([]);
     setInvokeError(null);
+    setCompletedOutputDir(null);
     setExportStatus("idle");
     setInstallPhase("idle");
     setDialogOpen(true);
@@ -1031,6 +1052,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     setRfDetrVariantMode("auto");
     setRfDetrManualClassSymbol("");
     setRuntimeInstallPhase("idle");
+    setCompletedOutputDir(null);
+    currentExportOutputDirRef.current = null;
     setRuntimeInstallLines([]);
     setRuntimeInstallError(null);
     setRuntimeInstallDetailsOpen(false);
@@ -1529,14 +1552,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         installPhase={installPhase}
         missingPackageNames={missingPackageNames}
         onInstallAndExport={handleInstallAndExport}
-        outputDir={(() => {
-          const out = outputDirOverride.trim();
-          if (out) return out;
-          const sep = sourcePath.includes("/") ? "/" : "\\";
-          const lastSep = sourcePath.lastIndexOf(sep);
-          const parentDir = lastSep > 0 ? sourcePath.substring(0, lastSep) : "";
-          return parentDir ? `${parentDir}${sep}vision-export-studio-exports` : "";
-        })()}
+        outputDir={getResolvedOutputDir(sourcePath, outputDirOverride)}
+        completedOutputDir={completedOutputDir}
+        onShowExportFolder={handleShowExportFolder}
         rfdetrSummary={selectedProviderId === "rfdetr" ? {
           variantMode: rfdetrVariantMode,
           detectedClass: rfdetrInspectResult?.class_symbol ?? null,

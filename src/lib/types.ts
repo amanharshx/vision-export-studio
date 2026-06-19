@@ -135,6 +135,7 @@ export interface ExportFinishedPayload {
   exit_code: number;
   artifact_moved: boolean;
   artifact_warning?: string;
+  output_dir?: string;
 }
 
 export interface ExportFailedPayload {

@@ -32,6 +32,7 @@ pub fn run() {
             commands::environment::detect_environment,
             commands::export::start_export,
             commands::export::cancel_export,
+            commands::export::open_export_folder,
             commands::gpu::list_gpus,
             commands::rfdetr::inspect_rfdetr_checkpoint,
             commands::setup::load_settings,
