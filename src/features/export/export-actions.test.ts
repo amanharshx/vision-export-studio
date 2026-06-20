@@ -76,10 +76,10 @@ describe("getIncompatibleExportMessage", () => {
     expect(getIncompatibleExportMessage(engineRoute, "windows")).toBeNull();
   });
 
-  test("blocks CoreML on non-macOS per its declared lock", () => {
-    expect(getIncompatibleExportMessage(coremlRoute, "windows")).toBe(coremlRoute.unsupportedNote);
-    expect(getIncompatibleExportMessage(coremlRoute, "linux")).toBe(coremlRoute.unsupportedNote);
+  test("allows CoreML on macOS and Linux, blocks on Windows", () => {
     expect(getIncompatibleExportMessage(coremlRoute, "macos")).toBeNull();
+    expect(getIncompatibleExportMessage(coremlRoute, "linux")).toBeNull();
+    expect(getIncompatibleExportMessage(coremlRoute, "windows")).toBe(coremlRoute.unsupportedNote);
   });
 
   test("blocks Linux-only vendor routes on macOS and Windows", () => {
