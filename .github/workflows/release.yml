@@ -96,6 +96,13 @@ jobs:
           test -n "${PRIVKEY_PASSWORD}" || { echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD missing" >&2; exit 1; }
           test -n "${POSTHOG_KEY}" || { echo "VITE_POSTHOG_KEY missing" >&2; exit 1; }
           test -n "${POSTHOG_HOST}" || { echo "VITE_POSTHOG_HOST missing" >&2; exit 1; }
+          case "${POSTHOG_HOST}" in
+            https://us.i.posthog.com|https://eu.i.posthog.com) ;;
+            *)
+              echo "VITE_POSTHOG_HOST '${POSTHOG_HOST}' not in Tauri CSP connect-src allowlist" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Create release config with signing pubkey
         shell: bash
