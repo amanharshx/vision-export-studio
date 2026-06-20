@@ -4,6 +4,7 @@ import { checkDependencies, installDependencies } from "@/lib/tauri/deps";
 import { cancelExport, openExportFolder, startExport } from "@/lib/tauri/export";
 import { defaultRouteForProvider, hasAllowedSourceExtension, providers, providerList, routesForProvider } from "@/lib/providers";
 import { inspectRfDetrCheckpoint } from "@/lib/tauri/rfdetr";
+import { type AppOS, getOS, incompatibleReason, isCompatible } from "@/lib/platform";
 import type {
   DepCheckResult,
   EnvironmentInfo,
@@ -23,6 +24,7 @@ import type {
   RfDetrInspectStatus,
   RfDetrVariantMode,
   RouteOptionsState,
+  RouteSpec,
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -161,6 +163,24 @@ function hasBlockingDependencies(results: DepCheckResult[] | null): boolean {
   }
 
   return results.some((result) => result.status !== "ready" && result.status !== "warning");
+}
+
+export function getExportFailedUserMessage(error: string): string {
+  const trimmed = error.trim();
+  return trimmed ? `Export failed: ${trimmed}` : "Export failed.";
+}
+
+// Returns a user-facing reason when a route's target format is not supported on
+// the current OS, or null when the route is compatible. Used to short-circuit
+// the export before any dependency install or subprocess runs, so the user gets
+// an immediate, accurate message instead of a doomed install (e.g. TensorRT on macOS).
+export function getIncompatibleExportMessage(route: RouteSpec, os: AppOS): string | null {
+  if (isCompatible(route.platformLock, os)) return null;
+  return (
+    route.unsupportedNote ??
+    incompatibleReason(route.platformLock, os) ??
+    "This export target is not supported on your operating system."
+  );
 }
 
 export function applyDetectedRouteOptions(
@@ -477,6 +497,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
 
       const ulFailed = await listen<ExportFailedPayload>("export:failed", (event) => {
         if (event.payload.session_id === sessionIdRef.current) {
+          const message = getExportFailedUserMessage(event.payload.error);
           const exportRoute = currentExportRouteRef.current;
           if (exportRoute) {
             captureAnalyticsEvent("export_failed", {
@@ -486,6 +507,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
               failure_kind: "export_process_failed",
             });
           }
+          setInvokeError(message);
+          setLogLines((prev) => [...prev, "[error] " + message]);
           setExportStatus("failed");
         }
       });
@@ -643,6 +666,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     }
   }, [envInfo?.python_path, refreshRouteDependencies, selectedRoute.id, streamDependencyInstall, ultralyticsRuntimeInstalling]);
 
+  const failExportStart = useCallback((message: string) => {
+    setInstallPhase("idle");
+    setInvokeError(message);
+    setCompletedOutputDir(null);
+    setExportStatus("failed");
+    setLogLines(["[error] " + message]);
+  }, []);
+
   // Core export invocation — call only when deps are satisfied
   const doStartExport = async (missingDepCount: number, envOverride?: EnvironmentInfo) => {
     const activeEnv = envOverride ?? envInfo;
@@ -734,6 +765,20 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   // Export handler — gates on missing deps before starting
   const handleExport = async () => {
     if (!sourcePath || !envInfo?.python_path || exportStatus === "running" || exportStatus === "starting") return;
+    const incompatibleMessage = getIncompatibleExportMessage(selectedRoute, getOS());
+    if (incompatibleMessage) {
+      setInstallPhase("idle");
+      setInvokeError(incompatibleMessage);
+      setExportStatus("failed");
+      setLogLines(["[error] " + incompatibleMessage]);
+      captureAnalyticsEvent("export_failed", {
+        route_id: selectedRoute.id,
+        export_format: selectedRoute.targetFormat,
+        failure_stage: "preflight",
+        failure_kind: "os_incompatible",
+      });
+      return;
+    }
     if (selectedProviderId === "ultralytics" && !envInfo.yolo_path) {
       setInvokeError("Install the Ultralytics runtime before starting a YOLO export.");
       return;
@@ -753,7 +798,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       return;
     }
     if (hasBlockingDependencies(depResults)) {
-      setInvokeError("Blocking dependencies still unresolved. Review dependency panel before export.");
+      failExportStart("Blocking dependencies still unresolved. Review dependency panel before export.");
       return;
     }
 
@@ -765,6 +810,20 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const handleInstallAndExport = async () => {
     const pythonPath = envInfo?.python_path;
     if (!pythonPath) return;
+    const incompatibleMessage = getIncompatibleExportMessage(selectedRoute, getOS());
+    if (incompatibleMessage) {
+      setInstallPhase("idle");
+      setInvokeError(incompatibleMessage);
+      setExportStatus("failed");
+      setLogLines(["[error] " + incompatibleMessage]);
+      captureAnalyticsEvent("export_failed", {
+        route_id: selectedRoute.id,
+        export_format: selectedRoute.targetFormat,
+        failure_stage: "preflight",
+        failure_kind: "os_incompatible",
+      });
+      return;
+    }
     const exportRoute = {
       routeId: selectedRoute.id,
       exportFormat: selectedRoute.targetFormat,

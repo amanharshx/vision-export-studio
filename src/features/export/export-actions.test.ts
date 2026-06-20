@@ -1,7 +1,8 @@
 // @ts-expect-error Bun provides this module at test runtime.
 import { describe, expect, test } from "bun:test";
-import { getResolvedOutputDir } from "./export-workspace";
+import { getExportFailedUserMessage, getIncompatibleExportMessage, getResolvedOutputDir } from "./export-workspace";
 import { getExportFooterActions } from "./export-modal";
+import { findRoute } from "@/lib/providers";
 
 describe("getResolvedOutputDir", () => {
   test("uses explicit output directory when provided", () => {
@@ -41,5 +42,49 @@ describe("getExportFooterActions", () => {
       secondary: "cancel",
       primary: "export",
     });
+  });
+});
+
+describe("getExportFailedUserMessage", () => {
+  test("uses backend failure payload when export process fails", () => {
+    expect(getExportFailedUserMessage("exit code: 1")).toBe("Export failed: exit code: 1");
+  });
+
+  test("falls back when backend failure payload is empty", () => {
+    expect(getExportFailedUserMessage("")).toBe("Export failed.");
+  });
+});
+
+describe("getIncompatibleExportMessage", () => {
+  const engineRoute = findRoute("ultralytics.pt.engine")!;
+  const onnxRoute = findRoute("ultralytics.pt.onnx")!;
+  const coremlRoute = findRoute("ultralytics.pt.coreml")!;
+  const rknnRoute = findRoute("ultralytics.pt.rknn")!;
+
+  test("returns null for a cross-platform route on any OS", () => {
+    expect(getIncompatibleExportMessage(onnxRoute, "macos")).toBeNull();
+    expect(getIncompatibleExportMessage(onnxRoute, "windows")).toBeNull();
+    expect(getIncompatibleExportMessage(onnxRoute, "linux")).toBeNull();
+  });
+
+  test("blocks TensorRT on macOS with the route's unsupported note", () => {
+    expect(getIncompatibleExportMessage(engineRoute, "macos")).toBe(engineRoute.unsupportedNote);
+  });
+
+  test("allows TensorRT on Linux and Windows", () => {
+    expect(getIncompatibleExportMessage(engineRoute, "linux")).toBeNull();
+    expect(getIncompatibleExportMessage(engineRoute, "windows")).toBeNull();
+  });
+
+  test("blocks CoreML on non-macOS per its declared lock", () => {
+    expect(getIncompatibleExportMessage(coremlRoute, "windows")).toBe(coremlRoute.unsupportedNote);
+    expect(getIncompatibleExportMessage(coremlRoute, "linux")).toBe(coremlRoute.unsupportedNote);
+    expect(getIncompatibleExportMessage(coremlRoute, "macos")).toBeNull();
+  });
+
+  test("blocks Linux-only vendor routes on macOS and Windows", () => {
+    expect(getIncompatibleExportMessage(rknnRoute, "macos")).toBe(rknnRoute.unsupportedNote);
+    expect(getIncompatibleExportMessage(rknnRoute, "windows")).toBe(rknnRoute.unsupportedNote);
+    expect(getIncompatibleExportMessage(rknnRoute, "linux")).toBeNull();
   });
 });

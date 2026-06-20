@@ -22,6 +22,10 @@ describe("getLogStatusLabel", () => {
   test("installing overrides non-idle export statuses", () => {
     expect(getLogStatusLabel("running", "installing")).toBe("Installing");
   });
+
+  test("shows failed when dependency install fails before export starts", () => {
+    expect(getLogStatusLabel("idle", "failed")).toBe("Failed");
+  });
 });
 
 describe("getLogStatusBadge", () => {
