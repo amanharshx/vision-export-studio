@@ -26,6 +26,9 @@ export function getLogStatusBadge(status: ExportStatus, installPhase: InstallPha
   if (installPhase === "installing") {
     return { label: "Installing", tone: "active", spinner: true };
   }
+  if (installPhase === "failed") {
+    return { label: "Failed", tone: "error", spinner: false };
+  }
 
   switch (status) {
     case "starting":
