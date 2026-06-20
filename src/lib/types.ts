@@ -28,7 +28,7 @@ export interface ProviderSpec {
 
 export type FormatCategory = "source" | "intermediate" | "runtime" | "vendor";
 
-export type PlatformLock = "any" | "linux" | "linux_x86_64" | "linux_windows" | "macos" | "windows";
+export type PlatformLock = "any" | "linux" | "linux_x86_64" | "linux_windows" | "macos" | "macos_linux" | "windows";
 
 export interface FormatSpec {
   id: string;

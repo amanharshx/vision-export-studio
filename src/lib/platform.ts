@@ -16,6 +16,7 @@ export function platformTags(lock: PlatformLock): string[] {
     case "linux_x86_64": return ["Linux"];
     case "linux_windows": return ["Linux", "Windows"];
     case "macos": return ["macOS"];
+    case "macos_linux": return ["macOS", "Linux"];
     case "windows": return ["Windows"];
   }
 }
@@ -27,6 +28,7 @@ export function isCompatible(lock: PlatformLock, os: AppOS): boolean {
     case "linux_x86_64": return os === "linux";
     case "linux_windows": return os === "linux" || os === "windows";
     case "macos": return os === "macos";
+    case "macos_linux": return os === "macos" || os === "linux";
     case "windows": return os === "windows";
   }
 }
