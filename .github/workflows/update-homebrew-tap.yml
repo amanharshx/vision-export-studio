@@ -1,0 +1,119 @@
+name: Update Homebrew Tap
+
+run-name: >
+  Update Homebrew Tap • ${{ github.event.release.tag_name }} • ${{ github.actor }}
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-homebrew-tap
+  cancel-in-progress: false
+
+jobs:
+  dispatch-tap-update:
+    name: Dispatch tap update
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve version
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          if [[ -z "$VERSION" ]]; then
+            echo "Empty version derived from tag '$TAG'." >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "request_id=vision-export-studio-${TAG}-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch tap workflow
+        env:
+          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          REQUEST_ID: ${{ steps.meta.outputs.request_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          for attempt in {1..6}; do
+            if gh workflow run update-tap.yml \
+              --repo amanharshx/homebrew-tap \
+              -f version="$VERSION" \
+              -f cask=vision-export-studio \
+              -f formula=vision-export-studio \
+              -f request_id="$REQUEST_ID"; then
+              exit 0
+            fi
+            if [[ "$attempt" -eq 6 ]]; then
+              echo "Failed to dispatch tap update after ${attempt} attempts." >&2
+              exit 1
+            fi
+            sleep $((attempt * 30))
+          done
+
+      - name: Wait for tap update
+        env:
+          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          REQUEST_ID: ${{ steps.meta.outputs.request_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          run_id=""
+          for _ in {1..30}; do
+            run_id="$(
+              gh run list \
+                --repo amanharshx/homebrew-tap \
+                --workflow update-tap.yml \
+                --event workflow_dispatch \
+                --limit 50 \
+                --json databaseId,displayTitle \
+                --jq 'map(select(.displayTitle | contains(env.REQUEST_ID))) | .[0].databaseId // empty' 2>/tmp/tap-run-list.err \
+                | head -n1 || true
+            )"
+            if [[ -n "$run_id" ]]; then
+              break
+            fi
+            cat /tmp/tap-run-list.err >&2 || true
+            sleep 5
+          done
+
+          if [[ -z "$run_id" ]]; then
+            echo "Timed out waiting for tap workflow run to appear." >&2
+            exit 1
+          fi
+
+          for _ in {1..240}; do
+            status="$(
+              gh run view "$run_id" \
+                --repo amanharshx/homebrew-tap \
+                --json status \
+                --jq '.status'
+            )"
+            if [[ "$status" == "completed" ]]; then
+              conclusion="$(
+                gh run view "$run_id" \
+                  --repo amanharshx/homebrew-tap \
+                  --json conclusion \
+                  --jq '.conclusion'
+              )"
+              if [[ "$conclusion" == "success" ]]; then
+                exit 0
+              fi
+              echo "Tap workflow completed with conclusion: ${conclusion}" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          echo "Timed out waiting for tap workflow run ${run_id} to complete." >&2
+          exit 1
