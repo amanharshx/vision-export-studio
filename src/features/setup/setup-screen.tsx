@@ -9,6 +9,7 @@ import { detectEnvironment } from "@/lib/tauri/environment";
 import { captureAnalyticsEvent } from "@/lib/analytics";
 import {
   getManagedPythonPath,
+  getManagedPythonVerificationError,
   isManagedPythonEnvironment,
 } from "./managed-runtime";
 import {
@@ -41,10 +42,6 @@ interface SetupScreenProps {
   onComplete: () => void;
   updatesEnabled: boolean;
   updater: UpdaterController;
-}
-
-function verifyEnvironmentReadyMessage() {
-  return "managed Python runtime verification failed; retry setup";
 }
 
 function captureSetupFailed(failureStage: string, failureKind: string) {
@@ -159,7 +156,14 @@ export function SetupScreen({
       const managedPythonPath = getManagedPythonPath(defaultRuntimeDir);
       const envInfo = await detectEnvironment(managedPythonPath);
       if (!isManagedPythonEnvironment(envInfo.python_path, managedPythonPath)) {
-        throw new Error(verifyEnvironmentReadyMessage());
+        throw new Error(
+          getManagedPythonVerificationError(
+            managedPythonPath,
+            envInfo.python_path,
+            envInfo.python_version,
+            envInfo.status,
+          ),
+        );
       }
     } catch (e: unknown) {
       if (!mountedRef.current) return;

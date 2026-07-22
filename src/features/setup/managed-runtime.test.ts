@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   getManagedPythonPath,
+  getManagedPythonVerificationError,
   isManagedPythonEnvironment,
 } from "./managed-runtime";
 
@@ -33,5 +34,63 @@ describe("isManagedPythonEnvironment", () => {
         "/tmp/runtime/.venv/bin/python",
       ),
     ).toBe(false);
+  });
+
+  test("accepts equivalent Windows paths with different separators", () => {
+    expect(
+      isManagedPythonEnvironment(
+        "C:\\Users\\HP\\.vision-export-studio\\.venv\\Scripts\\python.exe",
+        "C:/Users/HP/.vision-export-studio/.venv/Scripts/python.exe",
+        "windows",
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts equivalent Windows paths with different casing", () => {
+    expect(
+      isManagedPythonEnvironment(
+        "C:\\USERS\\HP\\.VISION-EXPORT-STUDIO\\.VENV\\SCRIPTS\\PYTHON.EXE",
+        "c:/users/hp/.vision-export-studio/.venv/Scripts/python.exe",
+        "windows",
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects a different Windows Python environment", () => {
+    expect(
+      isManagedPythonEnvironment(
+        "C:\\Python310\\python.exe",
+        "C:/Users/HP/.vision-export-studio/.venv/Scripts/python.exe",
+        "windows",
+      ),
+    ).toBe(false);
+  });
+
+  test("keeps Unix path comparison case-sensitive", () => {
+    expect(
+      isManagedPythonEnvironment(
+        "/TMP/runtime/.venv/bin/python",
+        "/tmp/runtime/.venv/bin/python",
+        "linux",
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("getManagedPythonVerificationError", () => {
+  test("includes local expected and resolved interpreter details", () => {
+    expect(
+      getManagedPythonVerificationError(
+        "C:/runtime/.venv/Scripts/python.exe",
+        "C:\\runtime\\.venv\\Scripts\\python.exe",
+        "3.10.11",
+        "partial",
+      ),
+    ).toBe(
+      "managed Python runtime verification failed; retry setup; " +
+      "expected=C:/runtime/.venv/Scripts/python.exe; " +
+      "resolved=C:\\runtime\\.venv\\Scripts\\python.exe; " +
+      "version=3.10.11; status=partial",
+    );
   });
 });
