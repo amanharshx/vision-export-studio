@@ -160,7 +160,7 @@ export const ultralyticsRoutes: RouteSpec[] = [
     oneWay: true,
     lossy: true,
     notes: "Google Coral hardware only. Full-integer quantisation forced. Linux x86_64 and edgetpu_compiler binary required.",
-    unsupportedNote: "The Edge TPU compiler is only available on Linux.",
+    unsupportedNote: "The Edge TPU compiler is only available on Linux x86-64.",
   }),
   route({
     id: "ultralytics.pt.tfjs",

@@ -1,6 +1,6 @@
 import { formatIconMap } from "@/components/format-icons";
 import { formats } from "@/lib/routes";
-import { getOS, isCompatible } from "@/lib/platform";
+import { isCompatible, type AppPlatform } from "@/lib/platform";
 import type { RouteSpec } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { ChevronRight, Cpu, Layers, Zap } from "lucide-react";
@@ -25,21 +25,20 @@ export function categoryBg(category: string) {
   return categoryBgMap[category] ?? "bg-zinc-100 text-zinc-700";
 }
 
-const os = getOS();
-
 interface RouteRowProps {
   route: RouteSpec;
+  platform: AppPlatform;
   onSelect: () => void;
   disabled?: boolean;
   disabledReason?: string;
 }
 
-export function RouteRow({ route, onSelect, disabled = false, disabledReason }: RouteRowProps) {
+export function RouteRow({ route, platform, onSelect, disabled = false, disabledReason }: RouteRowProps) {
   const format = formats[route.targetFormat];
   const formatIcon = formatIconMap[format.id];
   const Icon = formatIcon ?? categoryIcon(format.category);
   const bg = formatIcon ? "bg-white text-zinc-800" : categoryBg(format.category);
-  const compatible = isCompatible(route.platformLock, os);
+  const compatible = isCompatible(route.platformLock, platform.os, platform.arch);
 
   return (
     <button

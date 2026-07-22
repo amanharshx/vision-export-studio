@@ -4,7 +4,8 @@ import { checkDependencies, installDependencies } from "@/lib/tauri/deps";
 import { cancelExport, openExportFolder, startExport } from "@/lib/tauri/export";
 import { defaultRouteForProvider, hasAllowedSourceExtension, providers, providerList, routesForProvider } from "@/lib/providers";
 import { inspectRfDetrCheckpoint } from "@/lib/tauri/rfdetr";
-import { type AppOS, getOS, incompatibleReason, isCompatible } from "@/lib/platform";
+import { type AppOS, type AppPlatform, getOS, incompatibleReason, isCompatible, UNKNOWN_ARCH } from "@/lib/platform";
+import { getAppTelemetryContext } from "@/lib/tauri/app";
 import type {
   DepCheckResult,
   EnvironmentInfo,
@@ -174,11 +175,15 @@ export function getExportFailedUserMessage(error: string): string {
 // the current OS, or null when the route is compatible. Used to short-circuit
 // the export before any dependency install or subprocess runs, so the user gets
 // an immediate, accurate message instead of a doomed install (e.g. TensorRT on macOS).
-export function getIncompatibleExportMessage(route: RouteSpec, os: AppOS): string | null {
-  if (isCompatible(route.platformLock, os)) return null;
+export function getIncompatibleExportMessage(
+  route: RouteSpec,
+  os: AppOS,
+  arch = "unknown",
+): string | null {
+  if (isCompatible(route.platformLock, os, arch)) return null;
   return (
     route.unsupportedNote ??
-    incompatibleReason(route.platformLock, os) ??
+    incompatibleReason(route.platformLock, os, arch) ??
     "This export target is not supported on your operating system."
   );
 }
@@ -302,6 +307,7 @@ interface ExportWorkspaceProps {
 }
 
 export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorkspaceProps) {
+  const [appPlatform, setAppPlatform] = useState<AppPlatform>({ os: getOS(), arch: UNKNOWN_ARCH });
   const [view, setView] = useState<WorkspaceView>("drop");
   const [infoOpen, setInfoOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -391,6 +397,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
 
   // Load settings + detect environment on mount
   useEffect(() => {
+    void getAppTelemetryContext().then(setAppPlatform).catch(() => {
+      // Keep conservative fallback: browser OS plus unknown architecture.
+    });
+
     loadSettings()
       .then((settings) => {
         const override = settings.python_path_override || "";
@@ -765,7 +775,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   // Export handler — gates on missing deps before starting
   const handleExport = async () => {
     if (!sourcePath || !envInfo?.python_path || exportStatus === "running" || exportStatus === "starting") return;
-    const incompatibleMessage = getIncompatibleExportMessage(selectedRoute, getOS());
+    const incompatibleMessage = getIncompatibleExportMessage(
+      selectedRoute,
+      appPlatform.os,
+      appPlatform.arch,
+    );
     if (incompatibleMessage) {
       setInstallPhase("idle");
       setInvokeError(incompatibleMessage);
@@ -810,7 +824,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const handleInstallAndExport = async () => {
     const pythonPath = envInfo?.python_path;
     if (!pythonPath) return;
-    const incompatibleMessage = getIncompatibleExportMessage(selectedRoute, getOS());
+    const incompatibleMessage = getIncompatibleExportMessage(
+      selectedRoute,
+      appPlatform.os,
+      appPlatform.arch,
+    );
     if (incompatibleMessage) {
       setInstallPhase("idle");
       setInvokeError(incompatibleMessage);
@@ -1578,6 +1596,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
             </h2>
             <RouteGrid
               routes={currentRoutes}
+              platform={appPlatform}
               onSelectRoute={handleActivateRoute}
               disabled={ultralyticsRuntimeBlocking}
               disabledReason={getUltralyticsRuntimeDisabledReason(runtimeInstallPhase)}
@@ -1597,6 +1616,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         }}
         provider={selectedProvider}
         route={selectedRoute}
+        platform={appPlatform}
         sourcePath={sourcePath}
         exportStatus={exportStatus}
         logLines={logLines}
