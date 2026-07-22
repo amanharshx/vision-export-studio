@@ -211,7 +211,9 @@ Vision Export Studio creates this environment automatically and installs `ultral
 
 Current bootstrap limitation:
 
-- first-time runtime creation still depends on working `python`/`python3` already available on host machine
+- first-time runtime creation still depends on Python 3 installed on the host machine
+- on Windows, Vision Export Studio checks `python`, `py -3`, then `python3`
+- restart Vision Export Studio after installing Python or changing `PATH`
 - bundled Python is not implemented yet
 
 ---
