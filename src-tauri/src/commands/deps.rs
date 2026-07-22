@@ -4,6 +4,10 @@ use std::process::{Command, Stdio};
 use tauri::Emitter;
 use uuid::Uuid;
 
+use crate::commands::provider_registry::{
+    validate_current_route_platform, validate_route_platform,
+};
+
 // ---------------------------------------------------------------------------
 // Response types
 // ---------------------------------------------------------------------------
@@ -21,6 +25,16 @@ pub struct DepCheckResult {
 #[derive(serde::Serialize)]
 pub struct DepCheckResponse {
     pub results: Vec<DepCheckResult>,
+}
+
+fn platform_unsupported_result(reason: String) -> DepCheckResult {
+    DepCheckResult {
+        item: "platform".to_string(),
+        status: "platform_unsupported".to_string(),
+        reason: reason.clone(),
+        install_hint: reason,
+        install_package: None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -335,6 +349,11 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
     }
 }
 
+fn validate_install_route_platform(route_id: &str, os: &str, arch: &str) -> Result<(), String> {
+    route_deps(route_id).ok_or_else(|| format!("unknown route_id: {}", route_id))?;
+    validate_route_platform(route_id, os, arch)
+}
+
 // ---------------------------------------------------------------------------
 // Importable-name mapping
 // ---------------------------------------------------------------------------
@@ -406,6 +425,12 @@ pub async fn check_dependencies(
 
     // Resolve route deps.
     let deps = route_deps(&route_id).ok_or_else(|| format!("unknown route_id: {}", route_id))?;
+
+    if let Err(reason) = validate_current_route_platform(&route_id) {
+        return Ok(DepCheckResponse {
+            results: vec![platform_unsupported_result(reason)],
+        });
+    }
 
     let mut results: Vec<DepCheckResult> = Vec::new();
 
@@ -581,9 +606,17 @@ fn validate_package_name(name: &str) -> Result<(), String> {
 #[tauri::command]
 pub async fn install_dependencies(
     app_handle: tauri::AppHandle,
+    route_id: Option<String>,
     packages: Vec<String>,
     python_path: String,
 ) -> Result<String, String> {
+    // Enforce platform compatibility before any package-manager command runs.
+    // Route-scoped installs (route_id = Some) must not proceed on an unsupported
+    // OS/architecture. The route-agnostic base runtime install (route_id = None,
+    // e.g. `ultralytics`) is installable on every platform and is not gated.
+    if let Some(route_id) = route_id.as_deref() {
+        validate_install_route_platform(route_id, std::env::consts::OS, std::env::consts::ARCH)?;
+    }
     if python_path.is_empty() {
         return Err("python_path must not be empty".to_string());
     }
@@ -790,5 +823,38 @@ mod tests {
         assert!(validate_package_name("rfdetr[onnx]").is_ok());
         assert!(validate_package_name("rfdetr[onnx,tflite]").is_ok());
         assert!(validate_package_name("rfdetr[onnx];rm").is_err());
+    }
+
+    #[test]
+    fn unsupported_platform_result_blocks_dependency_flow() {
+        let result =
+            platform_unsupported_result("This format is not supported on Linux ARM64.".to_string());
+
+        assert_eq!(result.item, "platform");
+        assert_eq!(result.status, "platform_unsupported");
+        assert!(result.reason.contains("Linux ARM64"));
+        assert!(result.install_package.is_none());
+    }
+
+    #[test]
+    fn dependency_install_rejects_edge_tpu_on_arm_linux() {
+        assert!(
+            validate_install_route_platform("ultralytics.pt.edgetpu", "linux", "aarch64").is_err()
+        );
+    }
+
+    #[test]
+    fn dependency_install_rejects_unknown_route() {
+        assert!(validate_install_route_platform("unknown.route", "linux", "x86_64").is_err());
+    }
+
+    #[test]
+    fn dependency_install_allows_supported_route_platform() {
+        assert!(
+            validate_install_route_platform("ultralytics.pt.edgetpu", "linux", "x86_64").is_ok()
+        );
+        assert!(
+            validate_install_route_platform("ultralytics.pt.paddle", "macos", "aarch64").is_ok()
+        );
     }
 }

@@ -7,7 +7,7 @@ use tauri::Emitter;
 use uuid::Uuid;
 
 use crate::commands::provider_registry::{
-    validate_provider_route, validate_source_extension, ProviderId,
+    validate_current_route_platform, validate_provider_route, validate_source_extension, ProviderId,
 };
 use crate::commands::providers::{self, ExportRequest};
 
@@ -95,6 +95,7 @@ pub async fn start_export(
 
     let provider = validate_provider_route(&provider_id, &route_id)?;
     validate_source_extension(provider, &source_path)?;
+    validate_current_route_platform(&route_id)?;
 
     if !output_dir.is_empty() {
         if output_dir.contains('=') {

@@ -70,6 +70,85 @@ pub fn validate_source_extension(provider: ProviderId, source_path: &str) -> Res
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlatformLock {
+    Any,
+    Linux,
+    LinuxX86_64,
+    LinuxWindows,
+    MacosLinux,
+}
+
+fn route_platform_lock(route_id: &str) -> PlatformLock {
+    match route_id {
+        "ultralytics.pt.engine" | "rfdetr.pth.engine" => PlatformLock::LinuxWindows,
+        "ultralytics.pt.coreml" => PlatformLock::MacosLinux,
+        "ultralytics.pt.edgetpu" => PlatformLock::LinuxX86_64,
+        "ultralytics.pt.rknn" | "ultralytics.pt.imx" | "ultralytics.pt.axelera" => {
+            PlatformLock::Linux
+        }
+        _ => PlatformLock::Any,
+    }
+}
+
+fn platform_tags(lock: PlatformLock) -> &'static str {
+    match lock {
+        PlatformLock::Any => "all platforms",
+        PlatformLock::Linux => "Linux",
+        PlatformLock::LinuxX86_64 => "Linux x86-64",
+        PlatformLock::LinuxWindows => "Linux and Windows",
+        PlatformLock::MacosLinux => "macOS and Linux",
+    }
+}
+
+fn os_label(os: &str) -> &str {
+    match os {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        other => other,
+    }
+}
+
+fn arch_label(arch: &str) -> &str {
+    match arch {
+        "aarch64" => "ARM64",
+        "arm" => "ARM",
+        "x86_64" => "x86-64",
+        other => other,
+    }
+}
+
+pub fn validate_route_platform(route_id: &str, os: &str, arch: &str) -> Result<(), String> {
+    let lock = route_platform_lock(route_id);
+    let compatible = match lock {
+        PlatformLock::Any => true,
+        PlatformLock::Linux => os == "linux",
+        PlatformLock::LinuxX86_64 => os == "linux" && arch == "x86_64",
+        PlatformLock::LinuxWindows => os == "linux" || os == "windows",
+        PlatformLock::MacosLinux => os == "macos" || os == "linux",
+    };
+
+    if compatible {
+        return Ok(());
+    }
+
+    let current = if lock == PlatformLock::LinuxX86_64 && os == "linux" {
+        format!("{} {}", os_label(os), arch_label(arch))
+    } else {
+        os_label(os).to_string()
+    };
+    Err(format!(
+        "This format is not supported on {}. Available on {} only.",
+        current,
+        platform_tags(lock)
+    ))
+}
+
+pub fn validate_current_route_platform(route_id: &str) -> Result<(), String> {
+    validate_route_platform(route_id, std::env::consts::OS, std::env::consts::ARCH)
+}
+
 pub enum RfDetrArtifactRule {
     Named {
         extension: &'static str,
@@ -171,5 +250,28 @@ mod tests {
     fn plus_only_manual_classes_are_rejected() {
         assert!(validate_rfdetr_manual_class("RFDETRSmall").is_ok());
         assert!(validate_rfdetr_manual_class("RFDETRXLarge").is_err());
+    }
+
+    #[test]
+    fn edge_tpu_requires_linux_x86_64() {
+        assert!(validate_route_platform("ultralytics.pt.edgetpu", "linux", "x86_64").is_ok());
+        assert!(validate_route_platform("ultralytics.pt.edgetpu", "linux", "aarch64").is_err());
+        assert!(validate_route_platform("ultralytics.pt.edgetpu", "windows", "x86_64").is_err());
+        assert!(validate_route_platform("ultralytics.pt.edgetpu", "macos", "aarch64").is_err());
+    }
+
+    #[test]
+    fn linux_only_routes_allow_arm_linux() {
+        assert!(validate_route_platform("ultralytics.pt.rknn", "linux", "aarch64").is_ok());
+        assert!(validate_route_platform("ultralytics.pt.rknn", "windows", "x86_64").is_err());
+    }
+
+    #[test]
+    fn platform_error_names_current_and_required_platforms() {
+        let error = validate_route_platform("ultralytics.pt.edgetpu", "linux", "aarch64")
+            .expect_err("ARM Linux must be rejected");
+
+        assert!(error.contains("Linux ARM64"));
+        assert!(error.contains("Linux x86-64"));
     }
 }

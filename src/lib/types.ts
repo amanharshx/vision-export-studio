@@ -156,11 +156,9 @@ export interface ExportCancelledPayload {
  *   "ready"           — dependency found
  *   "missing_package" — pip package absent (hard required)
  *   "missing_binary"  — system binary absent on PATH
+ *   "platform_unsupported" — route is locked to a different OS or architecture
  *   "warning"         — optional dep absent; export will still work
  *   "unknown"         — probe could not run (python crashed / spawn failed)
- *
- * Reserved for Phase 5 platform gating (not yet emitted by Rust):
- *   "platform_unsupported" — route is locked to a platform the user is not on
  */
 export type DepCheckStatus =
   | "ready"
