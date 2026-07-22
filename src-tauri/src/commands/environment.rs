@@ -178,13 +178,27 @@ fn resolve_effective_python(
     }
 }
 
+fn normalize_path_for_comparison(path: &str, is_windows: bool) -> String {
+    let normalized = path.trim().trim_end_matches(['/', '\\']);
+    if is_windows {
+        normalized.replace('\\', "/").to_lowercase()
+    } else {
+        normalized.to_string()
+    }
+}
+
+fn paths_equal(left: &str, right: &str, is_windows: bool) -> bool {
+    normalize_path_for_comparison(left, is_windows)
+        == normalize_path_for_comparison(right, is_windows)
+}
+
 fn detect_yolo_path(
     python_path: &str,
     managed_runtime_dir: Option<&str>,
 ) -> Result<String, String> {
     if let Some(runtime_dir) = managed_runtime_dir {
         let managed_python = venv_python(runtime_dir);
-        if python_path == managed_python {
+        if paths_equal(python_path, &managed_python, cfg!(windows)) {
             let managed_yolo = venv_yolo(runtime_dir);
             if Path::new(&managed_yolo).exists() {
                 return Ok(managed_yolo);
@@ -388,6 +402,33 @@ mod tests {
         assert!(error.contains("python failed validation: store alias failed"));
         assert!(error.contains("launcher missing"));
         assert!(error.contains("python3 failed validation"));
+    }
+
+    #[test]
+    fn path_comparison_accepts_equivalent_windows_paths() {
+        assert!(paths_equal(
+            "C:\\Users\\HP\\.vision-export-studio\\.venv\\Scripts\\python.exe",
+            "c:/users/hp/.vision-export-studio/.venv/Scripts/python.exe",
+            true,
+        ));
+    }
+
+    #[test]
+    fn path_comparison_rejects_different_windows_environments() {
+        assert!(!paths_equal(
+            "C:\\Python310\\python.exe",
+            "C:/Users/HP/.vision-export-studio/.venv/Scripts/python.exe",
+            true,
+        ));
+    }
+
+    #[test]
+    fn path_comparison_keeps_unix_paths_case_sensitive() {
+        assert!(!paths_equal(
+            "/TMP/runtime/.venv/bin/python",
+            "/tmp/runtime/.venv/bin/python",
+            false,
+        ));
     }
 
     #[test]
