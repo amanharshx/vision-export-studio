@@ -343,6 +343,7 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
 /// importlib.util.find_spec.
 fn importable_name(package_name: &str) -> String {
     match package_name {
+        "paddlepaddle" => "paddle".to_string(),
         "rknn-toolkit2" => "rknn".to_string(),
         "model-compression-toolkit" => "model_compression_toolkit".to_string(),
         "sony-custom-layers" => "sony_custom_layers".to_string(),
@@ -747,6 +748,18 @@ fn check_sys_dep(python: &str, binary_name: &str, install_hint: &str) -> DepChec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paddlepaddle_distribution_maps_to_paddle_import() {
+        assert_eq!(importable_name("paddlepaddle"), "paddle");
+    }
+
+    #[test]
+    fn paddle_route_installs_paddlepaddle_distribution() {
+        let deps = route_deps("ultralytics.pt.paddle").expect("route deps");
+        assert_eq!(deps.pip[0].package_name, "paddlepaddle");
+        assert_eq!(deps.pip[0].install_hint, "pip install paddlepaddle");
+    }
 
     #[test]
     fn rfdetr_onnx_route_uses_rfdetr_extra_hint() {
