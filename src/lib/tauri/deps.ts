@@ -12,8 +12,9 @@ export function checkDependencies(
 }
 
 export function installDependencies(
+  routeId: string | null,
   packages: string[],
   pythonPath: string,
 ): Promise<string> {
-  return invoke<string>("install_dependencies", { packages, pythonPath });
+  return invoke<string>("install_dependencies", { routeId, packages, pythonPath });
 }

@@ -60,6 +60,7 @@ describe("getIncompatibleExportMessage", () => {
   const onnxRoute = findRoute("ultralytics.pt.onnx")!;
   const coremlRoute = findRoute("ultralytics.pt.coreml")!;
   const rknnRoute = findRoute("ultralytics.pt.rknn")!;
+  const edgeTpuRoute = findRoute("ultralytics.pt.edgetpu")!;
 
   test("returns null for a cross-platform route on any OS", () => {
     expect(getIncompatibleExportMessage(onnxRoute, "macos")).toBeNull();
@@ -86,5 +87,15 @@ describe("getIncompatibleExportMessage", () => {
     expect(getIncompatibleExportMessage(rknnRoute, "macos")).toBe(rknnRoute.unsupportedNote);
     expect(getIncompatibleExportMessage(rknnRoute, "windows")).toBe(rknnRoute.unsupportedNote);
     expect(getIncompatibleExportMessage(rknnRoute, "linux")).toBeNull();
+  });
+
+  test("allows Edge TPU on Linux x86-64", () => {
+    expect(getIncompatibleExportMessage(edgeTpuRoute, "linux", "x86_64")).toBeNull();
+  });
+
+  test("blocks Edge TPU on Linux ARM64", () => {
+    expect(getIncompatibleExportMessage(edgeTpuRoute, "linux", "aarch64")).toBe(
+      edgeTpuRoute.unsupportedNote,
+    );
   });
 });

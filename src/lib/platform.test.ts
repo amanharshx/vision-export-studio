@@ -27,10 +27,15 @@ describe("isCompatible", () => {
     expect(isCompatible("linux_windows", "macos")).toBe(false);
   });
 
-  test("linux and linux_x86_64 locks are Linux only", () => {
+  test("linux lock allows every Linux architecture", () => {
     expect(isCompatible("linux", "linux")).toBe(true);
     expect(isCompatible("linux", "macos")).toBe(false);
-    expect(isCompatible("linux_x86_64", "linux")).toBe(true);
+  });
+
+  test("linux_x86_64 lock requires Linux on x86-64", () => {
+    expect(isCompatible("linux_x86_64", "linux", "x86_64")).toBe(true);
+    expect(isCompatible("linux_x86_64", "linux", "aarch64")).toBe(false);
+    expect(isCompatible("linux_x86_64", "linux", "unknown")).toBe(false);
     expect(isCompatible("linux_x86_64", "windows")).toBe(false);
   });
 });
@@ -43,6 +48,10 @@ describe("platformTags", () => {
   test("any has no tags", () => {
     expect(platformTags("any")).toEqual([]);
   });
+
+  test("linux_x86_64 names architecture requirement", () => {
+    expect(platformTags("linux_x86_64")).toEqual(["Linux x86-64"]);
+  });
 });
 
 describe("incompatibleReason", () => {
@@ -53,6 +62,12 @@ describe("incompatibleReason", () => {
   test("names current OS and supported platforms when incompatible", () => {
     expect(incompatibleReason("macos_linux", "windows")).toBe(
       "This format is not supported on Windows. Available on macOS and Linux only.",
+    );
+  });
+
+  test("names current architecture when Linux architecture is incompatible", () => {
+    expect(incompatibleReason("linux_x86_64", "linux", "aarch64")).toBe(
+      "This format is not supported on Linux ARM64. Available on Linux x86-64 only.",
     );
   });
 });

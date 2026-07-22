@@ -1,8 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { AppArch, AppOS } from "@/lib/platform";
 
 export interface AppTelemetryContext {
-  os: string;
-  arch: string;
+  os: AppOS;
+  arch: AppArch;
 }
 
 export function getAppTelemetryContext(): Promise<AppTelemetryContext> {

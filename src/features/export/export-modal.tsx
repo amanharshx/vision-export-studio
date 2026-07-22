@@ -17,6 +17,7 @@ import type {
   RfDetrVariantMode,
   RouteSpec,
 } from "@/lib/types";
+import type { AppPlatform } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { AlertTriangle, ChevronDown, Download, FolderOpen, Loader2, Play, Square } from "lucide-react";
 import { buildCommandPreview } from "./command-preview";
@@ -24,7 +25,7 @@ import { DependencyPanel } from "./dependency-panel";
 import { ExportLog } from "./export-log";
 import { OptionsPanel } from "./options-panel";
 import { formatIconMap } from "@/components/format-icons";
-import { getOS, incompatibleReason, isCompatible, platformTags } from "@/lib/platform";
+import { incompatibleReason, isCompatible, platformTags } from "@/lib/platform";
 import { categoryBg, categoryIcon } from "./route-card";
 
 interface ExportModalProps {
@@ -32,6 +33,7 @@ interface ExportModalProps {
   onOpenChange: (open: boolean) => void;
   provider: ProviderSpec;
   route: RouteSpec;
+  platform: AppPlatform;
   sourcePath: string;
   exportStatus: ExportStatus;
   logLines: string[];
@@ -85,6 +87,7 @@ export function ExportModal({
   onOpenChange,
   provider,
   route,
+  platform,
   sourcePath,
   exportStatus,
   logLines,
@@ -109,9 +112,8 @@ export function ExportModal({
   const Icon = formatIcon ?? categoryIcon(format.category);
   const bg = formatIcon ? "bg-white text-zinc-800" : categoryBg(format.category);
   const tags = platformTags(route.platformLock);
-  const os = getOS();
-  const unsupportedReason = !isCompatible(route.platformLock, os)
-    ? (route.unsupportedNote ?? incompatibleReason(route.platformLock, os))
+  const unsupportedReason = !isCompatible(route.platformLock, platform.os, platform.arch)
+    ? (route.unsupportedNote ?? incompatibleReason(route.platformLock, platform.os, platform.arch))
     : null;
   const isPendingConsent = installPhase === "pending_consent";
   const isInstalling = installPhase === "installing";
