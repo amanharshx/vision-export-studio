@@ -578,6 +578,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   }, [runtimeInstallPhase]);
 
   const streamDependencyInstall = useCallback(async (
+    routeId: string | null,
     packages: string[],
     pythonPath: string,
     appendLine: (line: string) => void,
@@ -615,7 +616,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     };
 
     try {
-      installSessionId = await installDependencies(packages, pythonPath);
+      installSessionId = await installDependencies(routeId, packages, pythonPath);
     } catch (error) {
       cleanup();
       throw error;
@@ -639,7 +640,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     setDepCheckError(null);
 
     try {
-      const result = await streamDependencyInstall(["ultralytics"], pythonPath, (line) => {
+      const result = await streamDependencyInstall(null, ["ultralytics"], pythonPath, (line) => {
         setRuntimeInstallLines((prev) => [...prev, line]);
       });
 
@@ -859,7 +860,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     setLogLines([]);
 
     try {
-      const result = await streamDependencyInstall(missingPkgs, pythonPath, (line) => {
+      const result = await streamDependencyInstall(exportRoute.routeId, missingPkgs, pythonPath, (line) => {
         setLogLines((prev) => [...prev, line]);
       });
 
