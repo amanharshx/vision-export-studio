@@ -45,29 +45,100 @@ fn run(argv: &[&str]) -> Result<(String, String, bool), String> {
     Ok((stdout, stderr, output.status.success()))
 }
 
-/// Attempt to resolve the Python executable.
-/// If `python_path` is provided, use it directly.
-/// Otherwise try "python3" then "python", picking the first that responds to --version.
-pub(crate) fn resolve_python(python_path: Option<&str>) -> Result<String, String> {
+const PYTHON_PROBE_MARKER: &str = "__VES_PYTHON__=";
+const PYTHON_PROBE_SCRIPT: &str = "import os, sys; print('__VES_PYTHON__=' + os.path.abspath(sys.executable)); raise SystemExit(0 if sys.version_info[0] == 3 else 1)";
+
+const WINDOWS_PYTHON_CANDIDATES: &[&[&str]] = &[&["python"], &["py", "-3"], &["python3"]];
+const UNIX_PYTHON_CANDIDATES: &[&[&str]] = &[&["python3"], &["python"]];
+
+fn python_candidates(is_windows: bool) -> &'static [&'static [&'static str]] {
+    if is_windows {
+        WINDOWS_PYTHON_CANDIDATES
+    } else {
+        UNIX_PYTHON_CANDIDATES
+    }
+}
+
+fn parse_python_probe(stdout: &str, success: bool) -> Option<String> {
+    if !success {
+        return None;
+    }
+
+    stdout.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix(PYTHON_PROBE_MARKER)
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn probe_python<F>(candidate: &[&str], runner: &F) -> Result<String, String>
+where
+    F: Fn(&[&str]) -> Result<(String, String, bool), String>,
+{
+    let mut argv = candidate.to_vec();
+    argv.push("-c");
+    argv.push(PYTHON_PROBE_SCRIPT);
+
+    let (stdout, stderr, success) = runner(&argv)?;
+    if let Some(path) = parse_python_probe(&stdout, success) {
+        return Ok(path);
+    }
+
+    let detail = first_line(&stderr)
+        .or_else(|| first_line(&stdout))
+        .unwrap_or("probe returned no valid Python 3 executable");
+    Err(format!(
+        "{} failed validation: {}",
+        candidate.join(" "),
+        detail
+    ))
+}
+
+fn resolve_python_with<F>(
+    python_path: Option<&str>,
+    is_windows: bool,
+    runner: F,
+) -> Result<String, String>
+where
+    F: Fn(&[&str]) -> Result<(String, String, bool), String>,
+{
     if let Some(path) = python_path {
-        // If the caller supplied an explicit filesystem path (contains a separator),
-        // verify it exists before spawning — avoids misleading spawn errors.
         if (path.contains('/') || path.contains('\\')) && !Path::new(path).exists() {
             return Err(format!("Python path does not exist: {}", path));
         }
-        // Validate the provided path by running --version.
-        run(&[path, "--version"])
-            .map_err(|e| format!("provided python path is not executable: {}", e))?;
-        return Ok(path.to_string());
+
+        return probe_python(&[path], &runner)
+            .map_err(|error| format!("provided Python failed validation: {}", error));
     }
 
-    for candidate in &["python3", "python"] {
-        if run(&[candidate, "--version"]).is_ok() {
-            return Ok(candidate.to_string());
+    let candidates = python_candidates(is_windows);
+    let mut failures = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        match probe_python(candidate, &runner) {
+            Ok(resolved_path) => return Ok(resolved_path),
+            Err(error) => failures.push(error),
         }
     }
 
-    Err("no Python executable found; install Python 3 and ensure it is on PATH".to_string())
+    let attempted = candidates
+        .iter()
+        .map(|candidate| candidate.join(" "))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "no working Python 3 interpreter found; tried {}; failures: {}; install Python 3 and restart the app",
+        attempted,
+        failures.join(" | ")
+    ))
+}
+
+/// Resolve a working Python 3 interpreter to its actual `sys.executable` path.
+/// Windows order: `python`, `py -3`, `python3`.
+/// Unix order: `python3`, `python`.
+pub(crate) fn resolve_python(python_path: Option<&str>) -> Result<String, String> {
+    resolve_python_with(python_path, cfg!(windows), run)
 }
 
 fn pick_python_candidate(
@@ -209,6 +280,115 @@ pub async fn detect_environment(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+
+    #[test]
+    fn windows_python_candidates_use_expected_priority() {
+        let candidates = python_candidates(true)
+            .iter()
+            .map(|candidate| candidate.join(" "))
+            .collect::<Vec<_>>();
+
+        assert_eq!(candidates, vec!["python", "py -3", "python3"]);
+    }
+
+    #[test]
+    fn unix_python_candidates_use_expected_priority() {
+        let candidates = python_candidates(false)
+            .iter()
+            .map(|candidate| candidate.join(" "))
+            .collect::<Vec<_>>();
+
+        assert_eq!(candidates, vec!["python3", "python"]);
+    }
+
+    #[test]
+    fn python_probe_requires_success_and_marker() {
+        let output = "__VES_PYTHON__=C:\\Python310\\python.exe";
+
+        assert_eq!(
+            parse_python_probe(output, true),
+            Some("C:\\Python310\\python.exe".to_string())
+        );
+        assert_eq!(parse_python_probe(output, false), None);
+        assert_eq!(parse_python_probe("Python 3.10.11", true), None);
+    }
+
+    #[test]
+    fn windows_resolver_skips_failed_alias_and_uses_launcher() {
+        let calls = RefCell::new(Vec::<Vec<String>>::new());
+
+        let resolved = resolve_python_with(None, true, |argv| {
+            calls
+                .borrow_mut()
+                .push(argv.iter().map(|arg| arg.to_string()).collect());
+
+            match argv[0] {
+                "python" => Ok((
+                    String::new(),
+                    "process exited with code 9009".to_string(),
+                    false,
+                )),
+                "py" => Ok((
+                    "__VES_PYTHON__=C:\\Python310\\python.exe".to_string(),
+                    String::new(),
+                    true,
+                )),
+                _ => panic!("unexpected candidate: {}", argv[0]),
+            }
+        })
+        .unwrap();
+
+        assert_eq!(resolved, "C:\\Python310\\python.exe");
+        let calls = calls.borrow();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0][0], "python");
+        assert_eq!(calls[1][..3], ["py", "-3", "-c"]);
+    }
+
+    #[test]
+    fn windows_resolver_falls_back_to_python3() {
+        let resolved = resolve_python_with(None, true, |argv| match argv[0] {
+            "python" | "py" => Ok((String::new(), String::new(), false)),
+            "python3" => Ok((
+                "__VES_PYTHON__=C:\\Python312\\python.exe".to_string(),
+                String::new(),
+                true,
+            )),
+            _ => panic!("unexpected candidate: {}", argv[0]),
+        })
+        .unwrap();
+
+        assert_eq!(resolved, "C:\\Python312\\python.exe");
+    }
+
+    #[test]
+    fn resolver_rejects_failed_explicit_python() {
+        let error = resolve_python_with(Some("custom-python"), true, |_| {
+            Ok((String::new(), "interpreter failed".to_string(), false))
+        })
+        .unwrap_err();
+
+        assert!(error.contains("provided Python failed validation"));
+        assert!(error.contains("interpreter failed"));
+    }
+
+    #[test]
+    fn resolver_reports_all_failed_candidates() {
+        let error = resolve_python_with(None, true, |argv| match argv[0] {
+            "python" => Ok((String::new(), "store alias failed".to_string(), false)),
+            "py" => Err("launcher missing".to_string()),
+            "python3" => Ok((String::new(), String::new(), false)),
+            _ => panic!("unexpected candidate: {}", argv[0]),
+        })
+        .unwrap_err();
+
+        assert!(error.contains("no working Python 3 interpreter found"));
+        assert!(error.contains("python, py -3, python3"));
+        assert!(error.contains("python failed validation: store alias failed"));
+        assert!(error.contains("launcher missing"));
+        assert!(error.contains("python3 failed validation"));
+    }
 
     #[test]
     fn explicit_override_wins_when_present() {

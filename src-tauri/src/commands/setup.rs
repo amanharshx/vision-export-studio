@@ -212,6 +212,14 @@ fn validate_runtime_dir(runtime_dir: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn build_venv_command(python: &str, venv_path: &Path) -> Command {
+    let mut command = Command::new(python);
+    command.arg("-m");
+    command.arg("venv");
+    command.arg(venv_path);
+    command
+}
+
 /// Spawn a child process, stream its stdout/stderr as Tauri events, and emit
 /// `setup:finished` or `setup:failed` when it exits.  Returns the session id.
 fn spawn_and_stream(
@@ -403,10 +411,7 @@ pub async fn create_runtime_venv(
 
     // Build argv: {python} -m venv {runtime_dir}/.venv
     let python = resolve_python(None)?;
-    let mut cmd = Command::new(&python);
-    cmd.arg("-m");
-    cmd.arg("venv");
-    cmd.arg(&venv_path);
+    let cmd = build_venv_command(&python, &venv_path);
 
     let sessions = Arc::clone(&state.sessions);
     spawn_and_stream(app_handle, sessions, cmd)
@@ -462,6 +467,28 @@ mod tests {
     fn default_runtime_dir_uses_vision_export_studio_dir_in_home() {
         let runtime_dir = default_runtime_dir_from_home("/Users/tester").unwrap();
         assert_eq!(runtime_dir, "/Users/tester/.vision-export-studio");
+    }
+
+    #[test]
+    fn venv_command_uses_resolved_python_and_expected_arguments() {
+        let venv_path = Path::new("C:/Users/HP/.vision-export-studio/.venv");
+        let command = build_venv_command(
+            "C:/Users/HP/AppData/Local/Programs/Python/Python310/python.exe",
+            venv_path,
+        );
+
+        assert_eq!(
+            command.get_program(),
+            "C:/Users/HP/AppData/Local/Programs/Python/Python310/python.exe"
+        );
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            vec!["-m", "venv", "C:/Users/HP/.vision-export-studio/.venv"]
+        );
     }
 
     #[test]
