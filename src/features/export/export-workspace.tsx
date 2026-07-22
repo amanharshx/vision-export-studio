@@ -6,6 +6,7 @@ import { defaultRouteForProvider, hasAllowedSourceExtension, providers, provider
 import { inspectRfDetrCheckpoint } from "@/lib/tauri/rfdetr";
 import { type AppOS, type AppPlatform, getOS, incompatibleReason, isCompatible, UNKNOWN_ARCH } from "@/lib/platform";
 import { getAppTelemetryContext } from "@/lib/tauri/app";
+import { createListenerGroup, type ListenerGroup } from "@/lib/tauri/listener-group";
 import type {
   DepCheckResult,
   EnvironmentInfo,
@@ -366,6 +367,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const rfdetrInspectRequestRef = useRef(0);
   const depRefreshRequestRef = useRef(0);
   const routeOptionsRef = useRef<Record<string, RouteOptionsState>>({});
+  const activeInstallListenerGroupRef = useRef<ListenerGroup | null>(null);
+
+  useEffect(() => {
+    return () => {
+      activeInstallListenerGroupRef.current?.dispose();
+      activeInstallListenerGroupRef.current = null;
+    };
+  }, []);
 
   const setOptionsWithSource = useCallback(
     (next: ExportOptions, optsSource: ExportOptionsSource) => {
@@ -468,26 +477,21 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     });
   }, [selectedRouteId, envInfo?.python_path, refreshRouteDependencies]);
 
-  // Set up event listeners; re-register when sessionId changes
+  // Register once; handlers filter events through the current session ref.
   useEffect(() => {
-    const unlisteners: Array<() => void> = [];
-
-    const setup = async () => {
-      const ulStdout = await listen<ExportLinePayload>("export:stdout", (event) => {
+    const listeners = createListenerGroup();
+    const registrations = [
+      listen<ExportLinePayload>("export:stdout", (event) => {
         if (event.payload.session_id === sessionIdRef.current) {
           setLogLines((prev) => [...prev, "[stdout] " + event.payload.line]);
         }
-      });
-      unlisteners.push(ulStdout);
-
-      const ulStderr = await listen<ExportLinePayload>("export:stderr", (event) => {
+      }),
+      listen<ExportLinePayload>("export:stderr", (event) => {
         if (event.payload.session_id === sessionIdRef.current) {
           setLogLines((prev) => [...prev, "[stderr] " + event.payload.line]);
         }
-      });
-      unlisteners.push(ulStderr);
-
-      const ulFinished = await listen<ExportFinishedPayload>("export:finished", (event) => {
+      }),
+      listen<ExportFinishedPayload>("export:finished", (event) => {
         if (event.payload.session_id === sessionIdRef.current) {
           if (event.payload.artifact_warning) {
             setLogLines((prev) => [...prev, "[warning] " + event.payload.artifact_warning]);
@@ -502,10 +506,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
           setCompletedOutputDir(event.payload.output_dir || currentExportOutputDirRef.current);
           setExportStatus("finished");
         }
-      });
-      unlisteners.push(ulFinished);
-
-      const ulFailed = await listen<ExportFailedPayload>("export:failed", (event) => {
+      }),
+      listen<ExportFailedPayload>("export:failed", (event) => {
         if (event.payload.session_id === sessionIdRef.current) {
           const message = getExportFailedUserMessage(event.payload.error);
           const exportRoute = currentExportRouteRef.current;
@@ -521,10 +523,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
           setLogLines((prev) => [...prev, "[error] " + message]);
           setExportStatus("failed");
         }
-      });
-      unlisteners.push(ulFailed);
-
-      const ulCancelled = await listen<ExportCancelledPayload>("export:cancelled", (event) => {
+      }),
+      listen<ExportCancelledPayload>("export:cancelled", (event) => {
         if (event.payload.session_id === sessionIdRef.current) {
           const exportRoute = currentExportRouteRef.current;
           if (exportRoute) {
@@ -535,17 +535,18 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
           }
           setExportStatus("cancelled");
         }
-      });
-      unlisteners.push(ulCancelled);
-    };
+      }),
+    ];
 
-    setup().catch((e: unknown) => {
-      setInvokeError("Failed to set up export listeners: " + String(e));
+    void Promise.all(registrations.map((registration) => listeners.add(registration))).catch((e: unknown) => {
+      const alreadyDisposed = listeners.isDisposed();
+      listeners.dispose();
+      if (!alreadyDisposed) {
+        setInvokeError("Failed to set up export listeners: " + String(e));
+      }
     });
 
-    return () => {
-      for (const ul of unlisteners) ul();
-    };
+    return () => listeners.dispose();
   }, []);
 
   useEffect(() => {
@@ -583,48 +584,43 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     pythonPath: string,
     appendLine: (line: string) => void,
   ): Promise<"ok" | string> => {
+    const listeners = createListenerGroup();
+    activeInstallListenerGroupRef.current?.dispose();
+    activeInstallListenerGroupRef.current = listeners;
     let installSessionId = "";
     let resolveInstall!: (result: "ok" | string) => void;
     const installPromise = new Promise<"ok" | string>((resolve) => {
       resolveInstall = resolve;
     });
 
-    const [unOut, unErr, unDone, unFail] = await Promise.all([
-      listen<InstallLinePayload>("install:stdout", (ev) => {
-        if (!installSessionId || ev.payload.session_id !== installSessionId) return;
-        appendLine("[stdout] " + ev.payload.line);
-      }),
-      listen<InstallLinePayload>("install:stderr", (ev) => {
-        if (!installSessionId || ev.payload.session_id !== installSessionId) return;
-        appendLine("[stderr] " + ev.payload.line);
-      }),
-      listen<InstallFinishedPayload>("install:finished", (ev) => {
-        if (!installSessionId || ev.payload.session_id !== installSessionId) return;
-        resolveInstall("ok");
-      }),
-      listen<InstallFailedPayload>("install:failed", (ev) => {
-        if (!installSessionId || ev.payload.session_id !== installSessionId) return;
-        resolveInstall(ev.payload.error);
-      }),
-    ]);
-
-    const cleanup = () => {
-      unOut();
-      unErr();
-      unDone();
-      unFail();
-    };
-
     try {
-      installSessionId = await installDependencies(routeId, packages, pythonPath);
-    } catch (error) {
-      cleanup();
-      throw error;
-    }
+      await Promise.all([
+        listeners.add(listen<InstallLinePayload>("install:stdout", (ev) => {
+          if (!installSessionId || ev.payload.session_id !== installSessionId) return;
+          appendLine("[stdout] " + ev.payload.line);
+        })),
+        listeners.add(listen<InstallLinePayload>("install:stderr", (ev) => {
+          if (!installSessionId || ev.payload.session_id !== installSessionId) return;
+          appendLine("[stderr] " + ev.payload.line);
+        })),
+        listeners.add(listen<InstallFinishedPayload>("install:finished", (ev) => {
+          if (!installSessionId || ev.payload.session_id !== installSessionId) return;
+          resolveInstall("ok");
+        })),
+        listeners.add(listen<InstallFailedPayload>("install:failed", (ev) => {
+          if (!installSessionId || ev.payload.session_id !== installSessionId) return;
+          resolveInstall(ev.payload.error);
+        })),
+      ]);
 
-    const result = await installPromise;
-    cleanup();
-    return result;
+      installSessionId = await installDependencies(routeId, packages, pythonPath);
+      return await installPromise;
+    } finally {
+      listeners.dispose();
+      if (activeInstallListenerGroupRef.current === listeners) {
+        activeInstallListenerGroupRef.current = null;
+      }
+    }
   }, []);
 
   const handleInstallUltralyticsRuntime = useCallback(async () => {
