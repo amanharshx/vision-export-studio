@@ -173,6 +173,13 @@ describe("route precision matrix", () => {
     expect(byId("ultralytics.pt.edgetpu").precisionModes).toEqual(["int8"]);
     expect(byId("ultralytics.pt.axelera").precisionModes).toEqual(["int8"]);
   });
+
+  test("EdgeTPU and Axelera recommend calibration for INT8", () => {
+    for (const id of ["ultralytics.pt.edgetpu", "ultralytics.pt.axelera"]) {
+      expect(byId(id).precisionModes).toEqual(["int8"]);
+      expect(byId(id).calibrationRecommendedFor).toEqual(["int8"]);
+    }
+  });
 });
 
 const defaultOpts = {

@@ -77,11 +77,12 @@ describe("PrecisionOptions", () => {
     expect(markup).toContain(CALIBRATION_FALLBACK_WARNING);
   });
 
-  test("EdgeTPU and Axelera render fixed precision without interactive select", () => {
+  test("EdgeTPU and Axelera render fixed precision with calibration picker", () => {
     for (const id of ["ultralytics.pt.edgetpu", "ultralytics.pt.axelera"]) {
       const markup = renderPrecision(routeById(id), { ...baseOptions, precision: "int8" });
       expect(markup).not.toContain("data-slot=\"select-trigger\"");
-      expect(markup).toContain("INT8");
+      expect(markup).toContain("Browse calibration dataset");
+      expect(markup).toContain(CALIBRATION_FALLBACK_WARNING);
     }
   });
 

@@ -104,6 +104,47 @@ describe("buildCommandPreview", () => {
     expect(preview).not.toContain("data=");
   });
 
+  test("ultralytics EdgeTPU — INT8 plus calibration YAML emits data path", () => {
+    const preview = buildCommandPreview({
+      ...ultralyticsInput,
+      routeId: "ultralytics.pt.edgetpu",
+      targetFormat: "edgetpu",
+      options: {
+        ...ultralyticsInput.options,
+        precision: "int8",
+        calibrationData: "/tmp/calibration.yaml",
+      },
+    });
+    expect(preview).toContain("quantize=8");
+    expect(preview).toContain("data=/tmp/calibration.yaml");
+  });
+
+  test("ultralytics Axelera — INT8 plus calibration YAML emits data path", () => {
+    const preview = buildCommandPreview({
+      ...ultralyticsInput,
+      routeId: "ultralytics.pt.axelera",
+      targetFormat: "axelera",
+      options: {
+        ...ultralyticsInput.options,
+        precision: "int8",
+        calibrationData: "/tmp/calibration.yaml",
+      },
+    });
+    expect(preview).toContain("quantize=8");
+    expect(preview).toContain("data=/tmp/calibration.yaml");
+  });
+
+  test("ultralytics EdgeTPU — INT8 without YAML emits no data=", () => {
+    const preview = buildCommandPreview({
+      ...ultralyticsInput,
+      routeId: "ultralytics.pt.edgetpu",
+      targetFormat: "edgetpu",
+      options: { ...ultralyticsInput.options, precision: "int8" },
+    });
+    expect(preview).toContain("quantize=8");
+    expect(preview).not.toContain("data=");
+  });
+
   test("ultralytics LiteRT — stored calibration YAML not emitted for FP32", () => {
     const preview = buildCommandPreview({
       ...ultralyticsInput,
