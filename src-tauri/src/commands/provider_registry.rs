@@ -129,9 +129,7 @@ pub fn validate_route_platform(route_id: &str, os: &str, arch: &str) -> Result<(
         PlatformLock::LinuxX86_64 => os == "linux" && arch == "x86_64",
         PlatformLock::LinuxWindows => os == "linux" || os == "windows",
         PlatformLock::MacosLinux => os == "macos" || os == "linux",
-        PlatformLock::MacosLinuxX86_64 => {
-            os == "macos" || (os == "linux" && arch == "x86_64")
-        }
+        PlatformLock::MacosLinuxX86_64 => os == "macos" || (os == "linux" && arch == "x86_64"),
     };
 
     if compatible {

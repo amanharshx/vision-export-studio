@@ -775,7 +775,10 @@ mod tests {
         let names: Vec<&str> = deps.pip.iter().map(|d| d.package_name).collect();
         assert_eq!(names, vec!["litert-torch>=0.9.0", "ai-edge-litert>=2.1.4"]);
         for dep in deps.pip {
-            assert_eq!(dep.install_hint, "pip install \"ultralytics[export-litert]\"");
+            assert_eq!(
+                dep.install_hint,
+                "pip install \"ultralytics[export-litert]\""
+            );
             assert!(!dep.optional);
         }
     }
@@ -794,11 +797,21 @@ mod tests {
 
     #[test]
     fn litert_dependency_install_gates_export_host() {
-        assert!(validate_install_route_platform("ultralytics.pt.litert", "macos", "x86_64").is_ok());
-        assert!(validate_install_route_platform("ultralytics.pt.litert", "macos", "aarch64").is_ok());
-        assert!(validate_install_route_platform("ultralytics.pt.litert", "linux", "x86_64").is_ok());
-        assert!(validate_install_route_platform("ultralytics.pt.litert", "windows", "x86_64").is_err());
-        assert!(validate_install_route_platform("ultralytics.pt.litert", "linux", "aarch64").is_err());
+        assert!(
+            validate_install_route_platform("ultralytics.pt.litert", "macos", "x86_64").is_ok()
+        );
+        assert!(
+            validate_install_route_platform("ultralytics.pt.litert", "macos", "aarch64").is_ok()
+        );
+        assert!(
+            validate_install_route_platform("ultralytics.pt.litert", "linux", "x86_64").is_ok()
+        );
+        assert!(
+            validate_install_route_platform("ultralytics.pt.litert", "windows", "x86_64").is_err()
+        );
+        assert!(
+            validate_install_route_platform("ultralytics.pt.litert", "linux", "aarch64").is_err()
+        );
     }
 
     #[test]
