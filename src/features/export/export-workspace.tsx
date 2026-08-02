@@ -90,8 +90,6 @@ const routeDefaults: Partial<Record<string, Partial<ExportOptions>>> = {
   "ultralytics.pt.openvino": { half: true },
   "ultralytics.pt.engine": { half: true, simplify: true },
   "ultralytics.pt.coreml": { half: true },
-  "ultralytics.pt.tflite": { half: true },
-  "ultralytics.pt.tfjs": { half: true },
   "ultralytics.pt.mnn": { half: true },
   "ultralytics.pt.ncnn": { half: true },
   "ultralytics.pt.imx": { int8: true },

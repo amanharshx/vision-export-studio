@@ -54,6 +54,17 @@ describe("buildCommandPreview", () => {
     expect(preview).toBe("yolo export model=/tmp/best.pt format=onnx imgsz=640 batch=1");
   });
 
+  test("ultralytics LiteRT — format=litert, no half/int8 by default", () => {
+    const preview = buildCommandPreview({
+      ...ultralyticsInput,
+      routeId: "ultralytics.pt.litert",
+      targetFormat: "litert",
+    });
+    expect(preview).toBe("yolo export model=/tmp/best.pt format=litert imgsz=640 batch=1");
+    expect(preview).not.toContain("half=");
+    expect(preview).not.toContain("int8=");
+  });
+
   test("ultralytics ONNX — half, simplify, opset", () => {
     const preview = buildCommandPreview({
       ...ultralyticsInput,

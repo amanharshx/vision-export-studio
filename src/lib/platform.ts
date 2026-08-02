@@ -24,6 +24,7 @@ export function platformTags(lock: PlatformLock): string[] {
     case "linux_windows": return ["Linux", "Windows"];
     case "macos": return ["macOS"];
     case "macos_linux": return ["macOS", "Linux"];
+    case "macos_linux_x86_64": return ["macOS", "Linux x86-64"];
     case "windows": return ["Windows"];
   }
 }
@@ -36,6 +37,8 @@ export function isCompatible(lock: PlatformLock, os: AppOS, arch: AppArch = UNKN
     case "linux_windows": return os === "linux" || os === "windows";
     case "macos": return os === "macos";
     case "macos_linux": return os === "macos" || os === "linux";
+    case "macos_linux_x86_64":
+      return os === "macos" || (os === "linux" && arch === "x86_64");
     case "windows": return os === "windows";
   }
 }
@@ -64,7 +67,7 @@ export function incompatibleReason(
   arch: AppArch = UNKNOWN_ARCH,
 ): string | null {
   if (isCompatible(lock, os, arch)) return null;
-  const current = lock === "linux_x86_64" && os === "linux"
+  const current = (lock === "linux_x86_64" || lock === "macos_linux_x86_64") && os === "linux"
     ? platformLabel(os, arch)
     : OS_LABEL[os];
   const supported = platformTags(lock).join(" and ");

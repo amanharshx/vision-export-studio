@@ -21,6 +21,14 @@ describe("isCompatible", () => {
     expect(isCompatible("macos_linux", "windows")).toBe(false);
   });
 
+  test("macos_linux_x86_64 lock allows any macOS and Linux x86-64 only", () => {
+    expect(isCompatible("macos_linux_x86_64", "macos", "x86_64")).toBe(true);
+    expect(isCompatible("macos_linux_x86_64", "macos", "aarch64")).toBe(true);
+    expect(isCompatible("macos_linux_x86_64", "linux", "x86_64")).toBe(true);
+    expect(isCompatible("macos_linux_x86_64", "linux", "aarch64")).toBe(false);
+    expect(isCompatible("macos_linux_x86_64", "windows", "x86_64")).toBe(false);
+  });
+
   test("linux_windows lock excludes macOS", () => {
     expect(isCompatible("linux_windows", "linux")).toBe(true);
     expect(isCompatible("linux_windows", "windows")).toBe(true);
@@ -52,6 +60,10 @@ describe("platformTags", () => {
   test("linux_x86_64 names architecture requirement", () => {
     expect(platformTags("linux_x86_64")).toEqual(["Linux x86-64"]);
   });
+
+  test("macos_linux_x86_64 tags macOS and Linux x86-64", () => {
+    expect(platformTags("macos_linux_x86_64")).toEqual(["macOS", "Linux x86-64"]);
+  });
 });
 
 describe("incompatibleReason", () => {
@@ -68,6 +80,15 @@ describe("incompatibleReason", () => {
   test("names current architecture when Linux architecture is incompatible", () => {
     expect(incompatibleReason("linux_x86_64", "linux", "aarch64")).toBe(
       "This format is not supported on Linux ARM64. Available on Linux x86-64 only.",
+    );
+  });
+
+  test("names current architecture and required hosts for LiteRT lock", () => {
+    expect(incompatibleReason("macos_linux_x86_64", "linux", "aarch64")).toBe(
+      "This format is not supported on Linux ARM64. Available on macOS and Linux x86-64 only.",
+    );
+    expect(incompatibleReason("macos_linux_x86_64", "windows", "x86_64")).toBe(
+      "This format is not supported on Windows. Available on macOS and Linux x86-64 only.",
     );
   });
 });

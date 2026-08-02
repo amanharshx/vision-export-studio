@@ -14,6 +14,19 @@ describe("buildDependencyItems", () => {
 
     expect(items.map((item) => item.name)).toContain("ultralytics");
   });
+
+  test("LiteRT panel lists LiteRT packages and not TensorFlow/onnx2tf", () => {
+    const route = routesForProvider("ultralytics").find((item) => item.id === "ultralytics.pt.litert");
+    expect(route).toBeDefined();
+
+    const items = buildDependencyItems(providers.ultralytics, route!);
+    const names = items.map((item) => item.name);
+
+    expect(names).toContain("litert-torch>=0.9.0");
+    expect(names).toContain("ai-edge-litert>=2.1.4");
+    expect(names).not.toContain("tensorflow");
+    expect(names).not.toContain("onnx2tf");
+  });
 });
 
 describe("sortDependencyItems", () => {

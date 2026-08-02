@@ -71,6 +71,28 @@ describe("provider route registry", () => {
     expect(markup).toContain("TensorRT via ONNX");
     expect(markup).not.toContain("TFLite");
   });
+
+  test("LiteRT route exposes LiteRT metadata and drops TFLite/TF.js routes", () => {
+    const routes = routesForProvider("ultralytics");
+    const litert = routes.find((item) => item.id === "ultralytics.pt.litert");
+    expect(litert).toBeDefined();
+
+    expect(litert!.title).toBe("LiteRT");
+    expect(litert!.targetFormat).toBe("litert");
+    expect(litert!.displayPath).toBe("model.pt → model.tflite");
+    expect(litert!.intermediates).toEqual([]);
+    expect(litert!.supportsHalf).toBe(false);
+    expect(litert!.requiresGpu).toBe(false);
+    expect(litert!.platformLock).toBe("macos_linux_x86_64");
+    expect(litert!.pipDeps.map((dep) => dep.packageName)).toEqual([
+      "litert-torch>=0.9.0",
+      "ai-edge-litert>=2.1.4",
+    ]);
+
+    const ids = routes.map((item) => item.id);
+    expect(ids).not.toContain("ultralytics.pt.tflite");
+    expect(ids).not.toContain("ultralytics.pt.tfjs");
+  });
 });
 
 const defaultOpts = {
