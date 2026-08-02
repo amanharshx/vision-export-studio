@@ -55,7 +55,10 @@ fn calibration_recommended(route_id: &str, precision: &str) -> bool {
 fn artifact_info(format: &str, precision: &str) -> (&'static str, bool) {
     match format {
         "torchscript" => (".torchscript", false),
-        "onnx" => (".onnx", false),
+        "onnx" => match precision {
+            "8" => ("_int8.onnx", false),
+            _ => (".onnx", false),
+        },
         "openvino" => ("_openvino_model", true),
         "coreml" => (".mlpackage", true),
         "ncnn" => ("_ncnn_model", true),
@@ -296,8 +299,36 @@ mod tests {
     }
 
     #[test]
-    fn move_artifact_moves_file_into_output_dir() {
-        let root = temp_dir("export-file");
+    fn move_artifact_moves_int8_onnx() {
+        let root = temp_dir("export-int8-onnx");
+        let source_dir = root.join("source");
+        let output_dir = root.join("output");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::create_dir_all(&output_dir).expect("create output dir");
+
+        let source_model = source_dir.join("best.pt");
+        let source_artifact = source_dir.join("best_int8.onnx");
+        fs::write(&source_model, "model").expect("write source model");
+        fs::write(&source_artifact, "artifact").expect("write source artifact");
+
+        let moved = move_artifact(
+            &source_model.to_string_lossy(),
+            "onnx",
+            "int8",
+            &output_dir.to_string_lossy(),
+        )
+        .expect("move artifact");
+
+        assert!(moved);
+        assert!(!source_artifact.exists());
+        assert!(output_dir.join("best_int8.onnx").exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn move_artifact_moves_plain_onnx_for_fp32() {
+        let root = temp_dir("export-fp32-onnx");
         let source_dir = root.join("source");
         let output_dir = root.join("output");
         fs::create_dir_all(&source_dir).expect("create source dir");
@@ -311,7 +342,7 @@ mod tests {
         let moved = move_artifact(
             &source_model.to_string_lossy(),
             "onnx",
-            "",
+            "fp32",
             &output_dir.to_string_lossy(),
         )
         .expect("move artifact");
