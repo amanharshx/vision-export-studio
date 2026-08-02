@@ -16,7 +16,7 @@ export const RKNN_CHIPS = [
 
 const RKNN_INT8_ONLY_CHIPS = new Set(["rv1103", "rv1103b", "rv1106", "rv1106b"]);
 
-export function normalizeRknnChip(chip: string): string {
+function normalizeRknnChip(chip: string): string {
   return chip.trim().toLowerCase();
 }
 

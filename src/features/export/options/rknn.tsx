@@ -3,7 +3,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { PrecisionMode } from "@/lib/types";
 import { InputRow, useOptionSetter, type OptionsPanelProps } from "./_base";
 import { PrecisionOptions } from "./precision";
-import { RKNN_CHIPS, isRknnInt8OnlyChip, normalizeRknnChip } from "./normalize";
+import { RKNN_CHIPS, isRknnInt8OnlyChip } from "./normalize";
 
 export function RknnOptions({ route, options, onOptionsChange }: OptionsPanelProps) {
   const set = useOptionSetter(options, onOptionsChange);
@@ -49,14 +49,7 @@ export function RknnOptions({ route, options, onOptionsChange }: OptionsPanelPro
         </div>
         <Select
           value={options.chip}
-          onValueChange={(value) => {
-            const chip = normalizeRknnChip(value);
-            onOptionsChange({
-              ...options,
-              chip,
-              precision: isRknnInt8OnlyChip(chip) ? "int8" : options.precision,
-            });
-          }}
+          onValueChange={(value) => set("chip", value)}
         >
           <SelectTrigger>
             <SelectValue placeholder="Select chip" />
