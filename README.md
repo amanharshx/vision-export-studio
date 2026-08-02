@@ -39,7 +39,7 @@ Desktop studio for exporting Ultralytics YOLO `.pt` and Roboflow RF-DETR `.pth` 
 
 ---
 
-[**Vision Export Studio**](https://github.com/amanharshx/vision-export-studio) is a desktop app that exports computer-vision model weights into deployment-ready formats. It supports two model families: [Ultralytics](https://www.ultralytics.com/) YOLO `.pt` weights with full target coverage (ONNX, TensorRT, CoreML, TFLite, and more), and [Roboflow](https://roboflow.com/) RF-DETR `.pth` checkpoints with a focused set of targets (ONNX and TensorRT). Select your model, pick a target, and generate the export locally - model files stay on your machine.
+[**Vision Export Studio**](https://github.com/amanharshx/vision-export-studio) is a desktop app that exports computer-vision model weights into deployment-ready formats. It supports two model families: [Ultralytics](https://www.ultralytics.com/) YOLO `.pt` weights with full target coverage (ONNX, TensorRT, CoreML, LiteRT, and more), and [Roboflow](https://roboflow.com/) RF-DETR `.pth` checkpoints with a focused set of targets (ONNX and TensorRT). Select your model, pick a target, and generate the export locally - model files stay on your machine.
 
 ## Features
 
@@ -50,7 +50,7 @@ Desktop studio for exporting Ultralytics YOLO `.pt` and Roboflow RF-DETR `.pth` 
 - **Automatic route installs** - route-specific Python dependencies install when needed for most export paths
 - **Dependency status checks** - each route reports missing Python packages or system binaries before you export, with install hints
 - **Two model families** - Ultralytics YOLO (`.pt`) with full target coverage, and Roboflow RF-DETR (`.pth`) for ONNX and TensorRT
-- **Multiple export targets** - ONNX, TensorRT, CoreML, OpenVINO, TFLite, Paddle, NCNN, RKNN, and more
+- **Multiple export targets** - ONNX, TensorRT, CoreML, OpenVINO, LiteRT, Paddle, NCNN, RKNN, and more
 - **Configurable export options** - tune target-specific settings such as image size, batch size, FP16 (`half`), INT8, dynamic axes, ONNX opset, TensorRT workspace, and RKNN target chip
 - **RF-DETR checkpoint inspection** - after trusted-checkpoint confirmation, auto-detects model family (detection vs segmentation), size, and recommended native image size from the `.pth` checkpoint
 - **Safer process execution** - export commands run through Tauri/Rust with argv-based subprocess handling
@@ -90,9 +90,8 @@ Ultralytics YOLO (`.pt`) target formats:
 | `.pt -> coreml` | ✅ | macOS-only. |
 | `.pt -> saved_model` | ✅ | TensorFlow SavedModel output. |
 | `.pt -> pb` | ✅ | TensorFlow GraphDef output. |
-| `.pt -> tflite` | ✅ | One-way runtime artifact. |
+| `.pt -> litert` | ✅ | CPU-only. Export on macOS (Intel/Apple Silicon) or Linux `x86_64`. Exported `.tflite` runs on LiteRT-supported mobile, embedded, edge, browser (LiteRT.js), and Node.js targets. |
 | `.pt -> edgetpu` | ✅ | Linux `x86_64` and `edgetpu_compiler` required. |
-| `.pt -> tfjs` | ✅ | Web deployment output. |
 | `.pt -> paddle` | ✅ | PaddlePaddle export path. |
 | `.pt -> ncnn` | ✅ | Mobile-friendly runtime output. |
 | `.pt -> mnn` | ✅ | One-way runtime artifact. |
@@ -119,11 +118,12 @@ Some targets are one-way deployment artifacts or platform-locked:
 
 - `engine` requires NVIDIA GPU and supported TensorRT stack. No macOS support.
 - `coreml` export is macOS-only.
+- `litert` export requires macOS (Intel or Apple Silicon) or Linux `x86_64`. The exported `.tflite` is portable and runs on LiteRT-supported mobile, embedded, edge, browser (LiteRT.js), and Node.js targets.
 - `edgetpu` export requires Linux `x86_64` and `edgetpu_compiler`.
 - `rknn` export is Linux-only and requires target chip selection.
 - `imx` export is Linux-only and requires Java `>= 17`.
 - `axelera` export is Linux-only.
-- `tflite`, `engine`, `mnn`, `rknn`, `imx`, `axelera`, `edgetpu`, and some `coreml` outputs should be treated as one-way deployment outputs.
+- `litert`, `engine`, `mnn`, `rknn`, `imx`, `axelera`, `edgetpu`, and some `coreml` outputs should be treated as one-way deployment outputs.
 - **Roboflow RF-DETR (`.pth`)** exports only to `onnx` and `engine`. Its `engine` (TensorRT) path is NVIDIA-only and requires `trtexec`, identical to the Ultralytics `engine` caveat.
 
 ---
