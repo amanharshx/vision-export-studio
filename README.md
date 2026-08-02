@@ -129,11 +129,15 @@ Each Ultralytics export target shows a route-specific **Precision** control. The
 TorchScript is FP32-only in this app. Ultralytics FP16 TorchScript export requires GPU `device=0`;
 this app does not expose export-device selection.
 
+RKNN precision depends on the selected chip. The `rv1103`, `rv1106`, `rv1103b`, and `rv1106b` targets
+are INT8-only, so choosing one of them fixes Precision to INT8; all other Rockchip targets offer FP16
+and INT8.
+
 Export commands always pass an explicit canonical `quantize=` argument (FP32 → `32`, FP16 → `16`, INT8 → `8`, W8A16 → `w8a16`, W8A32 → `w8a32`) instead of the legacy `half=True`/`int8=True` switches.
 
 ### Calibration data
 
-INT8 calibration modes offer an optional dataset YAML picker: ONNX/OpenVINO/TensorRT/SavedModel INT8, LiteRT INT8 and W8A16, RKNN INT8, and IMX INT8 and W8A16.
+INT8 calibration modes offer an optional dataset YAML picker: ONNX/OpenVINO/TensorRT/SavedModel INT8, LiteRT INT8 and W8A16, RKNN INT8, IMX INT8 and W8A16, and Edge TPU and Axelera INT8.
 
 The calibration dataset is **optional**. When you omit it, the export still runs and Ultralytics falls back to its default calibration dataset, so accuracy may differ. Calibration YAML is stored per-route and is never auto-reused across routes.
 
@@ -147,7 +151,7 @@ Some targets are one-way deployment artifacts or platform-locked:
 - `coreml` export is macOS-only.
 - `litert` export requires macOS (Intel or Apple Silicon) or Linux `x86_64`. The exported `.tflite` is portable and runs on LiteRT-supported mobile, embedded, edge, browser (LiteRT.js), and Node.js targets.
 - `edgetpu` export requires Linux `x86_64` and `edgetpu_compiler`.
-- `rknn` export is Linux-only and requires target chip selection.
+- `rknn` export is Linux-only and requires target chip selection. The `rv1103`, `rv1106`, `rv1103b`, and `rv1106b` chips support INT8 only.
 - `imx` export is Linux-only and requires Java `>= 17`.
 - `axelera` export is Linux-only.
 - `litert`, `engine`, `mnn`, `rknn`, `imx`, `axelera`, `edgetpu`, and some `coreml` outputs should be treated as one-way deployment outputs.
