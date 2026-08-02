@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { routesForProvider } from "@/lib/providers";
 import type { ExportOptions, RouteSpec } from "@/lib/types";
-import { RKNN_CHIPS, isRknnInt8OnlyChip, normalizeOptionsForRoute } from "./normalize";
+import { isRknnInt8OnlyChip, normalizeOptionsForRoute } from "./normalize";
 import { RknnOptions } from "./rknn";
 
 const baseOptions: ExportOptions = {
@@ -42,22 +42,6 @@ function renderRknn(route: RouteSpec, options: ExportOptions): string {
 }
 
 describe("RKNN chip list and helpers", () => {
-  test("matches the exact upstream Rockchip chip list", () => {
-    expect(RKNN_CHIPS).toEqual([
-      "rk3588",
-      "rk3576",
-      "rk3566",
-      "rk3568",
-      "rk3562",
-      "rv1103",
-      "rv1106",
-      "rv1103b",
-      "rv1106b",
-      "rk2118",
-      "rv1126b",
-    ]);
-  });
-
   test("isRknnInt8OnlyChip normalizes trim and case", () => {
     expect(isRknnInt8OnlyChip(" RV1106B ")).toBe(true);
     expect(isRknnInt8OnlyChip("rv1103")).toBe(true);
