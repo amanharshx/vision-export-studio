@@ -30,11 +30,7 @@ fn allowed_precisions(route_id: &str) -> Option<&'static [&'static str]> {
     })
 }
 
-pub fn validate_precision(
-    route_id: &str,
-    precision: &str,
-    calibration_data: &Option<String>,
-) -> Result<String, String> {
+pub fn validate_precision(route_id: &str, precision: &str) -> Result<String, String> {
     let allowed = allowed_precisions(route_id)
         .ok_or_else(|| format!("route not supported in this build: {}", route_id))?;
     let quantize = canonical_quantize(precision)
@@ -45,9 +41,6 @@ pub fn validate_precision(
             precision, route_id
         ));
     }
-    // Calibration YAML is optional for every mode; absence is valid and the
-    // command simply omits data=. Keep the argument for a single entry point.
-    let _ = calibration_data;
     Ok(quantize.to_string())
 }
 
@@ -150,11 +143,7 @@ pub fn build_command(request: &ExportRequest) -> Result<Command, String> {
         .route_id
         .strip_prefix("ultralytics.pt.")
         .ok_or_else(|| format!("route not supported in this build: {}", request.route_id))?;
-    let quantize = validate_precision(
-        &request.route_id,
-        &request.precision,
-        &request.calibration_data,
-    )?;
+    let quantize = validate_precision(&request.route_id, &request.precision)?;
     let mut cmd = Command::new(&request.yolo_path);
     cmd.arg("export");
     cmd.arg(format!("model={}", request.source_path));
@@ -580,19 +569,19 @@ mod tests {
     #[test]
     fn validate_precision_resolves_fp16_for_onnx() {
         assert_eq!(
-            super::validate_precision("ultralytics.pt.onnx", "fp16", &None),
+            super::validate_precision("ultralytics.pt.onnx", "fp16"),
             Ok("16".to_string())
         );
     }
 
     #[test]
     fn validate_precision_accepts_litert_w8a32() {
-        assert!(super::validate_precision("ultralytics.pt.litert", "w8a32", &None).is_ok());
+        assert!(super::validate_precision("ultralytics.pt.litert", "w8a32").is_ok());
     }
 
     #[test]
     fn validate_precision_rejects_litert_fp16() {
-        assert!(super::validate_precision("ultralytics.pt.litert", "fp16", &None).is_err());
+        assert!(super::validate_precision("ultralytics.pt.litert", "fp16").is_err());
     }
 
     #[test]
