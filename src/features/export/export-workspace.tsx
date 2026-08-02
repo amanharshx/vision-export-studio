@@ -47,7 +47,7 @@ import type { UpdaterController } from "@/features/updater/use-updater-controlle
 import { DropZone } from "./drop-zone";
 import { ExportModal } from "./export-modal";
 import { RouteGrid } from "./route-grid";
-import { normalizeOptionsForRoute } from "./options/rknn";
+import { normalizeOptionsForRoute } from "./options/normalize";
 
 type WorkspaceView = "drop" | "formats";
 type RuntimeInstallPhase = "idle" | "installing" | "ready" | "failed";

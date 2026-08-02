@@ -4,7 +4,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { routesForProvider } from "@/lib/providers";
 import type { ExportOptions, RouteSpec } from "@/lib/types";
-import { RKNN_CHIPS, RknnOptions, isRknnInt8OnlyChip, normalizeOptionsForRoute } from "./rknn";
+import { RKNN_CHIPS, isRknnInt8OnlyChip, normalizeOptionsForRoute } from "./normalize";
+import { RknnOptions } from "./rknn";
 
 const baseOptions: ExportOptions = {
   imgsz: 640,

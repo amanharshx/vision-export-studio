@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildCommandPreview } from "./command-preview";
 import type { CommandPreviewInput } from "./command-preview";
+import { normalizeOptionsForRoute } from "./options/normalize";
 
 const ultralyticsInput: CommandPreviewInput = {
   providerId: "ultralytics",
@@ -222,11 +223,16 @@ describe("buildCommandPreview", () => {
   });
 
   test("ultralytics RKNN — normalized INT8-only chip emits quantize=8 and lowercase name", () => {
+    const options = normalizeOptionsForRoute("ultralytics.pt.rknn", {
+      ...ultralyticsInput.options,
+      chip: "RV1106B",
+      precision: "fp16",
+    });
     const preview = buildCommandPreview({
       ...ultralyticsInput,
       routeId: "ultralytics.pt.rknn",
       targetFormat: "rknn",
-      options: { ...ultralyticsInput.options, precision: "int8", chip: "rv1106b" },
+      options,
     });
     expect(preview).toContain("quantize=8");
     expect(preview).toContain("name=rv1106b");

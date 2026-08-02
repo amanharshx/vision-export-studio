@@ -288,6 +288,17 @@ describe("getRouteOptionsForOpen", () => {
     expect(result.options.imgsz).toBe(640);
     expect(result.source).toBe("default");
   });
+
+  test("normalizes saved RKNN options to lowercase chip and INT8-only precision", () => {
+    const saved: RouteOptionsState = {
+      options: { ...defaultOpts, chip: "RV1106B", precision: "fp16" },
+      source: "user",
+      sourcePath,
+    };
+    const result = getRouteOptionsForOpen(saved, "ultralytics.pt.rknn", "ultralytics", null, sourcePath);
+    expect(result.options.chip).toBe("rv1106b");
+    expect(result.options.precision).toBe("int8");
+  });
 });
 
 describe("applyDetectedRouteOptions", () => {
