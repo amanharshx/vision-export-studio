@@ -3,8 +3,7 @@ import { GenericOptions } from "./options/generic";
 import { CoreMlOptions } from "./options/coreml";
 import { MnnOptions } from "./options/mnn";
 import { NcnnOptions } from "./options/ncnn";
-import { TfLiteOptions } from "./options/tflite";
-import { TfJsOptions } from "./options/tfjs";
+import { LiteRtOptions } from "./options/litert";
 import { OnnxOptions } from "./options/onnx";
 import { OpenVinoOptions } from "./options/openvino";
 import { AxeleraOptions } from "./options/axelera";
@@ -26,9 +25,8 @@ const panelMap: Record<string, React.ComponentType<OptionsPanelProps>> = {
   coreml: CoreMlOptions,
   ncnn: NcnnOptions,
   mnn: MnnOptions,
-  tflite: TfLiteOptions,
+  litert: LiteRtOptions,
   edgetpu: ExecuTorchOptions,
-  tfjs: TfJsOptions,
   engine: TensorRtOptions,
   rknn: RknnOptions,
   paddle: PaddleOptions,

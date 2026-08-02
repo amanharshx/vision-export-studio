@@ -23,12 +23,11 @@ pub const ULTRALYTICS_ROUTES: &[&str] = &[
     "ultralytics.pt.coreml",
     "ultralytics.pt.ncnn",
     "ultralytics.pt.mnn",
-    "ultralytics.pt.tflite",
+    "ultralytics.pt.litert",
     "ultralytics.pt.engine",
     "ultralytics.pt.rknn",
     "ultralytics.pt.executorch",
     "ultralytics.pt.edgetpu",
-    "ultralytics.pt.tfjs",
     "ultralytics.pt.paddle",
     "ultralytics.pt.imx",
     "ultralytics.pt.axelera",
@@ -77,12 +76,14 @@ enum PlatformLock {
     LinuxX86_64,
     LinuxWindows,
     MacosLinux,
+    MacosLinuxX86_64,
 }
 
 fn route_platform_lock(route_id: &str) -> PlatformLock {
     match route_id {
         "ultralytics.pt.engine" | "rfdetr.pth.engine" => PlatformLock::LinuxWindows,
         "ultralytics.pt.coreml" => PlatformLock::MacosLinux,
+        "ultralytics.pt.litert" => PlatformLock::MacosLinuxX86_64,
         "ultralytics.pt.edgetpu" => PlatformLock::LinuxX86_64,
         "ultralytics.pt.rknn" | "ultralytics.pt.imx" | "ultralytics.pt.axelera" => {
             PlatformLock::Linux
@@ -98,6 +99,7 @@ fn platform_tags(lock: PlatformLock) -> &'static str {
         PlatformLock::LinuxX86_64 => "Linux x86-64",
         PlatformLock::LinuxWindows => "Linux and Windows",
         PlatformLock::MacosLinux => "macOS and Linux",
+        PlatformLock::MacosLinuxX86_64 => "macOS and Linux x86-64",
     }
 }
 
@@ -127,13 +129,18 @@ pub fn validate_route_platform(route_id: &str, os: &str, arch: &str) -> Result<(
         PlatformLock::LinuxX86_64 => os == "linux" && arch == "x86_64",
         PlatformLock::LinuxWindows => os == "linux" || os == "windows",
         PlatformLock::MacosLinux => os == "macos" || os == "linux",
+        PlatformLock::MacosLinuxX86_64 => os == "macos" || (os == "linux" && arch == "x86_64"),
     };
 
     if compatible {
         return Ok(());
     }
 
-    let current = if lock == PlatformLock::LinuxX86_64 && os == "linux" {
+    let current = if matches!(
+        lock,
+        PlatformLock::LinuxX86_64 | PlatformLock::MacosLinuxX86_64
+    ) && os == "linux"
+    {
         format!("{} {}", os_label(os), arch_label(arch))
     } else {
         os_label(os).to_string()
@@ -220,6 +227,35 @@ mod tests {
     fn rejects_provider_route_mismatch() {
         assert!(validate_provider_route("rfdetr", "ultralytics.pt.onnx").is_err());
         assert!(validate_provider_route("ultralytics", "rfdetr.pth.onnx").is_err());
+    }
+
+    #[test]
+    fn litert_route_is_valid_for_ultralytics() {
+        assert!(validate_provider_route("ultralytics", "ultralytics.pt.litert").is_ok());
+    }
+
+    #[test]
+    fn deprecated_tflite_and_tfjs_routes_are_rejected() {
+        assert!(validate_provider_route("ultralytics", "ultralytics.pt.tflite").is_err());
+        assert!(validate_provider_route("ultralytics", "ultralytics.pt.tfjs").is_err());
+    }
+
+    #[test]
+    fn litert_export_host_allows_macos_and_linux_x86_64() {
+        assert!(validate_route_platform("ultralytics.pt.litert", "macos", "x86_64").is_ok());
+        assert!(validate_route_platform("ultralytics.pt.litert", "macos", "aarch64").is_ok());
+        assert!(validate_route_platform("ultralytics.pt.litert", "linux", "x86_64").is_ok());
+        assert!(validate_route_platform("ultralytics.pt.litert", "windows", "x86_64").is_err());
+        assert!(validate_route_platform("ultralytics.pt.litert", "linux", "aarch64").is_err());
+    }
+
+    #[test]
+    fn litert_rejection_names_linux_arm64_and_required_hosts() {
+        let error = validate_route_platform("ultralytics.pt.litert", "linux", "aarch64")
+            .expect_err("Linux ARM64 must be rejected");
+
+        assert!(error.contains("Linux ARM64"));
+        assert!(error.contains("macOS and Linux x86-64"));
     }
 
     #[test]
