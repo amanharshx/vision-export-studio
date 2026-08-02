@@ -42,7 +42,7 @@ export function PrecisionOptions({ route, options, onOptionsChange }: PrecisionO
             <SelectTrigger>
               <SelectValue placeholder="Select precision" />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent position="popper" align="end">
               {precisionItems.map((item) => (
                 <SelectItem key={item.value} value={item.value}>
                   {item.label}
