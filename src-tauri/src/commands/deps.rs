@@ -319,7 +319,7 @@ fn validate_install_route_platform(route_id: &str, os: &str, arch: &str) -> Resu
 /// importlib.util.find_spec. Version/extra specifiers are stripped first.
 fn importable_name(package_name: &str) -> String {
     let base = package_name
-        .split(|c: char| matches!(c, '[' | '>' | '<' | '=' | '!' | '~' | ',' | ' '))
+        .split(|c: char| ['[', '>', '<', '=', '!', '~', ',', ' '].contains(&c))
         .next()
         .unwrap_or(package_name)
         .trim();
