@@ -126,6 +126,9 @@ Each Ultralytics export target shows a route-specific **Precision** control. The
 | TorchScript, ExecuTorch, TF GraphDef, Paddle | FP32 (fixed) | FP32 |
 | Edge TPU, Axelera | INT8 (fixed) | INT8 |
 
+TorchScript is FP32-only in this app. Ultralytics FP16 TorchScript export requires GPU `device=0`;
+this app does not expose export-device selection.
+
 Export commands always pass an explicit canonical `quantize=` argument (FP32 → `32`, FP16 → `16`, INT8 → `8`, W8A16 → `w8a16`, W8A32 → `w8a32`) instead of the legacy `half=True`/`int8=True` switches.
 
 ### Calibration data
