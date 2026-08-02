@@ -1,6 +1,6 @@
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { PrecisionMode } from "@/lib/types";
+import type { ExportOptions, PrecisionMode } from "@/lib/types";
 import { InputRow, useOptionSetter, type OptionsPanelProps } from "./_base";
 import { PrecisionOptions } from "./precision";
 
@@ -28,12 +28,20 @@ export function isRknnInt8OnlyChip(chip: string): boolean {
   return RKNN_INT8_ONLY_CHIPS.has(normalizeRknnChip(chip));
 }
 
+export function normalizeOptionsForRoute(routeId: string, options: ExportOptions): ExportOptions {
+  if (routeId !== "ultralytics.pt.rknn") return options;
+  const chip = normalizeRknnChip(options.chip);
+  const precision = isRknnInt8OnlyChip(chip) ? "int8" : options.precision;
+  if (chip === options.chip && precision === options.precision) return options;
+  return { ...options, chip, precision };
+}
+
 export function RknnOptions({ route, options, onOptionsChange }: OptionsPanelProps) {
   const set = useOptionSetter(options, onOptionsChange);
   const precisionModes: PrecisionMode[] = isRknnInt8OnlyChip(options.chip)
     ? ["int8"]
     : route.precisionModes;
-  const precisionRoute = { ...route, precisionModes, defaultPrecision: precisionModes[0]! };
+  const precisionRoute = { ...route, precisionModes };
 
   return (
     <div className="space-y-5">

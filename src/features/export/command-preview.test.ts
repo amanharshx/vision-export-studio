@@ -221,6 +221,17 @@ describe("buildCommandPreview", () => {
     expect(preview).toContain("quantize=32");
   });
 
+  test("ultralytics RKNN — normalized INT8-only chip emits quantize=8 and lowercase name", () => {
+    const preview = buildCommandPreview({
+      ...ultralyticsInput,
+      routeId: "ultralytics.pt.rknn",
+      targetFormat: "rknn",
+      options: { ...ultralyticsInput.options, precision: "int8", chip: "rv1106b" },
+    });
+    expect(preview).toContain("quantize=8");
+    expect(preview).toContain("name=rv1106b");
+  });
+
   test("rfdetr ONNX auto mode — includes output-dir and variant-mode, no quantize", () => {
     const preview = buildCommandPreview({
       ...rfdetrInput,

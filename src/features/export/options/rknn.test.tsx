@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { routesForProvider } from "@/lib/providers";
 import type { ExportOptions, RouteSpec } from "@/lib/types";
-import { RKNN_CHIPS, RknnOptions, isRknnInt8OnlyChip } from "./rknn";
+import { RKNN_CHIPS, RknnOptions, isRknnInt8OnlyChip, normalizeOptionsForRoute } from "./rknn";
 
 const baseOptions: ExportOptions = {
   imgsz: 640,
@@ -62,11 +62,41 @@ describe("RKNN chip list and helpers", () => {
     expect(isRknnInt8OnlyChip("rv1103")).toBe(true);
     expect(isRknnInt8OnlyChip("rk3588")).toBe(false);
   });
+
+  test("normalizeOptionsForRoute normalizes RV1106B to int8", () => {
+    const normalized = normalizeOptionsForRoute("ultralytics.pt.rknn", {
+      ...baseOptions,
+      chip: "RV1106B",
+      precision: "fp16",
+    });
+    expect(normalized.chip).toBe("rv1106b");
+    expect(normalized.precision).toBe("int8");
+  });
+
+  test("normalizeOptionsForRoute preserves FP16 for normal chips", () => {
+    const normalized = normalizeOptionsForRoute("ultralytics.pt.rknn", {
+      ...baseOptions,
+      chip: "rk3588",
+      precision: "fp16",
+    });
+    expect(normalized.chip).toBe("rk3588");
+    expect(normalized.precision).toBe("fp16");
+  });
+
+  test("normalizeOptionsForRoute leaves non-RKNN routes untouched", () => {
+    const options: ExportOptions = {
+      ...baseOptions,
+      chip: "RV1106B",
+      precision: "fp16",
+    };
+    const normalized = normalizeOptionsForRoute("ultralytics.pt.onnx", options);
+    expect(normalized).toBe(options);
+  });
 });
 
 describe("RknnOptions", () => {
-  test("INT8-only chip forces INT8 and hides the precision selector", () => {
-    const markup = renderRknn(rknnRoute(), { ...baseOptions, chip: "rv1106" });
+  test("INT8-only chip with normalized state forces INT8 and hides the precision selector", () => {
+    const markup = renderRknn(rknnRoute(), { ...baseOptions, chip: "rv1106", precision: "int8" });
     expect(markup).toContain("INT8");
     expect(markup.split('data-slot="select-trigger"')).toHaveLength(2);
   });
