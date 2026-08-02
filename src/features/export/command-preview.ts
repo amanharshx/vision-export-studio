@@ -12,26 +12,13 @@ export interface CommandPreviewInput {
   rfdetrManualClassSymbol?: string;
 }
 
-export function quantizeForPrecision(precision: PrecisionMode): string {
-  switch (precision) {
-    case "fp32":
-      return "32";
-    case "fp16":
-      return "16";
-    case "int8":
-      return "8";
-    case "w8a16":
-      return "w8a16";
-    case "w8a32":
-      return "w8a32";
-  }
-}
-
-export function isCalibrationEligible(routeId: string, precision: PrecisionMode): boolean {
-  const route = findRoute(routeId);
-  if (!route) return false;
-  return route.calibrationRecommendedFor.includes(precision);
-}
+const QUANTIZE_BY_PRECISION: Record<PrecisionMode, string> = {
+  fp32: "32",
+  fp16: "16",
+  int8: "8",
+  w8a16: "w8a16",
+  w8a32: "w8a32",
+};
 
 export function buildCommandPreview(input: CommandPreviewInput): string {
   const { providerId, routeId, targetFormat, sourcePath, options, outputDir, rfdetrVariantMode, rfdetrManualClassSymbol } = input;
@@ -62,8 +49,11 @@ export function buildCommandPreview(input: CommandPreviewInput): string {
     `imgsz=${options.imgsz}`,
     `batch=${options.batch}`,
   ];
-  parts.push(`quantize=${quantizeForPrecision(options.precision)}`);
-  if (isCalibrationEligible(routeId, options.precision) && options.calibrationData) {
+  parts.push(`quantize=${QUANTIZE_BY_PRECISION[options.precision]}`);
+  if (
+    findRoute(routeId)?.calibrationRecommendedFor.includes(options.precision) &&
+    options.calibrationData
+  ) {
     parts.push(`data=${options.calibrationData}`);
   }
   if (options.dynamic) parts.push("dynamic=True");

@@ -112,7 +112,7 @@ Roboflow RF-DETR (`.pth`) target formats:
 
 ## Export Precision
 
-Each Ultralytics export target exposes a route-specific **Precision** selector. The available modes and their defaults are:
+Each Ultralytics export target shows a route-specific **Precision** control. The available modes and their defaults are:
 
 | Target | Precision modes | Default |
 | --- | --- | --- |

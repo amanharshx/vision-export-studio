@@ -16,15 +16,6 @@ export const CALIBRATION_FALLBACK_WARNING =
 
 export const CALIBRATION_SELECTED_LABEL = "Representative dataset YAML for this precision.";
 
-export interface PrecisionOptionItem {
-  value: PrecisionMode;
-  label: string;
-}
-
-export function precisionOptionsFor(route: RouteSpec): PrecisionOptionItem[] {
-  return route.precisionModes.map((mode) => ({ value: mode, label: PRECISION_LABELS[mode] }));
-}
-
 interface PrecisionOptionsProps {
   route: RouteSpec;
   options: ExportOptions;
@@ -32,7 +23,10 @@ interface PrecisionOptionsProps {
 }
 
 export function PrecisionOptions({ route, options, onOptionsChange }: PrecisionOptionsProps) {
-  const precisionItems = precisionOptionsFor(route);
+  const precisionItems = route.precisionModes.map((mode) => ({
+    value: mode,
+    label: PRECISION_LABELS[mode],
+  }));
   const calibrationRecommended = route.calibrationRecommendedFor.includes(options.precision);
 
   return (

@@ -7,8 +7,8 @@ import type { ExportOptions, RouteSpec } from "@/lib/types";
 import {
   CALIBRATION_FALLBACK_WARNING,
   CALIBRATION_SELECTED_LABEL,
+  PRECISION_LABELS,
   PrecisionOptions,
-  precisionOptionsFor,
 } from "./precision";
 
 const baseOptions: ExportOptions = {
@@ -44,19 +44,23 @@ function renderPrecision(route: RouteSpec, options: ExportOptions): string {
 }
 
 describe("PrecisionOptions", () => {
-  test("LiteRT exposes W8A32 precision option", () => {
+  test("LiteRT renders an interactive selector exposing W8A32", () => {
     const litert = routeById("ultralytics.pt.litert");
-    const labels = precisionOptionsFor(litert).map((item) => item.label);
-    expect(labels).toContain("FP32");
-    expect(labels).toContain("INT8");
-    expect(labels).toContain("W8A16");
-    expect(labels).toContain("W8A32");
+    expect(litert.precisionModes.map((mode) => PRECISION_LABELS[mode])).toEqual([
+      "FP32",
+      "INT8",
+      "W8A16",
+      "W8A32",
+    ]);
+    const markup = renderPrecision(litert, { ...baseOptions, precision: "fp32" });
+    expect(markup).toContain("data-slot=\"select-trigger\"");
   });
 
-  test("CoreML includes W8A16 precision option", () => {
+  test("CoreML renders an interactive selector including W8A16", () => {
     const coreml = routeById("ultralytics.pt.coreml");
-    const labels = precisionOptionsFor(coreml).map((item) => item.label);
-    expect(labels).toContain("W8A16");
+    expect(coreml.precisionModes.map((mode) => PRECISION_LABELS[mode])).toContain("W8A16");
+    const markup = renderPrecision(coreml, { ...baseOptions, precision: "fp16" });
+    expect(markup).toContain("data-slot=\"select-trigger\"");
   });
 
   test("FP32 hides calibration picker", () => {
