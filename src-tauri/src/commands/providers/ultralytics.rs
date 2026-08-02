@@ -51,7 +51,7 @@ pub fn validate_precision(
     Ok(quantize.to_string())
 }
 
-fn artifact_info(format: &str) -> (&'static str, bool) {
+fn artifact_info(format: &str, precision: &str) -> (&'static str, bool) {
     match format {
         "torchscript" => (".torchscript", false),
         "onnx" => (".onnx", false),
@@ -59,7 +59,12 @@ fn artifact_info(format: &str) -> (&'static str, bool) {
         "coreml" => (".mlpackage", true),
         "ncnn" => ("_ncnn_model", true),
         "mnn" => (".mnn", false),
-        "litert" => (".tflite", false),
+        "litert" => match precision {
+            "8" => ("_int8.tflite", false),
+            "w8a16" => ("_w8a16.tflite", false),
+            "w8a32" => ("_w8a32.tflite", false),
+            _ => (".tflite", false),
+        },
         "engine" => (".engine", false),
         "rknn" => (".rknn", false),
         "executorch" => (".ptl", false),
@@ -85,8 +90,14 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn move_artifact(source_path: &str, format: &str, output_dir: &str) -> Result<bool, String> {
-    let (suffix, is_dir) = artifact_info(format);
+pub fn move_artifact(
+    source_path: &str,
+    format: &str,
+    precision: &str,
+    output_dir: &str,
+) -> Result<bool, String> {
+    let canonical = canonical_quantize(precision).unwrap_or("32");
+    let (suffix, is_dir) = artifact_info(format, canonical);
     if suffix.is_empty() {
         return Ok(false);
     }
@@ -195,7 +206,12 @@ pub fn confirm_artifacts(request: &ExportRequest) -> ArtifactStatus {
             }
         }
     };
-    match move_artifact(&request.source_path, yolo_format, &request.output_dir) {
+    match move_artifact(
+        &request.source_path,
+        yolo_format,
+        &request.precision,
+        &request.output_dir,
+    ) {
         Ok(true) => ArtifactStatus { artifact_moved: true, artifact_warning: None },
         Ok(false) => ArtifactStatus {
             artifact_moved: false,
@@ -296,6 +312,7 @@ mod tests {
         let moved = move_artifact(
             &source_model.to_string_lossy(),
             "onnx",
+            "",
             &output_dir.to_string_lossy(),
         )
         .expect("move artifact");
@@ -366,6 +383,119 @@ mod tests {
         let moved = move_artifact(
             &source_model.to_string_lossy(),
             "litert",
+            "fp32",
+            &output_dir.to_string_lossy(),
+        )
+        .expect("move artifact");
+
+        assert!(moved);
+        assert!(!source_artifact.exists());
+        assert!(output_dir.join("best.tflite").exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn move_artifact_moves_int8_tflite_for_litert() {
+        let root = temp_dir("export-litert-int8");
+        let source_dir = root.join("source");
+        let output_dir = root.join("output");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::create_dir_all(&output_dir).expect("create output dir");
+
+        let source_model = source_dir.join("best.pt");
+        let source_artifact = source_dir.join("best_int8.tflite");
+        fs::write(&source_model, "model").expect("write source model");
+        fs::write(&source_artifact, "artifact").expect("write source artifact");
+
+        let moved = move_artifact(
+            &source_model.to_string_lossy(),
+            "litert",
+            "int8",
+            &output_dir.to_string_lossy(),
+        )
+        .expect("move artifact");
+
+        assert!(moved);
+        assert!(!source_artifact.exists());
+        assert!(output_dir.join("best_int8.tflite").exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn move_artifact_moves_w8a16_tflite_for_litert() {
+        let root = temp_dir("export-litert-w8a16");
+        let source_dir = root.join("source");
+        let output_dir = root.join("output");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::create_dir_all(&output_dir).expect("create output dir");
+
+        let source_model = source_dir.join("best.pt");
+        let source_artifact = source_dir.join("best_w8a16.tflite");
+        fs::write(&source_model, "model").expect("write source model");
+        fs::write(&source_artifact, "artifact").expect("write source artifact");
+
+        let moved = move_artifact(
+            &source_model.to_string_lossy(),
+            "litert",
+            "w8a16",
+            &output_dir.to_string_lossy(),
+        )
+        .expect("move artifact");
+
+        assert!(moved);
+        assert!(!source_artifact.exists());
+        assert!(output_dir.join("best_w8a16.tflite").exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn move_artifact_moves_w8a32_tflite_for_litert() {
+        let root = temp_dir("export-litert-w8a32");
+        let source_dir = root.join("source");
+        let output_dir = root.join("output");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::create_dir_all(&output_dir).expect("create output dir");
+
+        let source_model = source_dir.join("best.pt");
+        let source_artifact = source_dir.join("best_w8a32.tflite");
+        fs::write(&source_model, "model").expect("write source model");
+        fs::write(&source_artifact, "artifact").expect("write source artifact");
+
+        let moved = move_artifact(
+            &source_model.to_string_lossy(),
+            "litert",
+            "w8a32",
+            &output_dir.to_string_lossy(),
+        )
+        .expect("move artifact");
+
+        assert!(moved);
+        assert!(!source_artifact.exists());
+        assert!(output_dir.join("best_w8a32.tflite").exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn move_artifact_moves_plain_tflite_for_litert_fp32() {
+        let root = temp_dir("export-litert-fp32");
+        let source_dir = root.join("source");
+        let output_dir = root.join("output");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::create_dir_all(&output_dir).expect("create output dir");
+
+        let source_model = source_dir.join("best.pt");
+        let source_artifact = source_dir.join("best.tflite");
+        fs::write(&source_model, "model").expect("write source model");
+        fs::write(&source_artifact, "artifact").expect("write source artifact");
+
+        let moved = move_artifact(
+            &source_model.to_string_lossy(),
+            "litert",
+            "fp32",
             &output_dir.to_string_lossy(),
         )
         .expect("move artifact");
@@ -391,6 +521,7 @@ mod tests {
         let moved = move_artifact(
             &source_model.to_string_lossy(),
             "onnx",
+            "",
             &output_dir.to_string_lossy(),
         )
         .expect("missing artifact should not error");
