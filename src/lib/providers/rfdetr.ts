@@ -12,15 +12,16 @@ export const rfdetrProvider: ProviderSpec = {
   baseDeps: [],
 };
 
-const rfdetrRoute = (spec: Omit<RouteSpec, "providerId" | "sourceFormat" | "sysDeps" | "platformLock" | "intermediates" | "requiresGpu" | "supportsHalf" | "supportsInt8" | "supportsDynamic" | "oneWay" | "lossy"> & Partial<RouteSpec>): RouteSpec => ({
+const rfdetrRoute = (spec: Omit<RouteSpec, "providerId" | "sourceFormat" | "sysDeps" | "platformLock" | "intermediates" | "requiresGpu" | "precisionModes" | "defaultPrecision" | "calibrationRecommendedFor" | "supportsDynamic" | "oneWay" | "lossy"> & Partial<RouteSpec>): RouteSpec => ({
   providerId: "rfdetr",
   sourceFormat: "pth",
   sysDeps: [],
   platformLock: "any",
   intermediates: [],
   requiresGpu: false,
-  supportsHalf: false,
-  supportsInt8: false,
+  precisionModes: ["fp32"],
+  defaultPrecision: "fp32",
+  calibrationRecommendedFor: [],
   supportsDynamic: false,
   oneWay: false,
   lossy: false,
