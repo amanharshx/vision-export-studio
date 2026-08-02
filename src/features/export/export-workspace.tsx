@@ -2,7 +2,7 @@ import { detectEnvironment } from "@/lib/tauri/environment";
 import { captureAnalyticsEvent } from "@/lib/analytics";
 import { checkDependencies, installDependencies } from "@/lib/tauri/deps";
 import { cancelExport, openExportFolder, startExport } from "@/lib/tauri/export";
-import { defaultRouteForProvider, hasAllowedSourceExtension, providers, providerList, routesForProvider } from "@/lib/providers";
+import { defaultRouteForProvider, findRoute, hasAllowedSourceExtension, providers, providerList, routesForProvider } from "@/lib/providers";
 import { inspectRfDetrCheckpoint } from "@/lib/tauri/rfdetr";
 import { type AppOS, type AppPlatform, getOS, incompatibleReason, isCompatible, UNKNOWN_ARCH } from "@/lib/platform";
 import { getAppTelemetryContext } from "@/lib/tauri/app";
@@ -72,8 +72,8 @@ export function getUltralyticsRuntimeReadyDescription(): string {
 const defaultOptions: ExportOptions = {
   imgsz: 640,
   batch: 1,
-  half: false,
-  int8: false,
+  precision: "fp32",
+  calibrationData: null,
   dynamic: false,
   simplify: false,
   optimize: false,
@@ -86,18 +86,17 @@ const defaultOptions: ExportOptions = {
 };
 
 const routeDefaults: Partial<Record<string, Partial<ExportOptions>>> = {
-  "ultralytics.pt.onnx": { half: true, simplify: true },
-  "ultralytics.pt.openvino": { half: true },
-  "ultralytics.pt.engine": { half: true, simplify: true },
-  "ultralytics.pt.coreml": { half: true },
-  "ultralytics.pt.mnn": { half: true },
-  "ultralytics.pt.ncnn": { half: true },
-  "ultralytics.pt.imx": { int8: true },
-  "ultralytics.pt.axelera": { int8: true },
+  "ultralytics.pt.onnx": { simplify: true },
+  "ultralytics.pt.engine": { simplify: true },
 };
 
-function optionsForRoute(routeId: string): ExportOptions {
-  return { ...defaultOptions, ...(routeDefaults[routeId] ?? {}) };
+function optionsForRoute(route: RouteSpec): ExportOptions {
+  return {
+    ...defaultOptions,
+    ...(routeDefaults[route.id] ?? {}),
+    precision: route.defaultPrecision,
+    calibrationData: null,
+  };
 }
 
 export function getResolvedOutputDir(sourcePath: string, outputDirOverride: string): string {
@@ -119,6 +118,15 @@ export function withRfDetrDetectedDefaults(
   return { ...base, imgsz: inspect.recommended_imgsz };
 }
 
+export function getCalibrationFallbackWarning(
+  route: RouteSpec,
+  options: ExportOptions,
+): string | null {
+  if (!route.calibrationRecommendedFor.includes(options.precision)) return null;
+  if (options.calibrationData) return null;
+  return "No calibration dataset selected. Ultralytics will use its default dataset; accuracy may differ.";
+}
+
 export function getRouteOptionsForOpen(
   saved: RouteOptionsState | null,
   routeId: string,
@@ -128,7 +136,8 @@ export function getRouteOptionsForOpen(
 ): RouteOptionsState {
   if (saved && saved.sourcePath === sourcePath) return saved;
 
-  const base = optionsForRoute(routeId);
+  const route = findRoute(routeId) ?? defaultRouteForProvider(providerId);
+  const base = optionsForRoute(route);
   const detected = withRfDetrDetectedDefaults(base, providerId, inspect);
 
   return {
@@ -194,8 +203,9 @@ export function applyDetectedRouteOptions(
   currentSourcePath: string,
 ): RouteOptionsState | null {
   if (!saved || saved.sourcePath !== currentSourcePath) {
+    const route = findRoute(routeId) ?? defaultRouteForProvider("ultralytics");
     return {
-      options: { ...optionsForRoute(routeId), imgsz: detectedImgsz },
+      options: { ...optionsForRoute(route), imgsz: detectedImgsz },
       source: "detected",
       sourcePath: currentSourcePath,
     };
@@ -723,8 +733,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         yoloPath: activeEnv.yolo_path ?? "",
         imgsz: options.imgsz,
         batch: options.batch,
-        half: options.half,
-        int8: options.int8,
+        precision: options.precision,
+        calibrationData: options.calibrationData,
         dynamic: options.dynamic,
         simplify: options.simplify,
         optimize: options.optimize,

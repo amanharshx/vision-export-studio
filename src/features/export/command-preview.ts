@@ -1,4 +1,4 @@
-import type { ExportOptions, ProviderId, RfDetrVariantMode } from "@/lib/types";
+import type { ExportOptions, PrecisionMode, ProviderId, RfDetrVariantMode } from "@/lib/types";
 
 export interface CommandPreviewInput {
   providerId: ProviderId;
@@ -9,6 +9,21 @@ export interface CommandPreviewInput {
   outputDir?: string;
   rfdetrVariantMode?: RfDetrVariantMode;
   rfdetrManualClassSymbol?: string;
+}
+
+export function quantizeForPrecision(precision: PrecisionMode): string {
+  switch (precision) {
+    case "fp32":
+      return "32";
+    case "fp16":
+      return "16";
+    case "int8":
+      return "8";
+    case "w8a16":
+      return "w8a16";
+    case "w8a32":
+      return "w8a32";
+  }
 }
 
 export function buildCommandPreview(input: CommandPreviewInput): string {
@@ -40,8 +55,8 @@ export function buildCommandPreview(input: CommandPreviewInput): string {
     `imgsz=${options.imgsz}`,
     `batch=${options.batch}`,
   ];
-  if (options.half) parts.push("half=True");
-  if (options.int8) parts.push("int8=True");
+  parts.push(`quantize=${quantizeForPrecision(options.precision)}`);
+  if (options.calibrationData) parts.push(`data=${options.calibrationData}`);
   if (options.dynamic) parts.push("dynamic=True");
   if (options.simplify) parts.push("simplify=True");
   if (options.optimize) parts.push("optimize=True");
