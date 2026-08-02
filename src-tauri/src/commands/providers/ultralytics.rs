@@ -51,6 +51,14 @@ pub fn validate_precision(
     Ok(quantize.to_string())
 }
 
+fn calibration_recommended(route_id: &str, precision: &str) -> bool {
+    match route_id.strip_prefix("ultralytics.pt.") {
+        Some("onnx" | "openvino" | "engine" | "saved_model" | "rknn") => precision == "int8",
+        Some("litert" | "imx") => matches!(precision, "int8" | "w8a16"),
+        _ => false,
+    }
+}
+
 fn artifact_info(format: &str, precision: &str) -> (&'static str, bool) {
     match format {
         "torchscript" => (".torchscript", false),
@@ -154,10 +162,12 @@ pub fn build_command(request: &ExportRequest) -> Result<Command, String> {
     cmd.arg(format!("imgsz={}", request.imgsz));
     cmd.arg(format!("batch={}", request.batch));
     cmd.arg(format!("quantize={}", quantize));
-    if let Some(data) = request.calibration_data.as_deref() {
-        let trimmed = data.trim();
-        if !trimmed.is_empty() {
-            cmd.arg(format!("data={}", trimmed));
+    if calibration_recommended(&request.route_id, &request.precision) {
+        if let Some(data) = request.calibration_data.as_deref() {
+            let trimmed = data.trim();
+            if !trimmed.is_empty() {
+                cmd.arg(format!("data={}", trimmed));
+            }
         }
     }
     if request.dynamic {
@@ -625,6 +635,21 @@ mod tests {
             .map(|arg| arg.to_string_lossy().to_string())
             .collect();
         assert!(args.contains(&"quantize=8".to_string()));
+        assert!(!args.iter().any(|arg| arg.starts_with("data=")));
+        let _ =
+            std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());
+    }
+
+    #[test]
+    fn build_command_omits_data_for_fp32_with_stored_calibration() {
+        let request =
+            request_with_precision("ultralytics.pt.litert", "fp32", Some("/tmp/cal.yaml"));
+        let cmd = super::build_command(&request).expect("build command");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"quantize=32".to_string()));
         assert!(!args.iter().any(|arg| arg.starts_with("data=")));
         let _ =
             std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());

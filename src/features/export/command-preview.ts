@@ -1,4 +1,5 @@
 import type { ExportOptions, PrecisionMode, ProviderId, RfDetrVariantMode } from "@/lib/types";
+import { findRoute } from "@/lib/providers";
 
 export interface CommandPreviewInput {
   providerId: ProviderId;
@@ -24,6 +25,12 @@ export function quantizeForPrecision(precision: PrecisionMode): string {
     case "w8a32":
       return "w8a32";
   }
+}
+
+export function isCalibrationEligible(routeId: string, precision: PrecisionMode): boolean {
+  const route = findRoute(routeId);
+  if (!route) return false;
+  return route.calibrationRecommendedFor.includes(precision);
 }
 
 export function buildCommandPreview(input: CommandPreviewInput): string {
@@ -56,7 +63,9 @@ export function buildCommandPreview(input: CommandPreviewInput): string {
     `batch=${options.batch}`,
   ];
   parts.push(`quantize=${quantizeForPrecision(options.precision)}`);
-  if (options.calibrationData) parts.push(`data=${options.calibrationData}`);
+  if (isCalibrationEligible(routeId, options.precision) && options.calibrationData) {
+    parts.push(`data=${options.calibrationData}`);
+  }
   if (options.dynamic) parts.push("dynamic=True");
   if (options.simplify) parts.push("simplify=True");
   if (options.optimize) parts.push("optimize=True");

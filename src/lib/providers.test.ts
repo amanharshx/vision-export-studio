@@ -9,7 +9,6 @@ import {
   applyDetectedRouteOptionsToProviderRoutes,
   getUltralyticsRuntimeDisabledReason,
   shouldShowUltralyticsRuntimeInstallDetails,
-  getCalibrationFallbackWarning,
 } from "@/features/export/export-workspace";
 import type { RfDetrInspectResult, RouteOptionsState } from "@/lib/types";
 
@@ -410,36 +409,5 @@ describe("shouldShowUltralyticsRuntimeInstallDetails", () => {
 
   test("forces install details open after runtime install failure", () => {
     expect(shouldShowUltralyticsRuntimeInstallDetails("failed", false)).toBe(true);
-  });
-});
-
-describe("getCalibrationFallbackWarning", () => {
-  const litert = () => routesForProvider("ultralytics").find((item) => item.id === "ultralytics.pt.litert")!;
-
-  test("returns warning for calibration-recommended precision without YAML", () => {
-    const warning = getCalibrationFallbackWarning(litert(), {
-      ...defaultOpts,
-      precision: "int8",
-    });
-    expect(warning).toBe(
-      "No calibration dataset selected. Ultralytics will use its default dataset; accuracy may differ.",
-    );
-  });
-
-  test("returns null when calibration YAML is selected", () => {
-    const warning = getCalibrationFallbackWarning(litert(), {
-      ...defaultOpts,
-      precision: "int8",
-      calibrationData: "/tmp/calibration.yaml",
-    });
-    expect(warning).toBeNull();
-  });
-
-  test("returns null when precision is not calibration-recommended", () => {
-    const warning = getCalibrationFallbackWarning(litert(), {
-      ...defaultOpts,
-      precision: "fp32",
-    });
-    expect(warning).toBeNull();
   });
 });

@@ -103,6 +103,36 @@ describe("buildCommandPreview", () => {
     expect(preview).not.toContain("data=");
   });
 
+  test("ultralytics LiteRT — stored calibration YAML not emitted for FP32", () => {
+    const preview = buildCommandPreview({
+      ...ultralyticsInput,
+      routeId: "ultralytics.pt.litert",
+      targetFormat: "litert",
+      options: {
+        ...ultralyticsInput.options,
+        precision: "fp32",
+        calibrationData: "/tmp/calibration.yaml",
+      },
+    });
+    expect(preview).toContain("quantize=32");
+    expect(preview).not.toContain("data=");
+  });
+
+  test("ultralytics LiteRT — stored calibration YAML not emitted for W8A32", () => {
+    const preview = buildCommandPreview({
+      ...ultralyticsInput,
+      routeId: "ultralytics.pt.litert",
+      targetFormat: "litert",
+      options: {
+        ...ultralyticsInput.options,
+        precision: "w8a32",
+        calibrationData: "/tmp/calibration.yaml",
+      },
+    });
+    expect(preview).toContain("quantize=w8a32");
+    expect(preview).not.toContain("data=");
+  });
+
   test("ultralytics preview never emits legacy half/int8 flags", () => {
     const preview = buildCommandPreview({
       ...ultralyticsInput,

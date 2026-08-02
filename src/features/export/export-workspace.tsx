@@ -118,15 +118,6 @@ export function withRfDetrDetectedDefaults(
   return { ...base, imgsz: inspect.recommended_imgsz };
 }
 
-export function getCalibrationFallbackWarning(
-  route: RouteSpec,
-  options: ExportOptions,
-): string | null {
-  if (!route.calibrationRecommendedFor.includes(options.precision)) return null;
-  if (options.calibrationData) return null;
-  return "No calibration dataset selected. Ultralytics will use its default dataset; accuracy may differ.";
-}
-
 export function getRouteOptionsForOpen(
   saved: RouteOptionsState | null,
   routeId: string,
