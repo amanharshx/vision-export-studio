@@ -1,8 +1,8 @@
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
-import { InputRow, OptionRow, useOptionSetter, type OptionsPanelProps } from "./_base";
+import { InputRow, useOptionSetter, type OptionsPanelProps } from "./_base";
+import { PrecisionOptions } from "./precision";
 
-export function NcnnOptions({ route: _route, options, onOptionsChange }: OptionsPanelProps) {
+export function NcnnOptions({ route, options, onOptionsChange }: OptionsPanelProps) {
   const set = useOptionSetter(options, onOptionsChange);
 
   return (
@@ -33,9 +33,7 @@ export function NcnnOptions({ route: _route, options, onOptionsChange }: Options
         />
       </InputRow>
 
-      <OptionRow label="FP16 Half" description="Use FP16 half precision">
-        <Switch checked={options.half} onCheckedChange={(v) => set("half", v)} />
-      </OptionRow>
+      <PrecisionOptions route={route} options={options} onOptionsChange={onOptionsChange} />
     </div>
   );
 }

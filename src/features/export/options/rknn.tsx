@@ -1,25 +1,16 @@
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import type { PrecisionMode } from "@/lib/types";
 import { InputRow, useOptionSetter, type OptionsPanelProps } from "./_base";
+import { PrecisionOptions } from "./precision";
+import { RKNN_CHIPS, isRknnInt8OnlyChip } from "./normalize";
 
-const RKNN_CHIPS = [
-  "rk3562",
-  "rk3566",
-  "rk3568",
-  "rk3576",
-  "rk3582",
-  "rk3588",
-  "rk3588s",
-  "rv1103",
-  "rv1103b",
-  "rv1106",
-  "rv1106b",
-  "rv1109",
-  "rv1126",
-];
-
-export function RknnOptions({ route: _route, options, onOptionsChange }: OptionsPanelProps) {
+export function RknnOptions({ route, options, onOptionsChange }: OptionsPanelProps) {
   const set = useOptionSetter(options, onOptionsChange);
+  const precisionModes: PrecisionMode[] = isRknnInt8OnlyChip(options.chip)
+    ? ["int8"]
+    : route.precisionModes;
+  const precisionRoute = { ...route, precisionModes };
 
   return (
     <div className="space-y-5">
@@ -49,12 +40,17 @@ export function RknnOptions({ route: _route, options, onOptionsChange }: Options
         />
       </InputRow>
 
+      <PrecisionOptions route={precisionRoute} options={options} onOptionsChange={onOptionsChange} />
+
       <div className="space-y-1.5">
         <div>
           <p className="font-medium text-zinc-900">Chip</p>
           <p className="text-xs text-zinc-500">Rockchip processor type</p>
         </div>
-        <Select value={options.chip} onValueChange={(v) => set("chip", v)}>
+        <Select
+          value={options.chip}
+          onValueChange={(value) => set("chip", value)}
+        >
           <SelectTrigger>
             <SelectValue placeholder="Select chip" />
           </SelectTrigger>

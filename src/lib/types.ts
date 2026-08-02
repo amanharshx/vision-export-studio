@@ -30,6 +30,8 @@ export type FormatCategory = "source" | "intermediate" | "runtime" | "vendor";
 
 export type PlatformLock = "any" | "linux" | "linux_x86_64" | "linux_windows" | "macos" | "macos_linux" | "macos_linux_x86_64" | "windows";
 
+export type PrecisionMode = "fp32" | "fp16" | "int8" | "w8a16" | "w8a32";
+
 export interface FormatSpec {
   id: string;
   name: string;
@@ -54,8 +56,9 @@ export interface RouteSpec {
   platformLock: PlatformLock;
   intermediates: string[];
   requiresGpu: boolean;
-  supportsHalf: boolean;
-  supportsInt8: boolean;
+  precisionModes: PrecisionMode[];
+  defaultPrecision: PrecisionMode;
+  calibrationRecommendedFor: PrecisionMode[];
   supportsDynamic: boolean;
   oneWay: boolean;
   lossy: boolean;
@@ -78,8 +81,8 @@ export interface EnvironmentInfo {
 export interface ExportOptions {
   imgsz: number;
   batch: number;
-  half: boolean;
-  int8: boolean;
+  precision: PrecisionMode;
+  calibrationData: string | null;
   dynamic: boolean;
   simplify: boolean;
   optimize: boolean;

@@ -51,7 +51,7 @@ Desktop studio for exporting Ultralytics YOLO `.pt` and Roboflow RF-DETR `.pth` 
 - **Dependency status checks** - each route reports missing Python packages or system binaries before you export, with install hints
 - **Two model families** - Ultralytics YOLO (`.pt`) with full target coverage, and Roboflow RF-DETR (`.pth`) for ONNX and TensorRT
 - **Multiple export targets** - ONNX, TensorRT, CoreML, OpenVINO, LiteRT, Paddle, NCNN, RKNN, and more
-- **Configurable export options** - tune target-specific settings such as image size, batch size, FP16 (`half`), INT8, dynamic axes, ONNX opset, TensorRT workspace, and RKNN target chip
+- **Configurable export options** - tune target-specific settings such as image size, batch size, precision (FP32/FP16/INT8/W8A16/W8A32), dynamic axes, ONNX opset, TensorRT workspace, and RKNN target chip
 - **RF-DETR checkpoint inspection** - after trusted-checkpoint confirmation, auto-detects model family (detection vs segmentation), size, and recommended native image size from the `.pth` checkpoint
 - **Safer process execution** - export commands run through Tauri/Rust with argv-based subprocess handling
 
@@ -110,6 +110,37 @@ Roboflow RF-DETR (`.pth`) target formats:
 > [!NOTE]
 > RF-DETR support is intentionally focused on ONNX and TensorRT. TFLite export was evaluated and dropped because the ONNX → TFLite conversion failed consistently across macOS and Linux.
 
+## Export Precision
+
+Each Ultralytics export target shows a route-specific **Precision** control. The available modes and their defaults are:
+
+| Target | Precision modes | Default |
+| --- | --- | --- |
+| ONNX, OpenVINO, TensorRT, MNN | FP16, FP32, INT8 | FP16 |
+| CoreML | FP16, FP32, INT8, W8A16 | FP16 |
+| LiteRT | FP32, INT8, W8A16, W8A32 | FP32 |
+| NCNN | FP16, FP32 | FP16 |
+| TF SavedModel | FP32, INT8 | FP32 |
+| RKNN | FP16, INT8 | FP16 |
+| Sony IMX500 | INT8, W8A16 | INT8 |
+| TorchScript, ExecuTorch, TF GraphDef, Paddle | FP32 (fixed) | FP32 |
+| Edge TPU, Axelera | INT8 (fixed) | INT8 |
+
+TorchScript is FP32-only in this app. Ultralytics FP16 TorchScript export requires GPU `device=0`;
+this app does not expose export-device selection.
+
+RKNN precision depends on the selected chip. The `rv1103`, `rv1106`, `rv1103b`, and `rv1106b` targets
+are INT8-only, so choosing one of them fixes Precision to INT8; all other Rockchip targets offer FP16
+and INT8.
+
+Export commands always pass an explicit canonical `quantize=` argument (FP32 → `32`, FP16 → `16`, INT8 → `8`, W8A16 → `w8a16`, W8A32 → `w8a32`) instead of the legacy `half=True`/`int8=True` switches.
+
+### Calibration data
+
+INT8 calibration modes offer an optional dataset YAML picker: ONNX/OpenVINO/TensorRT/SavedModel INT8, LiteRT INT8 and W8A16, RKNN INT8, IMX INT8 and W8A16, and Edge TPU and Axelera INT8.
+
+The calibration dataset is **optional**. When you omit it, the export still runs and Ultralytics falls back to its default calibration dataset, so accuracy may differ. Calibration YAML is stored per-route and is never auto-reused across routes.
+
 ---
 
 ## Target Caveats
@@ -120,7 +151,7 @@ Some targets are one-way deployment artifacts or platform-locked:
 - `coreml` export is macOS-only.
 - `litert` export requires macOS (Intel or Apple Silicon) or Linux `x86_64`. The exported `.tflite` is portable and runs on LiteRT-supported mobile, embedded, edge, browser (LiteRT.js), and Node.js targets.
 - `edgetpu` export requires Linux `x86_64` and `edgetpu_compiler`.
-- `rknn` export is Linux-only and requires target chip selection.
+- `rknn` export is Linux-only and requires target chip selection. The `rv1103`, `rv1106`, `rv1103b`, and `rv1106b` chips support INT8 only.
 - `imx` export is Linux-only and requires Java `>= 17`.
 - `axelera` export is Linux-only.
 - `litert`, `engine`, `mnn`, `rknn`, `imx`, `axelera`, `edgetpu`, and some `coreml` outputs should be treated as one-way deployment outputs.

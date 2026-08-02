@@ -81,7 +81,8 @@ describe("provider route registry", () => {
     expect(litert!.targetFormat).toBe("litert");
     expect(litert!.displayPath).toBe("model.pt → model.tflite");
     expect(litert!.intermediates).toEqual([]);
-    expect(litert!.supportsHalf).toBe(false);
+    expect(litert!.precisionModes).toEqual(["fp32", "int8", "w8a16", "w8a32"]);
+    expect(litert!.defaultPrecision).toBe("fp32");
     expect(litert!.requiresGpu).toBe(false);
     expect(litert!.platformLock).toBe("macos_linux_x86_64");
     expect(litert!.pipDeps.map((dep) => dep.packageName)).toEqual([
@@ -95,11 +96,97 @@ describe("provider route registry", () => {
   });
 });
 
+describe("route precision matrix", () => {
+  const all = routesForProvider("ultralytics");
+  const byId = (id: string) => {
+    const route = all.find((item) => item.id === id);
+    expect(route).toBeDefined();
+    return route!;
+  };
+
+  test("LiteRT exposes FP32/INT8/W8A16/W8A32 with FP32 default", () => {
+    const litert = byId("ultralytics.pt.litert");
+    expect(litert.precisionModes).toEqual(["fp32", "int8", "w8a16", "w8a32"]);
+    expect(litert.defaultPrecision).toBe("fp32");
+  });
+
+  test("LiteRT recommends calibration for INT8 and W8A16", () => {
+    const litert = byId("ultralytics.pt.litert");
+    expect(litert.calibrationRecommendedFor).toEqual(["int8", "w8a16"]);
+  });
+
+  test("TensorRT exposes FP16/FP32/INT8 with FP16 default", () => {
+    const engine = byId("ultralytics.pt.engine");
+    expect(engine.precisionModes).toEqual(["fp16", "fp32", "int8"]);
+    expect(engine.defaultPrecision).toBe("fp16");
+  });
+
+  test("TensorRT recommends calibration for INT8", () => {
+    const engine = byId("ultralytics.pt.engine");
+    expect(engine.calibrationRecommendedFor).toEqual(["int8"]);
+  });
+
+  test("every route default precision is a permitted mode", () => {
+    for (const route of all) {
+      expect(route.precisionModes).toContain(route.defaultPrecision);
+    }
+  });
+
+  test("calibration-recommended modes are always permitted modes", () => {
+    for (const route of all) {
+      for (const mode of route.calibrationRecommendedFor) {
+        expect(route.precisionModes).toContain(mode);
+      }
+    }
+  });
+
+  test("fixed-precision routes expose a single mode", () => {
+    for (const id of [
+      "ultralytics.pt.torchscript",
+      "ultralytics.pt.executorch",
+      "ultralytics.pt.pb",
+      "ultralytics.pt.paddle",
+      "ultralytics.pt.edgetpu",
+      "ultralytics.pt.axelera",
+    ]) {
+      expect(byId(id).precisionModes.length).toBe(1);
+    }
+  });
+
+  test("CoreML supports W8A16", () => {
+    expect(byId("ultralytics.pt.coreml").precisionModes).toContain("w8a16");
+  });
+
+  test("IMX supports W8A16", () => {
+    expect(byId("ultralytics.pt.imx").precisionModes).toContain("w8a16");
+  });
+
+  test("RKNN does not expose FP32", () => {
+    expect(byId("ultralytics.pt.rknn").precisionModes).not.toContain("fp32");
+  });
+
+  test("LiteRT does not expose FP16", () => {
+    expect(byId("ultralytics.pt.litert").precisionModes).not.toContain("fp16");
+  });
+
+  test("EdgeTPU and Axelera are INT8-only", () => {
+    expect(byId("ultralytics.pt.edgetpu").precisionModes).toEqual(["int8"]);
+    expect(byId("ultralytics.pt.axelera").precisionModes).toEqual(["int8"]);
+  });
+
+  test("EdgeTPU and Axelera recommend calibration for INT8", () => {
+    for (const id of ["ultralytics.pt.edgetpu", "ultralytics.pt.axelera"]) {
+      expect(byId(id).precisionModes).toEqual(["int8"]);
+      expect(byId(id).calibrationRecommendedFor).toEqual(["int8"]);
+    }
+  });
+});
+
 const defaultOpts = {
   imgsz: 640,
   batch: 1,
-  half: false,
-  int8: false,
+  precision: "fp32",
+  calibrationData: null,
   dynamic: false,
   simplify: false,
   optimize: false,
@@ -109,7 +196,7 @@ const defaultOpts = {
   opset: null,
   workspace: null,
   chip: "rk3588",
-};
+} as const;
 
 const rfdInspect512: RfDetrInspectResult = {
   success: true,
@@ -163,10 +250,10 @@ describe("withRfDetrDetectedDefaults", () => {
   });
 
   test("preserves route-specific overrides while injecting detected imgsz", () => {
-    const routeOpts = { ...defaultOpts, half: true, simplify: true };
+    const routeOpts = { ...defaultOpts, precision: "fp16" as const, simplify: true };
     const result = withRfDetrDetectedDefaults(routeOpts, "rfdetr", rfdInspect512);
     expect(result.imgsz).toBe(512);
-    expect(result.half).toBe(true);
+    expect(result.precision).toBe("fp16");
     expect(result.simplify).toBe(true);
   });
 });
@@ -183,7 +270,7 @@ describe("getRouteOptionsForOpen", () => {
 
   test("returns saved options when sourcePath matches and source is user", () => {
     const saved: RouteOptionsState = {
-      options: { ...defaultOpts, imgsz: 640, half: true },
+      options: { ...defaultOpts, imgsz: 640, precision: "fp16" },
       source: "user",
       sourcePath,
     };
@@ -208,6 +295,17 @@ describe("getRouteOptionsForOpen", () => {
     expect(result.options.imgsz).toBe(640);
     expect(result.source).toBe("default");
   });
+
+  test("normalizes saved RKNN options to lowercase chip and INT8-only precision", () => {
+    const saved: RouteOptionsState = {
+      options: { ...defaultOpts, chip: "RV1106B", precision: "fp16" },
+      source: "user",
+      sourcePath,
+    };
+    const result = getRouteOptionsForOpen(saved, "ultralytics.pt.rknn", "ultralytics", null, sourcePath);
+    expect(result.options.chip).toBe("rv1106b");
+    expect(result.options.precision).toBe("int8");
+  });
 });
 
 describe("applyDetectedRouteOptions", () => {
@@ -228,20 +326,20 @@ describe("applyDetectedRouteOptions", () => {
 
   test("refreshes detected saved state with new detected imgsz", () => {
     const saved: RouteOptionsState = {
-      options: { ...defaultOpts, imgsz: 512, half: true },
+      options: { ...defaultOpts, imgsz: 512, precision: "fp16" },
       source: "detected",
       sourcePath,
     };
     const result = applyDetectedRouteOptions(saved, routeId, 640, sourcePath);
     expect(result).not.toBeNull();
     expect(result!.options.imgsz).toBe(640);
-    expect(result!.options.half).toBe(true);
+    expect(result!.options.precision).toBe("fp16");
     expect(result!.source).toBe("detected");
   });
 
   test("preserves user saved state", () => {
     const saved: RouteOptionsState = {
-      options: { ...defaultOpts, imgsz: 640, half: true },
+      options: { ...defaultOpts, imgsz: 640, precision: "fp16" },
       source: "user",
       sourcePath,
     };
@@ -283,7 +381,7 @@ describe("applyDetectedRouteOptionsToProviderRoutes", () => {
           sourcePath,
         },
         "rfdetr.pth.engine": {
-          options: { ...defaultOpts, imgsz: 768, half: true },
+          options: { ...defaultOpts, imgsz: 768, precision: "fp16" },
           source: "user",
           sourcePath,
         },
@@ -299,7 +397,7 @@ describe("applyDetectedRouteOptionsToProviderRoutes", () => {
       sourcePath,
     });
     expect(result["rfdetr.pth.engine"]).toEqual({
-      options: { ...defaultOpts, imgsz: 768, half: true },
+      options: { ...defaultOpts, imgsz: 768, precision: "fp16" },
       source: "user",
       sourcePath,
     });

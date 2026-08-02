@@ -1,8 +1,9 @@
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { InputRow, OptionRow, useOptionSetter, type OptionsPanelProps } from "./_base";
+import { PrecisionOptions } from "./precision";
 
-export function GraphDefOptions({ route: _route, options, onOptionsChange }: OptionsPanelProps) {
+export function GraphDefOptions({ route, options, onOptionsChange }: OptionsPanelProps) {
   const set = useOptionSetter(options, onOptionsChange);
 
   return (
@@ -32,6 +33,8 @@ export function GraphDefOptions({ route: _route, options, onOptionsChange }: Opt
           }}
         />
       </InputRow>
+
+      <PrecisionOptions route={route} options={options} onOptionsChange={onOptionsChange} />
 
       <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 space-y-3">
         <p className="text-sm font-medium text-zinc-900">Post-processing</p>

@@ -2,7 +2,7 @@ import { detectEnvironment } from "@/lib/tauri/environment";
 import { captureAnalyticsEvent } from "@/lib/analytics";
 import { checkDependencies, installDependencies } from "@/lib/tauri/deps";
 import { cancelExport, openExportFolder, startExport } from "@/lib/tauri/export";
-import { defaultRouteForProvider, hasAllowedSourceExtension, providers, providerList, routesForProvider } from "@/lib/providers";
+import { defaultRouteForProvider, findRoute, hasAllowedSourceExtension, providers, providerList, routesForProvider } from "@/lib/providers";
 import { inspectRfDetrCheckpoint } from "@/lib/tauri/rfdetr";
 import { type AppOS, type AppPlatform, getOS, incompatibleReason, isCompatible, UNKNOWN_ARCH } from "@/lib/platform";
 import { getAppTelemetryContext } from "@/lib/tauri/app";
@@ -47,6 +47,7 @@ import type { UpdaterController } from "@/features/updater/use-updater-controlle
 import { DropZone } from "./drop-zone";
 import { ExportModal } from "./export-modal";
 import { RouteGrid } from "./route-grid";
+import { normalizeOptionsForRoute } from "./options/normalize";
 
 type WorkspaceView = "drop" | "formats";
 type RuntimeInstallPhase = "idle" | "installing" | "ready" | "failed";
@@ -72,8 +73,8 @@ export function getUltralyticsRuntimeReadyDescription(): string {
 const defaultOptions: ExportOptions = {
   imgsz: 640,
   batch: 1,
-  half: false,
-  int8: false,
+  precision: "fp32",
+  calibrationData: null,
   dynamic: false,
   simplify: false,
   optimize: false,
@@ -86,18 +87,17 @@ const defaultOptions: ExportOptions = {
 };
 
 const routeDefaults: Partial<Record<string, Partial<ExportOptions>>> = {
-  "ultralytics.pt.onnx": { half: true, simplify: true },
-  "ultralytics.pt.openvino": { half: true },
-  "ultralytics.pt.engine": { half: true, simplify: true },
-  "ultralytics.pt.coreml": { half: true },
-  "ultralytics.pt.mnn": { half: true },
-  "ultralytics.pt.ncnn": { half: true },
-  "ultralytics.pt.imx": { int8: true },
-  "ultralytics.pt.axelera": { int8: true },
+  "ultralytics.pt.onnx": { simplify: true },
+  "ultralytics.pt.engine": { simplify: true },
 };
 
-function optionsForRoute(routeId: string): ExportOptions {
-  return { ...defaultOptions, ...(routeDefaults[routeId] ?? {}) };
+function optionsForRoute(route: RouteSpec): ExportOptions {
+  return normalizeOptionsForRoute(route.id, {
+    ...defaultOptions,
+    ...(routeDefaults[route.id] ?? {}),
+    precision: route.defaultPrecision,
+    calibrationData: null,
+  });
 }
 
 export function getResolvedOutputDir(sourcePath: string, outputDirOverride: string): string {
@@ -126,13 +126,17 @@ export function getRouteOptionsForOpen(
   inspect: RfDetrInspectResult | null,
   sourcePath: string,
 ): RouteOptionsState {
-  if (saved && saved.sourcePath === sourcePath) return saved;
+  if (saved && saved.sourcePath === sourcePath) {
+    const normalized = normalizeOptionsForRoute(routeId, saved.options);
+    return normalized === saved.options ? saved : { ...saved, options: normalized };
+  }
 
-  const base = optionsForRoute(routeId);
+  const route = findRoute(routeId) ?? defaultRouteForProvider(providerId);
+  const base = optionsForRoute(route);
   const detected = withRfDetrDetectedDefaults(base, providerId, inspect);
 
   return {
-    options: detected,
+    options: normalizeOptionsForRoute(routeId, detected),
     source: providerId === "rfdetr" && inspect?.success && inspect.recommended_imgsz ? "detected" : "default",
     sourcePath,
   };
@@ -194,8 +198,9 @@ export function applyDetectedRouteOptions(
   currentSourcePath: string,
 ): RouteOptionsState | null {
   if (!saved || saved.sourcePath !== currentSourcePath) {
+    const route = findRoute(routeId) ?? defaultRouteForProvider("ultralytics");
     return {
-      options: { ...optionsForRoute(routeId), imgsz: detectedImgsz },
+      options: normalizeOptionsForRoute(routeId, { ...optionsForRoute(route), imgsz: detectedImgsz }),
       source: "detected",
       sourcePath: currentSourcePath,
     };
@@ -204,7 +209,7 @@ export function applyDetectedRouteOptions(
     return null;
   }
   return {
-    options: { ...saved.options, imgsz: detectedImgsz },
+    options: normalizeOptionsForRoute(routeId, { ...saved.options, imgsz: detectedImgsz }),
     source: "detected",
     sourcePath: currentSourcePath,
   };
@@ -376,10 +381,13 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
 
   const setOptionsWithSource = useCallback(
     (next: ExportOptions, optsSource: ExportOptionsSource) => {
-      setOptions(next);
+      const normalized = selectedRouteId
+        ? normalizeOptionsForRoute(selectedRouteId, next)
+        : next;
+      setOptions(normalized);
       if (selectedRouteId) {
         routeOptionsRef.current[selectedRouteId] = {
-          options: next,
+          options: normalized,
           source: optsSource,
           sourcePath,
         };
@@ -723,8 +731,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         yoloPath: activeEnv.yolo_path ?? "",
         imgsz: options.imgsz,
         batch: options.batch,
-        half: options.half,
-        int8: options.int8,
+        precision: options.precision,
+        calibrationData: options.calibrationData,
         dynamic: options.dynamic,
         simplify: options.simplify,
         optimize: options.optimize,

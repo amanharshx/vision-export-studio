@@ -3,15 +3,90 @@ use std::process::Command;
 
 use super::{ArtifactStatus, ExportRequest};
 
-fn artifact_info(format: &str) -> (&'static str, bool) {
+fn canonical_quantize(precision: &str) -> Option<&'static str> {
+    match precision {
+        "fp32" => Some("32"),
+        "fp16" => Some("16"),
+        "int8" => Some("8"),
+        "w8a16" => Some("w8a16"),
+        "w8a32" => Some("w8a32"),
+        _ => None,
+    }
+}
+
+const RKNN_INT8_ONLY_CHIPS: [&str; 4] = ["rv1103", "rv1103b", "rv1106", "rv1106b"];
+
+fn normalize_rknn_chip(chip: &str) -> String {
+    chip.trim().to_lowercase()
+}
+
+fn allowed_precisions(route_id: &str) -> Option<&'static [&'static str]> {
+    let format = route_id.strip_prefix("ultralytics.pt.")?;
+    Some(match format {
+        "onnx" | "openvino" | "engine" | "mnn" => &["fp16", "fp32", "int8"],
+        "coreml" => &["fp16", "fp32", "int8", "w8a16"],
+        "litert" => &["fp32", "int8", "w8a16", "w8a32"],
+        "saved_model" => &["fp32", "int8"],
+        "ncnn" => &["fp16", "fp32"],
+        "rknn" => &["fp16", "int8"],
+        "imx" => &["int8", "w8a16"],
+        "torchscript" | "executorch" | "pb" | "paddle" => &["fp32"],
+        "edgetpu" | "axelera" => &["int8"],
+        _ => return None,
+    })
+}
+
+pub fn validate_precision(route_id: &str, precision: &str, chip: &str) -> Result<String, String> {
+    let allowed = allowed_precisions(route_id)
+        .ok_or_else(|| format!("route not supported in this build: {}", route_id))?;
+    let quantize = canonical_quantize(precision)
+        .ok_or_else(|| format!("unsupported precision for {}: {}", route_id, precision))?;
+    if !allowed.contains(&precision) {
+        return Err(format!(
+            "precision {} is not supported for route {}",
+            precision, route_id
+        ));
+    }
+    let normalized_chip = normalize_rknn_chip(chip);
+    if route_id == "ultralytics.pt.rknn"
+        && RKNN_INT8_ONLY_CHIPS.contains(&normalized_chip.as_str())
+        && precision != "int8"
+    {
+        return Err(format!(
+            "Rockchip target '{}' only supports INT8 precision",
+            normalized_chip
+        ));
+    }
+    Ok(quantize.to_string())
+}
+
+fn calibration_recommended(route_id: &str, precision: &str) -> bool {
+    match route_id.strip_prefix("ultralytics.pt.") {
+        Some("onnx" | "openvino" | "engine" | "saved_model" | "rknn" | "edgetpu" | "axelera") => {
+            precision == "int8"
+        }
+        Some("litert" | "imx") => matches!(precision, "int8" | "w8a16"),
+        _ => false,
+    }
+}
+
+fn artifact_info(format: &str, precision: &str) -> (&'static str, bool) {
     match format {
         "torchscript" => (".torchscript", false),
-        "onnx" => (".onnx", false),
+        "onnx" => match precision {
+            "8" => ("_int8.onnx", false),
+            _ => (".onnx", false),
+        },
         "openvino" => ("_openvino_model", true),
         "coreml" => (".mlpackage", true),
         "ncnn" => ("_ncnn_model", true),
         "mnn" => (".mnn", false),
-        "litert" => (".tflite", false),
+        "litert" => match precision {
+            "8" => ("_int8.tflite", false),
+            "w8a16" => ("_w8a16.tflite", false),
+            "w8a32" => ("_w8a32.tflite", false),
+            _ => (".tflite", false),
+        },
         "engine" => (".engine", false),
         "rknn" => (".rknn", false),
         "executorch" => (".ptl", false),
@@ -37,8 +112,14 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn move_artifact(source_path: &str, format: &str, output_dir: &str) -> Result<bool, String> {
-    let (suffix, is_dir) = artifact_info(format);
+pub fn move_artifact(
+    source_path: &str,
+    format: &str,
+    precision: &str,
+    output_dir: &str,
+) -> Result<bool, String> {
+    let canonical = canonical_quantize(precision).unwrap_or("32");
+    let (suffix, is_dir) = artifact_info(format, canonical);
     if suffix.is_empty() {
         return Ok(false);
     }
@@ -83,17 +164,21 @@ pub fn build_command(request: &ExportRequest) -> Result<Command, String> {
         .route_id
         .strip_prefix("ultralytics.pt.")
         .ok_or_else(|| format!("route not supported in this build: {}", request.route_id))?;
+    let quantize = validate_precision(&request.route_id, &request.precision, &request.chip)?;
     let mut cmd = Command::new(&request.yolo_path);
     cmd.arg("export");
     cmd.arg(format!("model={}", request.source_path));
     cmd.arg(format!("format={}", yolo_format));
     cmd.arg(format!("imgsz={}", request.imgsz));
     cmd.arg(format!("batch={}", request.batch));
-    if request.half {
-        cmd.arg("half=True");
-    }
-    if request.int8 {
-        cmd.arg("int8=True");
+    cmd.arg(format!("quantize={}", quantize));
+    if calibration_recommended(&request.route_id, &request.precision) {
+        if let Some(data) = request.calibration_data.as_deref() {
+            let trimmed = data.trim();
+            if !trimmed.is_empty() {
+                cmd.arg(format!("data={}", trimmed));
+            }
+        }
     }
     if request.dynamic {
         cmd.arg("dynamic=True");
@@ -120,7 +205,7 @@ pub fn build_command(request: &ExportRequest) -> Result<Command, String> {
         cmd.arg(format!("workspace={}", v));
     }
     if request.route_id == "ultralytics.pt.rknn" && !request.chip.trim().is_empty() {
-        cmd.arg(format!("name={}", request.chip.trim()));
+        cmd.arg(format!("name={}", normalize_rknn_chip(&request.chip)));
     }
     Ok(cmd)
 }
@@ -141,7 +226,12 @@ pub fn confirm_artifacts(request: &ExportRequest) -> ArtifactStatus {
             }
         }
     };
-    match move_artifact(&request.source_path, yolo_format, &request.output_dir) {
+    match move_artifact(
+        &request.source_path,
+        yolo_format,
+        &request.precision,
+        &request.output_dir,
+    ) {
         Ok(true) => ArtifactStatus { artifact_moved: true, artifact_warning: None },
         Ok(false) => ArtifactStatus {
             artifact_moved: false,
@@ -190,8 +280,8 @@ mod tests {
             python_path: String::new(),
             imgsz: 640,
             batch: 1,
-            half: true,
-            int8: false,
+            precision: "fp16".to_string(),
+            calibration_data: None,
             dynamic: false,
             simplify: true,
             optimize: false,
@@ -218,7 +308,7 @@ mod tests {
                 "format=onnx",
                 "imgsz=640",
                 "batch=1",
-                "half=True",
+                "quantize=16",
                 "simplify=True",
                 "opset=13",
             ]
@@ -227,8 +317,36 @@ mod tests {
     }
 
     #[test]
-    fn move_artifact_moves_file_into_output_dir() {
-        let root = temp_dir("export-file");
+    fn move_artifact_moves_int8_onnx() {
+        let root = temp_dir("export-int8-onnx");
+        let source_dir = root.join("source");
+        let output_dir = root.join("output");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::create_dir_all(&output_dir).expect("create output dir");
+
+        let source_model = source_dir.join("best.pt");
+        let source_artifact = source_dir.join("best_int8.onnx");
+        fs::write(&source_model, "model").expect("write source model");
+        fs::write(&source_artifact, "artifact").expect("write source artifact");
+
+        let moved = move_artifact(
+            &source_model.to_string_lossy(),
+            "onnx",
+            "int8",
+            &output_dir.to_string_lossy(),
+        )
+        .expect("move artifact");
+
+        assert!(moved);
+        assert!(!source_artifact.exists());
+        assert!(output_dir.join("best_int8.onnx").exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn move_artifact_moves_plain_onnx_for_fp32() {
+        let root = temp_dir("export-fp32-onnx");
         let source_dir = root.join("source");
         let output_dir = root.join("output");
         fs::create_dir_all(&source_dir).expect("create source dir");
@@ -242,6 +360,7 @@ mod tests {
         let moved = move_artifact(
             &source_model.to_string_lossy(),
             "onnx",
+            "fp32",
             &output_dir.to_string_lossy(),
         )
         .expect("move artifact");
@@ -269,8 +388,8 @@ mod tests {
             python_path: String::new(),
             imgsz: 640,
             batch: 1,
-            half: false,
-            int8: false,
+            precision: "fp32".to_string(),
+            calibration_data: None,
             dynamic: false,
             simplify: false,
             optimize: false,
@@ -290,6 +409,7 @@ mod tests {
             .map(|arg| arg.to_string_lossy().to_string())
             .collect();
         assert!(args.contains(&"format=litert".to_string()));
+        assert!(args.contains(&"quantize=32".to_string()));
         assert!(!args.contains(&"half=True".to_string()));
         assert!(!args.contains(&"int8=True".to_string()));
         let _ = std::fs::remove_dir_all(root);
@@ -311,6 +431,119 @@ mod tests {
         let moved = move_artifact(
             &source_model.to_string_lossy(),
             "litert",
+            "fp32",
+            &output_dir.to_string_lossy(),
+        )
+        .expect("move artifact");
+
+        assert!(moved);
+        assert!(!source_artifact.exists());
+        assert!(output_dir.join("best.tflite").exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn move_artifact_moves_int8_tflite_for_litert() {
+        let root = temp_dir("export-litert-int8");
+        let source_dir = root.join("source");
+        let output_dir = root.join("output");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::create_dir_all(&output_dir).expect("create output dir");
+
+        let source_model = source_dir.join("best.pt");
+        let source_artifact = source_dir.join("best_int8.tflite");
+        fs::write(&source_model, "model").expect("write source model");
+        fs::write(&source_artifact, "artifact").expect("write source artifact");
+
+        let moved = move_artifact(
+            &source_model.to_string_lossy(),
+            "litert",
+            "int8",
+            &output_dir.to_string_lossy(),
+        )
+        .expect("move artifact");
+
+        assert!(moved);
+        assert!(!source_artifact.exists());
+        assert!(output_dir.join("best_int8.tflite").exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn move_artifact_moves_w8a16_tflite_for_litert() {
+        let root = temp_dir("export-litert-w8a16");
+        let source_dir = root.join("source");
+        let output_dir = root.join("output");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::create_dir_all(&output_dir).expect("create output dir");
+
+        let source_model = source_dir.join("best.pt");
+        let source_artifact = source_dir.join("best_w8a16.tflite");
+        fs::write(&source_model, "model").expect("write source model");
+        fs::write(&source_artifact, "artifact").expect("write source artifact");
+
+        let moved = move_artifact(
+            &source_model.to_string_lossy(),
+            "litert",
+            "w8a16",
+            &output_dir.to_string_lossy(),
+        )
+        .expect("move artifact");
+
+        assert!(moved);
+        assert!(!source_artifact.exists());
+        assert!(output_dir.join("best_w8a16.tflite").exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn move_artifact_moves_w8a32_tflite_for_litert() {
+        let root = temp_dir("export-litert-w8a32");
+        let source_dir = root.join("source");
+        let output_dir = root.join("output");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::create_dir_all(&output_dir).expect("create output dir");
+
+        let source_model = source_dir.join("best.pt");
+        let source_artifact = source_dir.join("best_w8a32.tflite");
+        fs::write(&source_model, "model").expect("write source model");
+        fs::write(&source_artifact, "artifact").expect("write source artifact");
+
+        let moved = move_artifact(
+            &source_model.to_string_lossy(),
+            "litert",
+            "w8a32",
+            &output_dir.to_string_lossy(),
+        )
+        .expect("move artifact");
+
+        assert!(moved);
+        assert!(!source_artifact.exists());
+        assert!(output_dir.join("best_w8a32.tflite").exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn move_artifact_moves_plain_tflite_for_litert_fp32() {
+        let root = temp_dir("export-litert-fp32");
+        let source_dir = root.join("source");
+        let output_dir = root.join("output");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::create_dir_all(&output_dir).expect("create output dir");
+
+        let source_model = source_dir.join("best.pt");
+        let source_artifact = source_dir.join("best.tflite");
+        fs::write(&source_model, "model").expect("write source model");
+        fs::write(&source_artifact, "artifact").expect("write source artifact");
+
+        let moved = move_artifact(
+            &source_model.to_string_lossy(),
+            "litert",
+            "fp32",
             &output_dir.to_string_lossy(),
         )
         .expect("move artifact");
@@ -336,6 +569,7 @@ mod tests {
         let moved = move_artifact(
             &source_model.to_string_lossy(),
             "onnx",
+            "",
             &output_dir.to_string_lossy(),
         )
         .expect("missing artifact should not error");
@@ -343,5 +577,200 @@ mod tests {
         assert!(!moved);
 
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    fn request_with_precision(
+        route_id: &str,
+        precision: &str,
+        calibration_data: Option<&str>,
+        chip: &str,
+    ) -> super::ExportRequest {
+        let root = temp_dir("prec");
+        let yolo_path = root.join("yolo");
+        std::fs::write(&yolo_path, "#!/bin/sh").expect("write yolo stub");
+        let source_path = root.join("best.pt");
+        std::fs::write(&source_path, "model").expect("write source model");
+        super::ExportRequest {
+            provider: crate::commands::provider_registry::ProviderId::Ultralytics,
+            source_path: source_path.to_string_lossy().to_string(),
+            route_id: route_id.to_string(),
+            output_dir: root.join("out").to_string_lossy().to_string(),
+            yolo_path: yolo_path.to_string_lossy().to_string(),
+            python_path: String::new(),
+            imgsz: 640,
+            batch: 1,
+            precision: precision.to_string(),
+            calibration_data: calibration_data.map(|value| value.to_string()),
+            dynamic: false,
+            simplify: false,
+            optimize: false,
+            nms: false,
+            end_to_end: false,
+            keras: false,
+            opset: None,
+            workspace: None,
+            chip: chip.to_string(),
+            rfdetr_trust_confirmed: false,
+            rfdetr_variant_mode: None,
+            rfdetr_manual_class_symbol: None,
+        }
+    }
+
+    #[test]
+    fn validate_precision_resolves_fp16_for_onnx() {
+        assert_eq!(
+            super::validate_precision("ultralytics.pt.onnx", "fp16", ""),
+            Ok("16".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_precision_accepts_litert_w8a32() {
+        assert!(super::validate_precision("ultralytics.pt.litert", "w8a32", "").is_ok());
+    }
+
+    #[test]
+    fn validate_precision_rejects_litert_fp16() {
+        assert!(super::validate_precision("ultralytics.pt.litert", "fp16", "").is_err());
+    }
+
+    #[test]
+    fn build_command_rejects_fp16_for_int8_only_rknn_chip() {
+        let request = request_with_precision("ultralytics.pt.rknn", "fp16", None, "RV1106B");
+        assert!(super::build_command(&request).is_err());
+        let _ =
+            std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());
+    }
+
+    #[test]
+    fn build_command_accepts_int8_for_int8_only_rknn_chip() {
+        let request = request_with_precision("ultralytics.pt.rknn", "int8", None, "RV1106B");
+        let command = super::build_command(&request).expect("INT8-only chip accepts INT8");
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"quantize=8".to_string()));
+        assert!(args.contains(&"name=rv1106b".to_string()));
+        let _ =
+            std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());
+    }
+
+    #[test]
+    fn build_command_accepts_fp16_for_normal_rknn_chip() {
+        let request = request_with_precision("ultralytics.pt.rknn", "fp16", None, "rk3588");
+        let command = super::build_command(&request).expect("normal chip accepts FP16");
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"quantize=16".to_string()));
+        assert!(args.contains(&"name=rk3588".to_string()));
+        let _ =
+            std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());
+    }
+
+    #[test]
+    fn build_command_emits_quantize_16_for_onnx_fp16() {
+        let request = request_with_precision("ultralytics.pt.onnx", "fp16", None, "");
+        let cmd = super::build_command(&request).expect("build command");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"quantize=16".to_string()));
+        assert!(!args
+            .iter()
+            .any(|arg| arg.contains("half=") || arg.contains("int8=")));
+        let _ =
+            std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());
+    }
+
+    #[test]
+    fn build_command_emits_calibrated_int8_with_data_path() {
+        let request =
+            request_with_precision("ultralytics.pt.litert", "int8", Some("/tmp/cal.yaml"), "");
+        let cmd = super::build_command(&request).expect("build command");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"quantize=8".to_string()));
+        assert!(args.contains(&"data=/tmp/cal.yaml".to_string()));
+        let _ =
+            std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());
+    }
+
+    #[test]
+    fn build_command_accepts_litert_int8_without_calibration() {
+        let request = request_with_precision("ultralytics.pt.litert", "int8", None, "");
+        let cmd = super::build_command(&request).expect("build command");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"quantize=8".to_string()));
+        assert!(!args.iter().any(|arg| arg.starts_with("data=")));
+        let _ =
+            std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());
+    }
+
+    #[test]
+    fn build_command_omits_data_for_fp32_with_stored_calibration() {
+        let request =
+            request_with_precision("ultralytics.pt.litert", "fp32", Some("/tmp/cal.yaml"), "");
+        let cmd = super::build_command(&request).expect("build command");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"quantize=32".to_string()));
+        assert!(!args.iter().any(|arg| arg.starts_with("data=")));
+        let _ =
+            std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());
+    }
+
+    #[test]
+    fn build_command_emits_data_for_edgetpu_int8() {
+        let request =
+            request_with_precision("ultralytics.pt.edgetpu", "int8", Some("/tmp/cal.yaml"), "");
+        let cmd = super::build_command(&request).expect("build command");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"quantize=8".to_string()));
+        assert!(args.contains(&"data=/tmp/cal.yaml".to_string()));
+        let _ =
+            std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());
+    }
+
+    #[test]
+    fn build_command_emits_data_for_axelera_int8() {
+        let request =
+            request_with_precision("ultralytics.pt.axelera", "int8", Some("/tmp/cal.yaml"), "");
+        let cmd = super::build_command(&request).expect("build command");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"quantize=8".to_string()));
+        assert!(args.contains(&"data=/tmp/cal.yaml".to_string()));
+        let _ =
+            std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());
+    }
+
+    #[test]
+    fn build_command_omits_data_for_edgetpu_without_calibration() {
+        let request = request_with_precision("ultralytics.pt.edgetpu", "int8", None, "");
+        let cmd = super::build_command(&request).expect("build command");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"quantize=8".to_string()));
+        assert!(!args.iter().any(|arg| arg.starts_with("data=")));
+        let _ =
+            std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());
     }
 }

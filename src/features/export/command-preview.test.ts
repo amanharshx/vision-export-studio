@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildCommandPreview } from "./command-preview";
 import type { CommandPreviewInput } from "./command-preview";
+import { normalizeOptionsForRoute } from "./options/normalize";
 
 const ultralyticsInput: CommandPreviewInput = {
   providerId: "ultralytics",
@@ -11,8 +12,8 @@ const ultralyticsInput: CommandPreviewInput = {
   options: {
     imgsz: 640,
     batch: 1,
-    half: false,
-    int8: false,
+    precision: "fp32",
+    calibrationData: null,
     dynamic: false,
     simplify: false,
     optimize: false,
@@ -34,8 +35,8 @@ const rfdetrInput: CommandPreviewInput = {
   options: {
     imgsz: 640,
     batch: 1,
-    half: false,
-    int8: false,
+    precision: "fp32",
+    calibrationData: null,
     dynamic: false,
     simplify: false,
     optimize: false,
@@ -48,40 +49,158 @@ const rfdetrInput: CommandPreviewInput = {
   },
 };
 
+function countOccurrences(haystack: string, needle: string): number {
+  return haystack.split(needle).length - 1;
+}
+
 describe("buildCommandPreview", () => {
-  test("ultralytics ONNX default options — full path, no optional flags", () => {
+  test("ultralytics ONNX — FP32 emits canonical quantize=32", () => {
     const preview = buildCommandPreview(ultralyticsInput);
-    expect(preview).toBe("yolo export model=/tmp/best.pt format=onnx imgsz=640 batch=1");
+    expect(preview).toContain("quantize=32");
+    expect(countOccurrences(preview, "quantize=")).toBe(1);
   });
 
-  test("ultralytics LiteRT — format=litert, no half/int8 by default", () => {
+  test("ultralytics ONNX — FP16 emits quantize=16", () => {
+    const preview = buildCommandPreview({
+      ...ultralyticsInput,
+      options: { ...ultralyticsInput.options, precision: "fp16" },
+    });
+    expect(preview).toContain("quantize=16");
+  });
+
+  test("ultralytics LiteRT — W8A32 emits quantize=w8a32", () => {
     const preview = buildCommandPreview({
       ...ultralyticsInput,
       routeId: "ultralytics.pt.litert",
       targetFormat: "litert",
+      options: { ...ultralyticsInput.options, precision: "w8a32" },
     });
-    expect(preview).toBe("yolo export model=/tmp/best.pt format=litert imgsz=640 batch=1");
+    expect(preview).toContain("quantize=w8a32");
+  });
+
+  test("ultralytics LiteRT — INT8 plus calibration YAML emits data path", () => {
+    const preview = buildCommandPreview({
+      ...ultralyticsInput,
+      routeId: "ultralytics.pt.litert",
+      targetFormat: "litert",
+      options: {
+        ...ultralyticsInput.options,
+        precision: "int8",
+        calibrationData: "/tmp/calibration.yaml",
+      },
+    });
+    expect(preview).toContain("quantize=8");
+    expect(preview).toContain("data=/tmp/calibration.yaml");
+  });
+
+  test("ultralytics LiteRT — INT8 without YAML emits no data=", () => {
+    const preview = buildCommandPreview({
+      ...ultralyticsInput,
+      routeId: "ultralytics.pt.litert",
+      targetFormat: "litert",
+      options: { ...ultralyticsInput.options, precision: "int8" },
+    });
+    expect(preview).toContain("quantize=8");
+    expect(preview).not.toContain("data=");
+  });
+
+  test("ultralytics EdgeTPU — INT8 plus calibration YAML emits data path", () => {
+    const preview = buildCommandPreview({
+      ...ultralyticsInput,
+      routeId: "ultralytics.pt.edgetpu",
+      targetFormat: "edgetpu",
+      options: {
+        ...ultralyticsInput.options,
+        precision: "int8",
+        calibrationData: "/tmp/calibration.yaml",
+      },
+    });
+    expect(preview).toContain("quantize=8");
+    expect(preview).toContain("data=/tmp/calibration.yaml");
+  });
+
+  test("ultralytics Axelera — INT8 plus calibration YAML emits data path", () => {
+    const preview = buildCommandPreview({
+      ...ultralyticsInput,
+      routeId: "ultralytics.pt.axelera",
+      targetFormat: "axelera",
+      options: {
+        ...ultralyticsInput.options,
+        precision: "int8",
+        calibrationData: "/tmp/calibration.yaml",
+      },
+    });
+    expect(preview).toContain("quantize=8");
+    expect(preview).toContain("data=/tmp/calibration.yaml");
+  });
+
+  test("ultralytics EdgeTPU — INT8 without YAML emits no data=", () => {
+    const preview = buildCommandPreview({
+      ...ultralyticsInput,
+      routeId: "ultralytics.pt.edgetpu",
+      targetFormat: "edgetpu",
+      options: { ...ultralyticsInput.options, precision: "int8" },
+    });
+    expect(preview).toContain("quantize=8");
+    expect(preview).not.toContain("data=");
+  });
+
+  test("ultralytics LiteRT — stored calibration YAML not emitted for FP32", () => {
+    const preview = buildCommandPreview({
+      ...ultralyticsInput,
+      routeId: "ultralytics.pt.litert",
+      targetFormat: "litert",
+      options: {
+        ...ultralyticsInput.options,
+        precision: "fp32",
+        calibrationData: "/tmp/calibration.yaml",
+      },
+    });
+    expect(preview).toContain("quantize=32");
+    expect(preview).not.toContain("data=");
+  });
+
+  test("ultralytics LiteRT — stored calibration YAML not emitted for W8A32", () => {
+    const preview = buildCommandPreview({
+      ...ultralyticsInput,
+      routeId: "ultralytics.pt.litert",
+      targetFormat: "litert",
+      options: {
+        ...ultralyticsInput.options,
+        precision: "w8a32",
+        calibrationData: "/tmp/calibration.yaml",
+      },
+    });
+    expect(preview).toContain("quantize=w8a32");
+    expect(preview).not.toContain("data=");
+  });
+
+  test("ultralytics preview never emits legacy half/int8 flags", () => {
+    const preview = buildCommandPreview({
+      ...ultralyticsInput,
+      options: { ...ultralyticsInput.options, precision: "int8", dynamic: true },
+    });
     expect(preview).not.toContain("half=");
     expect(preview).not.toContain("int8=");
   });
 
-  test("ultralytics ONNX — half, simplify, opset", () => {
+  test("ultralytics ONNX — simplify, opset with FP16", () => {
     const preview = buildCommandPreview({
       ...ultralyticsInput,
-      options: { ...ultralyticsInput.options, half: true, simplify: true, opset: 11 },
+      options: { ...ultralyticsInput.options, precision: "fp16", simplify: true, opset: 11 },
     });
     expect(preview).toBe(
-      "yolo export model=/tmp/best.pt format=onnx imgsz=640 batch=1 half=True simplify=True opset=11",
+      "yolo export model=/tmp/best.pt format=onnx imgsz=640 batch=1 quantize=16 simplify=True opset=11",
     );
   });
 
-  test("ultralytics — int8, dynamic", () => {
+  test("ultralytics — INT8 with dynamic", () => {
     const preview = buildCommandPreview({
       ...ultralyticsInput,
-      options: { ...ultralyticsInput.options, int8: true, dynamic: true },
+      options: { ...ultralyticsInput.options, precision: "int8", dynamic: true },
     });
     expect(preview).toBe(
-      "yolo export model=/tmp/best.pt format=onnx imgsz=640 batch=1 int8=True dynamic=True",
+      "yolo export model=/tmp/best.pt format=onnx imgsz=640 batch=1 quantize=8 dynamic=True",
     );
   });
 
@@ -92,6 +211,7 @@ describe("buildCommandPreview", () => {
       targetFormat: "engine",
       options: {
         ...ultralyticsInput.options,
+        precision: "fp16",
         optimize: true,
         nms: true,
         endToEnd: true,
@@ -100,7 +220,7 @@ describe("buildCommandPreview", () => {
       },
     });
     expect(preview).toBe(
-      "yolo export model=/tmp/best.pt format=engine imgsz=640 batch=1 optimize=True nms=True end2end=True keras=True workspace=4",
+      "yolo export model=/tmp/best.pt format=engine imgsz=640 batch=1 quantize=16 optimize=True nms=True end2end=True keras=True workspace=4",
     );
   });
 
@@ -120,15 +240,15 @@ describe("buildCommandPreview", () => {
     expect(preview).not.toContain("workspace");
   });
 
-  test("ultralytics RKNN — includes name=chip", () => {
+  test("ultralytics RKNN — includes name=chip with FP16 quantize", () => {
     const preview = buildCommandPreview({
       ...ultralyticsInput,
       routeId: "ultralytics.pt.rknn",
       targetFormat: "rknn",
-      options: { ...ultralyticsInput.options, chip: "rk3588" },
+      options: { ...ultralyticsInput.options, precision: "fp16", chip: "rk3588" },
     });
     expect(preview).toBe(
-      "yolo export model=/tmp/best.pt format=rknn imgsz=640 batch=1 name=rk3588",
+      "yolo export model=/tmp/best.pt format=rknn imgsz=640 batch=1 quantize=16 name=rk3588",
     );
   });
 
@@ -140,9 +260,26 @@ describe("buildCommandPreview", () => {
       options: { ...ultralyticsInput.options, chip: "" },
     });
     expect(preview).not.toContain("name=");
+    expect(preview).toContain("quantize=32");
   });
 
-  test("rfdetr ONNX auto mode — includes output-dir and variant-mode", () => {
+  test("ultralytics RKNN — normalized INT8-only chip emits quantize=8 and lowercase name", () => {
+    const options = normalizeOptionsForRoute("ultralytics.pt.rknn", {
+      ...ultralyticsInput.options,
+      chip: "RV1106B",
+      precision: "fp16",
+    });
+    const preview = buildCommandPreview({
+      ...ultralyticsInput,
+      routeId: "ultralytics.pt.rknn",
+      targetFormat: "rknn",
+      options,
+    });
+    expect(preview).toContain("quantize=8");
+    expect(preview).toContain("name=rv1106b");
+  });
+
+  test("rfdetr ONNX auto mode — includes output-dir and variant-mode, no quantize", () => {
     const preview = buildCommandPreview({
       ...rfdetrInput,
       rfdetrVariantMode: "auto",
@@ -156,6 +293,7 @@ describe("buildCommandPreview", () => {
       "  --imgsz 640 \\\n" +
       "  --batch 1",
     );
+    expect(preview).not.toContain("quantize=");
   });
 
   test("rfdetr ONNX manual mode — includes manual-class-symbol", () => {

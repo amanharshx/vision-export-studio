@@ -1,4 +1,5 @@
-import type { ExportOptions, ProviderId, RfDetrVariantMode } from "@/lib/types";
+import type { ExportOptions, PrecisionMode, ProviderId, RfDetrVariantMode } from "@/lib/types";
+import { findRoute } from "@/lib/providers";
 
 export interface CommandPreviewInput {
   providerId: ProviderId;
@@ -10,6 +11,14 @@ export interface CommandPreviewInput {
   rfdetrVariantMode?: RfDetrVariantMode;
   rfdetrManualClassSymbol?: string;
 }
+
+const QUANTIZE_BY_PRECISION: Record<PrecisionMode, string> = {
+  fp32: "32",
+  fp16: "16",
+  int8: "8",
+  w8a16: "w8a16",
+  w8a32: "w8a32",
+};
 
 export function buildCommandPreview(input: CommandPreviewInput): string {
   const { providerId, routeId, targetFormat, sourcePath, options, outputDir, rfdetrVariantMode, rfdetrManualClassSymbol } = input;
@@ -40,8 +49,13 @@ export function buildCommandPreview(input: CommandPreviewInput): string {
     `imgsz=${options.imgsz}`,
     `batch=${options.batch}`,
   ];
-  if (options.half) parts.push("half=True");
-  if (options.int8) parts.push("int8=True");
+  parts.push(`quantize=${QUANTIZE_BY_PRECISION[options.precision]}`);
+  if (
+    findRoute(routeId)?.calibrationRecommendedFor.includes(options.precision) &&
+    options.calibrationData
+  ) {
+    parts.push(`data=${options.calibrationData}`);
+  }
   if (options.dynamic) parts.push("dynamic=True");
   if (options.simplify) parts.push("simplify=True");
   if (options.optimize) parts.push("optimize=True");

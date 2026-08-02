@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ProviderId, RfDetrVariantMode } from "@/lib/types";
+import type { PrecisionMode, ProviderId, RfDetrVariantMode } from "@/lib/types";
 
 export interface StartExportInput {
   sourcePath: string;
@@ -10,8 +10,8 @@ export interface StartExportInput {
   yoloPath: string;
   imgsz: number;
   batch: number;
-  half: boolean;
-  int8: boolean;
+  precision: PrecisionMode;
+  calibrationData: string | null;
   dynamic: boolean;
   simplify: boolean;
   optimize: boolean;

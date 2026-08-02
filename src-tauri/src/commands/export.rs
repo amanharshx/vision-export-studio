@@ -67,8 +67,8 @@ pub async fn start_export(
     python_path: String,
     imgsz: u32,
     batch: u32,
-    half: bool,
-    int8: bool,
+    precision: String,
+    calibration_data: Option<String>,
     dynamic: bool,
     simplify: bool,
     optimize: bool,
@@ -138,8 +138,12 @@ pub async fn start_export(
         python_path,
         imgsz,
         batch,
-        half,
-        int8,
+        precision: precision.trim().to_string(),
+        calibration_data: calibration_data
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
         dynamic,
         simplify,
         optimize,

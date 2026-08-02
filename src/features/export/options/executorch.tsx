@@ -1,7 +1,8 @@
 import { Input } from "@/components/ui/input";
 import { InputRow, useOptionSetter, type OptionsPanelProps } from "./_base";
+import { PrecisionOptions } from "./precision";
 
-export function ExecuTorchOptions({ route: _route, options, onOptionsChange }: OptionsPanelProps) {
+export function ExecuTorchOptions({ route, options, onOptionsChange }: OptionsPanelProps) {
   const set = useOptionSetter(options, onOptionsChange);
 
   return (
@@ -18,6 +19,8 @@ export function ExecuTorchOptions({ route: _route, options, onOptionsChange }: O
           }}
         />
       </InputRow>
+
+      <PrecisionOptions route={route} options={options} onOptionsChange={onOptionsChange} />
     </div>
   );
 }

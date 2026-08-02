@@ -1,8 +1,9 @@
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { InputRow, OptionRow, useOptionSetter, type OptionsPanelProps } from "./_base";
+import { PrecisionOptions } from "./precision";
 
-export function SavedModelOptions({ route: _route, options, onOptionsChange }: OptionsPanelProps) {
+export function SavedModelOptions({ route, options, onOptionsChange }: OptionsPanelProps) {
   const set = useOptionSetter(options, onOptionsChange);
 
   return (
@@ -33,9 +34,7 @@ export function SavedModelOptions({ route: _route, options, onOptionsChange }: O
         />
       </InputRow>
 
-      <OptionRow label="INT8 Quantization" description="Enable INT8 quantization">
-        <Switch checked={options.int8} onCheckedChange={(v) => onOptionsChange({ ...options, int8: v, half: v ? false : options.half })} />
-      </OptionRow>
+      <PrecisionOptions route={route} options={options} onOptionsChange={onOptionsChange} />
 
       <OptionRow label="Keras Format" description="Use Keras format">
         <Switch checked={options.keras} onCheckedChange={(v) => set("keras", v)} />

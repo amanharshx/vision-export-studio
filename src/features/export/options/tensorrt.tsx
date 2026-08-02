@@ -5,11 +5,11 @@ import { listGpus, type GpuInfo } from "@/lib/tauri/gpu";
 import { useEffect, useState } from "react";
 import { Cpu } from "lucide-react";
 import { InputRow, OptionRow, useOptionSetter, type OptionsPanelProps } from "./_base";
+import { PrecisionOptions } from "./precision";
 
-export function TensorRtOptions({ route: _route, options, onOptionsChange }: OptionsPanelProps) {
+export function TensorRtOptions({ route, options, onOptionsChange }: OptionsPanelProps) {
   const set = useOptionSetter(options, onOptionsChange);
-  const int8On = options.int8;
-  const showBatchWarn = int8On && options.dynamic && options.batch === 1;
+  const showBatchWarn = options.precision === "int8" && options.dynamic && options.batch === 1;
 
   const [gpus, setGpus] = useState<GpuInfo[]>([]);
   const [selectedGpu, setSelectedGpu] = useState<string>("");
@@ -88,13 +88,7 @@ export function TensorRtOptions({ route: _route, options, onOptionsChange }: Opt
         )}
       </InputRow>
 
-      <OptionRow label="INT8 Quantization" description="Enable INT8 quantization">
-        <Switch checked={options.int8} onCheckedChange={(v) => onOptionsChange({ ...options, int8: v, half: v ? false : options.half })} />
-      </OptionRow>
-
-      <OptionRow label="FP16 Half" description="Use FP16 half precision">
-        <Switch checked={int8On ? false : options.half} disabled={int8On} onCheckedChange={(v) => set("half", v)} />
-      </OptionRow>
+      <PrecisionOptions route={route} options={options} onOptionsChange={onOptionsChange} />
 
       <OptionRow label="Dynamic" description="Dynamic input shapes">
         <Switch checked={options.dynamic} onCheckedChange={(v) => set("dynamic", v)} />
