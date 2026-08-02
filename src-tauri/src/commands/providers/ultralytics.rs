@@ -11,12 +11,11 @@ fn artifact_info(format: &str) -> (&'static str, bool) {
         "coreml" => (".mlpackage", true),
         "ncnn" => ("_ncnn_model", true),
         "mnn" => (".mnn", false),
-        "tflite" => (".tflite", false),
+        "litert" => (".tflite", false),
         "engine" => (".engine", false),
         "rknn" => (".rknn", false),
         "executorch" => (".ptl", false),
         "edgetpu" => ("_edgetpu.tflite", false),
-        "tfjs" => ("_web_model", true),
         "paddle" => ("_paddle_model", true),
         "saved_model" => ("_saved_model", true),
         "pb" => (".pb", false),
@@ -250,6 +249,75 @@ mod tests {
         assert!(moved);
         assert!(!source_artifact.exists());
         assert!(output_dir.join("best.onnx").exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn build_command_uses_litert_format() {
+        let root = temp_dir("build-cmd-litert");
+        let yolo_path = root.join("yolo");
+        std::fs::write(&yolo_path, "#!/bin/sh").expect("write yolo stub");
+        let source_path = root.join("best.pt");
+        std::fs::write(&source_path, "model").expect("write source model");
+        let request = super::ExportRequest {
+            provider: crate::commands::provider_registry::ProviderId::Ultralytics,
+            source_path: source_path.to_string_lossy().to_string(),
+            route_id: "ultralytics.pt.litert".to_string(),
+            output_dir: root.join("out").to_string_lossy().to_string(),
+            yolo_path: yolo_path.to_string_lossy().to_string(),
+            python_path: String::new(),
+            imgsz: 640,
+            batch: 1,
+            half: false,
+            int8: false,
+            dynamic: false,
+            simplify: false,
+            optimize: false,
+            nms: false,
+            end_to_end: false,
+            keras: false,
+            opset: None,
+            workspace: None,
+            chip: String::new(),
+            rfdetr_trust_confirmed: false,
+            rfdetr_variant_mode: None,
+            rfdetr_manual_class_symbol: None,
+        };
+        let cmd = super::build_command(&request).expect("build command");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"format=litert".to_string()));
+        assert!(!args.contains(&"half=True".to_string()));
+        assert!(!args.contains(&"int8=True".to_string()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn move_artifact_moves_tflite_for_litert() {
+        let root = temp_dir("export-litert");
+        let source_dir = root.join("source");
+        let output_dir = root.join("output");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::create_dir_all(&output_dir).expect("create output dir");
+
+        let source_model = source_dir.join("best.pt");
+        let source_artifact = source_dir.join("best.tflite");
+        fs::write(&source_model, "model").expect("write source model");
+        fs::write(&source_artifact, "artifact").expect("write source artifact");
+
+        let moved = move_artifact(
+            &source_model.to_string_lossy(),
+            "litert",
+            &output_dir.to_string_lossy(),
+        )
+        .expect("move artifact");
+
+        assert!(moved);
+        assert!(!source_artifact.exists());
+        assert!(output_dir.join("best.tflite").exists());
 
         fs::remove_dir_all(root).expect("cleanup");
     }

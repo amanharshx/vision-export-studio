@@ -131,26 +131,16 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
             ],
             sys: &[],
         }),
-        "ultralytics.pt.tflite" => Some(RouteDeps {
+        "ultralytics.pt.litert" => Some(RouteDeps {
             pip: &[
                 PipDep {
-                    package_name: "tensorflow",
-                    install_hint: "pip install tensorflow",
+                    package_name: "litert-torch>=0.9.0",
+                    install_hint: "pip install \"ultralytics[export-litert]\"",
                     optional: false,
                 },
                 PipDep {
-                    package_name: "onnx2tf",
-                    install_hint: "pip install onnx2tf",
-                    optional: false,
-                },
-                PipDep {
-                    package_name: "onnx",
-                    install_hint: "pip install onnx",
-                    optional: false,
-                },
-                PipDep {
-                    package_name: "onnxruntime",
-                    install_hint: "pip install onnxruntime",
+                    package_name: "ai-edge-litert>=2.1.4",
+                    install_hint: "pip install \"ultralytics[export-litert]\"",
                     optional: false,
                 },
             ],
@@ -213,39 +203,6 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
             sys: &[SysDep {
                 binary_name: "edgetpu_compiler",
                 install_hint: "Download from https://coral.ai/docs/edgetpu/compiler/#download",
-            }],
-        }),
-        "ultralytics.pt.tfjs" => Some(RouteDeps {
-            pip: &[
-                PipDep {
-                    package_name: "tensorflow",
-                    install_hint: "pip install tensorflow",
-                    optional: false,
-                },
-                PipDep {
-                    package_name: "onnx2tf",
-                    install_hint: "pip install onnx2tf",
-                    optional: false,
-                },
-                PipDep {
-                    package_name: "onnx",
-                    install_hint: "pip install onnx",
-                    optional: false,
-                },
-                PipDep {
-                    package_name: "onnxruntime",
-                    install_hint: "pip install onnxruntime",
-                    optional: false,
-                },
-                PipDep {
-                    package_name: "tensorflowjs",
-                    install_hint: "pip install tensorflowjs",
-                    optional: false,
-                },
-            ],
-            sys: &[SysDep {
-                binary_name: "tensorflowjs_converter",
-                install_hint: "pip install tensorflowjs",
             }],
         }),
         "ultralytics.pt.paddle" => Some(RouteDeps {
@@ -359,9 +316,14 @@ fn validate_install_route_platform(route_id: &str, os: &str, arch: &str) -> Resu
 // ---------------------------------------------------------------------------
 
 /// Convert a pip package name to the Python importable name used with
-/// importlib.util.find_spec.
+/// importlib.util.find_spec. Version/extra specifiers are stripped first.
 fn importable_name(package_name: &str) -> String {
-    match package_name {
+    let base = package_name
+        .split(|c: char| matches!(c, '[' | '>' | '<' | '=' | '!' | '~' | ',' | ' '))
+        .next()
+        .unwrap_or(package_name)
+        .trim();
+    match base {
         "paddlepaddle" => "paddle".to_string(),
         "rknn-toolkit2" => "rknn".to_string(),
         "model-compression-toolkit" => "model_compression_toolkit".to_string(),
@@ -585,14 +547,26 @@ struct InstallFailedPayload {
 // Package name validation
 // ---------------------------------------------------------------------------
 
-/// Accept only characters valid in a PyPI package name.
+/// Accept only characters valid in a PyPI package name or version specifier.
 /// Rejects anything that could be used for argument injection.
 fn validate_package_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("package name must not be empty".to_string());
     }
     if !name.chars().all(|c| {
-        c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '[' || c == ']' || c == ','
+        c.is_alphanumeric()
+            || c == '-'
+            || c == '_'
+            || c == '.'
+            || c == '['
+            || c == ']'
+            || c == ','
+            || c == '>'
+            || c == '<'
+            || c == '='
+            || c == '!'
+            || c == '~'
+            || c == '*'
     }) {
         return Err(format!("invalid package name: {}", name));
     }
@@ -792,6 +766,45 @@ mod tests {
         let deps = route_deps("ultralytics.pt.paddle").expect("route deps");
         assert_eq!(deps.pip[0].package_name, "paddlepaddle");
         assert_eq!(deps.pip[0].install_hint, "pip install paddlepaddle");
+    }
+
+    #[test]
+    fn litert_route_has_two_pip_deps_and_no_system_binaries() {
+        let deps = route_deps("ultralytics.pt.litert").expect("route deps");
+        assert!(deps.sys.is_empty());
+        let names: Vec<&str> = deps.pip.iter().map(|d| d.package_name).collect();
+        assert_eq!(names, vec!["litert-torch>=0.9.0", "ai-edge-litert>=2.1.4"]);
+        for dep in deps.pip {
+            assert_eq!(dep.install_hint, "pip install \"ultralytics[export-litert]\"");
+            assert!(!dep.optional);
+        }
+    }
+
+    #[test]
+    fn removed_tfjs_and_ultralytics_tflite_deps_are_unknown() {
+        assert!(route_deps("ultralytics.pt.tfjs").is_none());
+        assert!(route_deps("ultralytics.pt.tflite").is_none());
+    }
+
+    #[test]
+    fn litert_import_names_strip_version_specifiers() {
+        assert_eq!(importable_name("litert-torch>=0.9.0"), "litert_torch");
+        assert_eq!(importable_name("ai-edge-litert>=2.1.4"), "ai_edge_litert");
+    }
+
+    #[test]
+    fn litert_dependency_install_gates_export_host() {
+        assert!(validate_install_route_platform("ultralytics.pt.litert", "macos", "x86_64").is_ok());
+        assert!(validate_install_route_platform("ultralytics.pt.litert", "macos", "aarch64").is_ok());
+        assert!(validate_install_route_platform("ultralytics.pt.litert", "linux", "x86_64").is_ok());
+        assert!(validate_install_route_platform("ultralytics.pt.litert", "windows", "x86_64").is_err());
+        assert!(validate_install_route_platform("ultralytics.pt.litert", "linux", "aarch64").is_err());
+    }
+
+    #[test]
+    fn litert_package_specs_survive_validation() {
+        assert!(validate_package_name("litert-torch>=0.9.0").is_ok());
+        assert!(validate_package_name("ai-edge-litert>=2.1.4").is_ok());
     }
 
     #[test]
