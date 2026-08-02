@@ -14,6 +14,12 @@ fn canonical_quantize(precision: &str) -> Option<&'static str> {
     }
 }
 
+const RKNN_INT8_ONLY_CHIPS: [&str; 4] = ["rv1103", "rv1103b", "rv1106", "rv1106b"];
+
+fn normalize_rknn_chip(chip: &str) -> String {
+    chip.trim().to_lowercase()
+}
+
 fn allowed_precisions(route_id: &str) -> Option<&'static [&'static str]> {
     let format = route_id.strip_prefix("ultralytics.pt.")?;
     Some(match format {
@@ -30,7 +36,7 @@ fn allowed_precisions(route_id: &str) -> Option<&'static [&'static str]> {
     })
 }
 
-pub fn validate_precision(route_id: &str, precision: &str) -> Result<String, String> {
+pub fn validate_precision(route_id: &str, precision: &str, chip: &str) -> Result<String, String> {
     let allowed = allowed_precisions(route_id)
         .ok_or_else(|| format!("route not supported in this build: {}", route_id))?;
     let quantize = canonical_quantize(precision)
@@ -39,6 +45,16 @@ pub fn validate_precision(route_id: &str, precision: &str) -> Result<String, Str
         return Err(format!(
             "precision {} is not supported for route {}",
             precision, route_id
+        ));
+    }
+    let normalized_chip = normalize_rknn_chip(chip);
+    if route_id == "ultralytics.pt.rknn"
+        && RKNN_INT8_ONLY_CHIPS.contains(&normalized_chip.as_str())
+        && precision != "int8"
+    {
+        return Err(format!(
+            "Rockchip target '{}' only supports INT8 precision",
+            normalized_chip
         ));
     }
     Ok(quantize.to_string())
@@ -146,7 +162,7 @@ pub fn build_command(request: &ExportRequest) -> Result<Command, String> {
         .route_id
         .strip_prefix("ultralytics.pt.")
         .ok_or_else(|| format!("route not supported in this build: {}", request.route_id))?;
-    let quantize = validate_precision(&request.route_id, &request.precision)?;
+    let quantize = validate_precision(&request.route_id, &request.precision, &request.chip)?;
     let mut cmd = Command::new(&request.yolo_path);
     cmd.arg("export");
     cmd.arg(format!("model={}", request.source_path));
@@ -187,7 +203,7 @@ pub fn build_command(request: &ExportRequest) -> Result<Command, String> {
         cmd.arg(format!("workspace={}", v));
     }
     if request.route_id == "ultralytics.pt.rknn" && !request.chip.trim().is_empty() {
-        cmd.arg(format!("name={}", request.chip.trim()));
+        cmd.arg(format!("name={}", normalize_rknn_chip(&request.chip)));
     }
     Ok(cmd)
 }
@@ -565,6 +581,7 @@ mod tests {
         route_id: &str,
         precision: &str,
         calibration_data: Option<&str>,
+        chip: &str,
     ) -> super::ExportRequest {
         let root = temp_dir("prec");
         let yolo_path = root.join("yolo");
@@ -590,7 +607,7 @@ mod tests {
             keras: false,
             opset: None,
             workspace: None,
-            chip: String::new(),
+            chip: chip.to_string(),
             rfdetr_trust_confirmed: false,
             rfdetr_variant_mode: None,
             rfdetr_manual_class_symbol: None,
@@ -600,24 +617,60 @@ mod tests {
     #[test]
     fn validate_precision_resolves_fp16_for_onnx() {
         assert_eq!(
-            super::validate_precision("ultralytics.pt.onnx", "fp16"),
+            super::validate_precision("ultralytics.pt.onnx", "fp16", ""),
             Ok("16".to_string())
         );
     }
 
     #[test]
     fn validate_precision_accepts_litert_w8a32() {
-        assert!(super::validate_precision("ultralytics.pt.litert", "w8a32").is_ok());
+        assert!(super::validate_precision("ultralytics.pt.litert", "w8a32", "").is_ok());
     }
 
     #[test]
     fn validate_precision_rejects_litert_fp16() {
-        assert!(super::validate_precision("ultralytics.pt.litert", "fp16").is_err());
+        assert!(super::validate_precision("ultralytics.pt.litert", "fp16", "").is_err());
+    }
+
+    #[test]
+    fn build_command_rejects_fp16_for_int8_only_rknn_chip() {
+        let request = request_with_precision("ultralytics.pt.rknn", "fp16", None, "RV1106B");
+        assert!(super::build_command(&request).is_err());
+        let _ =
+            std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());
+    }
+
+    #[test]
+    fn build_command_accepts_int8_for_int8_only_rknn_chip() {
+        let request = request_with_precision("ultralytics.pt.rknn", "int8", None, "RV1106B");
+        let command = super::build_command(&request).expect("INT8-only chip accepts INT8");
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"quantize=8".to_string()));
+        assert!(args.contains(&"name=rv1106b".to_string()));
+        let _ =
+            std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());
+    }
+
+    #[test]
+    fn build_command_accepts_fp16_for_normal_rknn_chip() {
+        let request = request_with_precision("ultralytics.pt.rknn", "fp16", None, "rk3588");
+        let command = super::build_command(&request).expect("normal chip accepts FP16");
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"quantize=16".to_string()));
+        assert!(args.contains(&"name=rk3588".to_string()));
+        let _ =
+            std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());
     }
 
     #[test]
     fn build_command_emits_quantize_16_for_onnx_fp16() {
-        let request = request_with_precision("ultralytics.pt.onnx", "fp16", None);
+        let request = request_with_precision("ultralytics.pt.onnx", "fp16", None, "");
         let cmd = super::build_command(&request).expect("build command");
         let args: Vec<String> = cmd
             .get_args()
@@ -634,7 +687,7 @@ mod tests {
     #[test]
     fn build_command_emits_calibrated_int8_with_data_path() {
         let request =
-            request_with_precision("ultralytics.pt.litert", "int8", Some("/tmp/cal.yaml"));
+            request_with_precision("ultralytics.pt.litert", "int8", Some("/tmp/cal.yaml"), "");
         let cmd = super::build_command(&request).expect("build command");
         let args: Vec<String> = cmd
             .get_args()
@@ -648,7 +701,7 @@ mod tests {
 
     #[test]
     fn build_command_accepts_litert_int8_without_calibration() {
-        let request = request_with_precision("ultralytics.pt.litert", "int8", None);
+        let request = request_with_precision("ultralytics.pt.litert", "int8", None, "");
         let cmd = super::build_command(&request).expect("build command");
         let args: Vec<String> = cmd
             .get_args()
@@ -663,7 +716,7 @@ mod tests {
     #[test]
     fn build_command_omits_data_for_fp32_with_stored_calibration() {
         let request =
-            request_with_precision("ultralytics.pt.litert", "fp32", Some("/tmp/cal.yaml"));
+            request_with_precision("ultralytics.pt.litert", "fp32", Some("/tmp/cal.yaml"), "");
         let cmd = super::build_command(&request).expect("build command");
         let args: Vec<String> = cmd
             .get_args()
