@@ -1,9 +1,9 @@
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import { AlertTriangle } from "lucide-react";
-import { InputRow, OptionRow, useOptionSetter, type OptionsPanelProps } from "./_base";
+import { InputRow, useOptionSetter, type OptionsPanelProps } from "./_base";
+import { PrecisionOptions } from "./precision";
 
-export function ImxOptions({ route: _route, options, onOptionsChange }: OptionsPanelProps) {
+export function ImxOptions({ route, options, onOptionsChange }: OptionsPanelProps) {
   const set = useOptionSetter(options, onOptionsChange);
 
   return (
@@ -31,9 +31,7 @@ export function ImxOptions({ route: _route, options, onOptionsChange }: OptionsP
         />
       </InputRow>
 
-      <OptionRow label="INT8 Quantization" description="Required for IMX500">
-        <Switch checked disabled />
-      </OptionRow>
+      <PrecisionOptions route={route} options={options} onOptionsChange={onOptionsChange} />
     </div>
   );
 }

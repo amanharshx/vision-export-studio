@@ -1,8 +1,9 @@
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { InputRow, OptionRow, useOptionSetter, type OptionsPanelProps } from "./_base";
+import { PrecisionOptions } from "./precision";
 
-export function TorchScriptOptions({ route: _route, options, onOptionsChange }: OptionsPanelProps) {
+export function TorchScriptOptions({ route, options, onOptionsChange }: OptionsPanelProps) {
   const set = useOptionSetter(options, onOptionsChange);
 
   return (
@@ -33,9 +34,7 @@ export function TorchScriptOptions({ route: _route, options, onOptionsChange }: 
         />
       </InputRow>
 
-      <OptionRow label="FP16 Half" description="Use FP16 half precision">
-        <Switch checked={options.half} onCheckedChange={(v) => set("half", v)} />
-      </OptionRow>
+      <PrecisionOptions route={route} options={options} onOptionsChange={onOptionsChange} />
 
       <OptionRow label="Dynamic" description="Dynamic input shapes">
         <Switch checked={options.dynamic} onCheckedChange={(v) => set("dynamic", v)} />

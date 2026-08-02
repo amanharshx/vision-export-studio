@@ -1,6 +1,7 @@
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { InputRow, useOptionSetter, type OptionsPanelProps } from "./_base";
+import { PrecisionOptions } from "./precision";
 
 const RKNN_CHIPS = [
   "rk3562",
@@ -18,7 +19,7 @@ const RKNN_CHIPS = [
   "rv1126",
 ];
 
-export function RknnOptions({ route: _route, options, onOptionsChange }: OptionsPanelProps) {
+export function RknnOptions({ route, options, onOptionsChange }: OptionsPanelProps) {
   const set = useOptionSetter(options, onOptionsChange);
 
   return (
@@ -48,6 +49,8 @@ export function RknnOptions({ route: _route, options, onOptionsChange }: Options
           }}
         />
       </InputRow>
+
+      <PrecisionOptions route={route} options={options} onOptionsChange={onOptionsChange} />
 
       <div className="space-y-1.5">
         <div>

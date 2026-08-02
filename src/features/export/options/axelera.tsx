@@ -1,8 +1,9 @@
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { InputRow, OptionRow, useOptionSetter, type OptionsPanelProps } from "./_base";
+import { PrecisionOptions } from "./precision";
 
-export function AxeleraOptions({ route: _route, options, onOptionsChange }: OptionsPanelProps) {
+export function AxeleraOptions({ route, options, onOptionsChange }: OptionsPanelProps) {
   const set = useOptionSetter(options, onOptionsChange);
 
   return (
@@ -20,9 +21,7 @@ export function AxeleraOptions({ route: _route, options, onOptionsChange }: Opti
         />
       </InputRow>
 
-      <OptionRow label="INT8 Quantization" description="Required for Axelera Metis">
-        <Switch checked disabled />
-      </OptionRow>
+      <PrecisionOptions route={route} options={options} onOptionsChange={onOptionsChange} />
 
       <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 space-y-3">
         <p className="text-sm font-medium text-zinc-900">Post-processing</p>
