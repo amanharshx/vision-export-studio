@@ -1,12 +1,77 @@
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::str::FromStr;
+
+use pep440_rs::Version;
 use tauri::Emitter;
 use uuid::Uuid;
 
 use crate::commands::provider_registry::{
     validate_current_route_platform, validate_route_platform,
 };
+
+// ---------------------------------------------------------------------------
+// Runtime version floors
+// ---------------------------------------------------------------------------
+
+const MIN_ULTRALYTICS_VERSION: &str = "8.4.80";
+const MIN_LITERT_ULTRALYTICS_VERSION: &str = "8.4.83";
+const MIN_LITERT_PYTHON_VERSION: &str = "3.10";
+
+/// Minimum Ultralytics version required by a route. None for non-Ultralytics routes.
+fn minimum_ultralytics_version(route_id: &str) -> Option<&'static str> {
+    if !route_id.starts_with("ultralytics.") {
+        return None;
+    }
+    if route_id == "ultralytics.pt.litert" {
+        return Some(MIN_LITERT_ULTRALYTICS_VERSION);
+    }
+    Some(MIN_ULTRALYTICS_VERSION)
+}
+
+/// Minimum Python version required by a route. Only LiteRT has a Python floor.
+fn minimum_python_version(route_id: &str) -> Option<&'static str> {
+    if route_id == "ultralytics.pt.litert" {
+        return Some(MIN_LITERT_PYTHON_VERSION);
+    }
+    None
+}
+
+/// True when the installed version is below the required PEP 440 floor.
+/// Unparseable versions are treated as below the floor so they block export.
+fn version_below(installed: &str, required: &str) -> bool {
+    match (Version::from_str(installed), Version::from_str(required)) {
+        (Ok(installed), Ok(required)) => installed < required,
+        _ => true,
+    }
+}
+
+fn ultralytics_version_too_old_result(installed: &str, required: &str) -> DepCheckResult {
+    DepCheckResult {
+        item: "ultralytics".to_string(),
+        status: "version_too_old".to_string(),
+        reason: format!(
+            "Ultralytics {} is installed; {} or newer is required.",
+            installed, required
+        ),
+        install_hint: format!("pip install \"ultralytics>={}\"", required),
+        install_package: Some(format!("ultralytics>={}", required)),
+    }
+}
+
+fn python_version_too_old_result(installed: &str) -> DepCheckResult {
+    DepCheckResult {
+        item: "Python 3.10+".to_string(),
+        status: "version_too_old".to_string(),
+        reason: format!(
+            "Python {} is selected; LiteRT requires Python 3.10 or newer.",
+            installed
+        ),
+        install_hint: "Install/select Python 3.10 or newer, then re-detect the environment and recreate the export runtime.".to_string(),
+        install_package: None,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Response types
@@ -361,6 +426,19 @@ fn probe(python: &str, code: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Return the selected interpreter's version (e.g. "3.9.6").
+fn probe_python_version(python: &str) -> Result<String, String> {
+    probe(python, "import platform; print(platform.python_version())")
+}
+
+/// Return the installed version of an importable module (e.g. "8.4.79").
+fn probe_installed_version(python: &str, importable: &str) -> Result<String, String> {
+    probe(
+        python,
+        &format!("import {}; print({}.__version__)", importable, importable),
+    )
+}
+
 // ---------------------------------------------------------------------------
 // check_dependencies command
 // ---------------------------------------------------------------------------
@@ -396,15 +474,23 @@ pub async fn check_dependencies(
 
     let mut results: Vec<DepCheckResult> = Vec::new();
 
+    // LiteRT Python floor: below 3.10 this is the only blocker and LiteRT package
+    // checks are skipped entirely to avoid predictable pip failures.
+    if let Some(required_python) = minimum_python_version(&route_id) {
+        if let Ok(installed_python) = probe_python_version(&python_path) {
+            if version_below(&installed_python, required_python) {
+                return Ok(DepCheckResponse {
+                    results: vec![python_version_too_old_result(&installed_python)],
+                });
+            }
+        }
+    }
+
     // Check ultralytics only for Ultralytics routes.
     if route_id.starts_with("ultralytics.") {
-        let ultra_result = check_pip_dep(
-            &python_path,
-            "ultralytics",
-            "pip install ultralytics",
-            false,
-        );
-        results.push(ultra_result);
+        let required = minimum_ultralytics_version(&route_id)
+            .expect("ultralytics routes always declare a minimum version");
+        results.push(check_ultralytics_dep(&python_path, required));
     }
 
     // Check route pip deps — RF-DETR routes use probe-based checks for extras.
@@ -440,6 +526,34 @@ pub async fn check_dependencies(
 // ---------------------------------------------------------------------------
 // Per-dep check helpers
 // ---------------------------------------------------------------------------
+
+/// Version-aware Ultralytics check for Ultralytics routes.
+///
+/// When Ultralytics is absent, the ordinary missing-package remedy is overridden
+/// with the route minimum so a fresh install lands on the required floor instead
+/// of a bare `ultralytics`. When it is present but below the floor, the result
+/// becomes `version_too_old` with an explicit pinned `install_package`.
+fn check_ultralytics_dep(python: &str, required: &str) -> DepCheckResult {
+    let install_hint = format!("pip install \"ultralytics>={}\"", required);
+    let install_package = Some(format!("ultralytics>={}", required));
+    let presence = check_pip_dep(python, "ultralytics", &install_hint, false);
+
+    match presence.status.as_str() {
+        "ready" => match probe_installed_version(python, "ultralytics") {
+            Ok(installed) if !version_below(&installed, required) => presence,
+            Ok(installed) => ultralytics_version_too_old_result(&installed, required),
+            Err(_) => ultralytics_version_too_old_result("unknown", required),
+        },
+        "missing_package" => DepCheckResult {
+            item: presence.item,
+            status: presence.status,
+            reason: presence.reason,
+            install_hint,
+            install_package,
+        },
+        _ => presence,
+    }
+}
 
 fn check_pip_dep(
     python: &str,
@@ -483,7 +597,7 @@ fn check_pip_dep(
                     status: "missing_package".to_string(),
                     reason: format!("importlib.util.find_spec('{}') returned False", imp),
                     install_hint: install_hint.to_string(),
-                    install_package: None,
+                    install_package: Some(package_name.to_string()),
                 }
             }
         }
@@ -882,5 +996,71 @@ mod tests {
         assert!(
             validate_install_route_platform("ultralytics.pt.paddle", "macos", "aarch64").is_ok()
         );
+    }
+
+    #[test]
+    fn minimum_ultralytics_version_is_route_aware() {
+        assert_eq!(
+            minimum_ultralytics_version("ultralytics.pt.onnx"),
+            Some("8.4.80")
+        );
+        assert_eq!(
+            minimum_ultralytics_version("ultralytics.pt.litert"),
+            Some("8.4.83")
+        );
+        assert_eq!(minimum_ultralytics_version("rfdetr.pth.onnx"), None);
+    }
+
+    #[test]
+    fn minimum_python_version_is_litert_only() {
+        assert_eq!(
+            minimum_python_version("ultralytics.pt.litert"),
+            Some("3.10")
+        );
+        assert_eq!(minimum_python_version("ultralytics.pt.onnx"), None);
+        assert_eq!(minimum_python_version("rfdetr.pth.onnx"), None);
+    }
+
+    #[test]
+    fn pep440_comparison_handles_pre_releases_and_patch_levels() {
+        assert!(version_below("8.4.79", "8.4.80"));
+        assert!(version_below("8.4.80rc1", "8.4.80"));
+        assert!(!version_below("8.4.80", "8.4.80"));
+        assert!(!version_below("8.4.115", "8.4.80"));
+    }
+
+    #[test]
+    fn outdated_ultralytics_result_blocks_with_installable_update() {
+        let result = ultralytics_version_too_old_result("8.4.79", "8.4.80");
+
+        assert_eq!(result.item, "ultralytics");
+        assert_eq!(result.status, "version_too_old");
+        assert_eq!(
+            result.install_package,
+            Some("ultralytics>=8.4.80".to_string())
+        );
+        assert!(result.reason.contains("8.4.79"));
+        assert!(result.reason.contains("8.4.80"));
+        assert!(result.install_hint.contains("ultralytics>=8.4.80"));
+    }
+
+    #[test]
+    fn litert_python_floor_result_blocks_without_install_package() {
+        let result = python_version_too_old_result("3.9.6");
+
+        assert_eq!(result.item, "Python 3.10+");
+        assert_eq!(result.status, "version_too_old");
+        assert_eq!(result.install_package, None);
+        assert!(result.reason.contains("3.9.6"));
+        assert!(result.reason.contains("Python 3.10 or newer"));
+        assert!(result.install_hint.contains("re-detect the environment"));
+    }
+
+    #[test]
+    fn failed_ultralytics_probe_remains_unknown_and_uninstallable() {
+        let result = check_ultralytics_dep("/path/that/does/not/exist", "8.4.80");
+
+        assert_eq!(result.status, "unknown");
+        assert_eq!(result.install_package, None);
     }
 }

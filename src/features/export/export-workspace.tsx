@@ -142,14 +142,14 @@ export function getRouteOptionsForOpen(
   };
 }
 
-function getInstallableMissingPackages(results: DepCheckResult[] | null): string[] {
+export function getInstallableMissingPackages(results: DepCheckResult[] | null): string[] {
   if (!results) {
     return [];
   }
 
   const pipMissing = results
-    .filter((r) => r.status === "missing_package")
-    .map((r) => r.install_package ?? r.item);
+    .map((result) => result.install_package)
+    .filter((packageName): packageName is string => Boolean(packageName));
   const binaryViaPip = results
     .filter(
       (r) =>
