@@ -216,7 +216,8 @@ describe("unchecked dependencies after preflight short-circuit", () => {
     item: "Python 3.10+",
     status: "version_too_old",
     reason: "Python 3.9.6 is selected; LiteRT requires Python 3.10 or newer.",
-    install_hint: "Install/select Python 3.10 or newer, then re-detect the environment.",
+    install_hint:
+      "Install/select Python 3.10 or newer, then re-detect the environment and recreate the export runtime.",
   };
 
   const platformUnsupported: DepCheckResult = {
@@ -257,8 +258,58 @@ describe("unchecked dependencies after preflight short-circuit", () => {
 
     expect(html).toContain("platform");
     expect(html).toContain("LiteRT export is not supported on this operating system.");
+    expect(html).not.toContain("Unknown");
     expect(html).not.toContain("ultralytics");
     expect(html).not.toContain("onnx");
+  });
+
+  test("depGroup classifies platform_unsupported as manual remediation", () => {
+    expect(
+      depGroup(
+        { name: "platform", installHint: platformUnsupported.install_hint, optional: false },
+        platformUnsupported,
+      ),
+    ).toBe(2);
+  });
+
+  test("python blocker renders the complete remediation hint", () => {
+    const route = routesForProvider("ultralytics").find((item) => item.id === "ultralytics.pt.litert");
+    expect(route).toBeDefined();
+
+    const html = renderToStaticMarkup(
+      React.createElement(DependencyPanel, {
+        provider: providers.ultralytics,
+        route: route!,
+        depResults: [pythonBlocker],
+      }),
+    );
+
+    expect(html).toContain(
+      "Install/select Python 3.10 or newer, then re-detect the environment and recreate the export runtime.",
+    );
+  });
+
+  test("missing_package row exposes the full hint via title attribute", () => {
+    const route = routesForProvider("ultralytics").find((item) => item.id === "ultralytics.pt.onnx");
+    expect(route).toBeDefined();
+
+    const missingOnnx: DepCheckResult = {
+      item: "onnx",
+      status: "missing_package",
+      reason: "importlib.util.find_spec('onnx') returned False",
+      install_hint: "pip install onnx",
+      install_package: "onnx",
+    };
+
+    const html = renderToStaticMarkup(
+      React.createElement(DependencyPanel, {
+        provider: providers.ultralytics,
+        route: route!,
+        depResults: [missingOnnx],
+      }),
+    );
+
+    expect(html).toContain('title="pip install onnx"');
   });
 
   test("undefined depResults keeps all declared rows (loading)", () => {
