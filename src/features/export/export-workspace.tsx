@@ -251,7 +251,17 @@ function isRfDetrExportReady(
 
 type EnvCardStatus = "ok" | "error" | "loading";
 
-function EnvCard({
+const ENV_CARD_PLACEHOLDERS = new Set(["Not found", "Error", "..."]);
+const ENV_CARD_MAX_VERSION_LENGTH = 32;
+
+function displayVersion(version: string): string {
+  if (ENV_CARD_PLACEHOLDERS.has(version)) return version;
+  if (version.length === 0 || version.length > ENV_CARD_MAX_VERSION_LENGTH) return "Unknown";
+  if (/\s/.test(version)) return "Unknown";
+  return version;
+}
+
+export function EnvCard({
   title,
   status,
   version,
@@ -266,6 +276,7 @@ function EnvCard({
   hint?: React.ReactNode;
   children?: React.ReactNode;
 }) {
+  const displayedVersion = displayVersion(version);
   const borderColor =
     status === "ok"
       ? "border-l-emerald-500"
@@ -289,9 +300,10 @@ function EnvCard({
           {hint}
         </span>
         <span
-          className={`rounded-md px-2 py-0.5 font-mono text-[11px] font-medium ${badgeBg} ${status === "loading" ? "animate-pulse" : ""}`}
+          className={`max-w-[12rem] truncate whitespace-nowrap rounded-md px-2 py-0.5 font-mono text-[11px] font-medium ${badgeBg} ${status === "loading" ? "animate-pulse" : ""}`}
+          title={displayedVersion}
         >
-          {version}
+          {displayedVersion}
         </span>
       </div>
       {path && (
