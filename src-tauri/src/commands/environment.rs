@@ -1,3 +1,4 @@
+use crate::commands::deps;
 use crate::commands::setup::{load_settings, venv_python, venv_yolo};
 use std::path::Path;
 use std::process::Command;
@@ -234,12 +235,11 @@ pub async fn detect_environment(
 
     // Step 3: ultralytics_version — non-zero exit or empty stdout is a warning, not an error.
     let ultralytics_version = {
-        match run(&[
-            &resolved,
-            "-c",
-            "import ultralytics; print(ultralytics.__version__)",
-        ]) {
-            Ok((stdout, _, true)) if !stdout.is_empty() => stdout,
+        let version_code = deps::version_probe_code("ultralytics");
+        match run(&[&resolved, "-c", &version_code]) {
+            Ok((stdout, _, true)) if !stdout.is_empty() => {
+                deps::last_version_line(&stdout).to_string()
+            }
             Ok((_, stderr, _)) => {
                 let hint = first_line(&stderr)
                     .map(|line| format!(" ({})", line))

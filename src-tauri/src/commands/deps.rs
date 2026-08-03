@@ -431,12 +431,35 @@ fn probe_python_version(python: &str) -> Result<String, String> {
     probe(python, "import platform; print(platform.python_version())")
 }
 
+/// Python snippet that prints a distribution version without importing the
+/// package. Falls back to the module's `__version__` when metadata is absent.
+/// Assumes the distribution name matches the importable name, which holds for
+/// the only caller (`ultralytics`).
+pub(crate) fn version_probe_code(importable: &str) -> String {
+    format!(
+        "import importlib.metadata as _m\n\
+         try:\n\
+         \x20   _v = _m.version(\"{name}\")\n\
+         except Exception:\n\
+         \x20   import {name} as _p\n\
+         \x20   _v = _p.__version__\n\
+         print(_v)",
+        name = importable
+    )
+}
+
+/// Last non-empty line of probe output, trimmed. Probe stdout can carry
+/// warning banners ahead of the value (Ultralytics logs to stdout).
+pub(crate) fn last_version_line(raw: &str) -> &str {
+    raw.lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .unwrap_or("")
+}
+
 /// Return the installed version of an importable module (e.g. "8.4.79").
 fn probe_installed_version(python: &str, importable: &str) -> Result<String, String> {
-    probe(
-        python,
-        &format!("import {}; print({}.__version__)", importable, importable),
-    )
+    probe(python, &version_probe_code(importable)).map(|out| last_version_line(&out).to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -1062,5 +1085,54 @@ mod tests {
 
         assert_eq!(result.status, "unknown");
         assert_eq!(result.install_package, None);
+    }
+
+    #[test]
+    fn last_version_line_keeps_clean_single_line() {
+        assert_eq!(last_version_line("8.4.115"), "8.4.115");
+    }
+
+    #[test]
+    fn last_version_line_drops_warning_prefix() {
+        let raw = "WARNING ⚠️ Ultralytics settings reset to default values.\n8.4.115";
+        assert_eq!(last_version_line(raw), "8.4.115");
+    }
+
+    #[test]
+    fn last_version_line_skips_multiple_leading_warning_lines() {
+        let raw = "WARNING line one\nWARNING line two\n8.4.115";
+        assert_eq!(last_version_line(raw), "8.4.115");
+    }
+
+    #[test]
+    fn last_version_line_trims_trailing_whitespace() {
+        assert_eq!(last_version_line("8.4.115\n  \n"), "8.4.115");
+    }
+
+    #[test]
+    fn last_version_line_returns_empty_for_empty_input() {
+        assert_eq!(last_version_line(""), "");
+        assert_eq!(last_version_line("\n \n"), "");
+    }
+
+    const NOISY: &str =
+        "WARNING ⚠️ Ultralytics settings reset to default values. This may be due to a
+possible problem with your settings or a recent ultralytics package update.\n8.4.115";
+
+    #[test]
+    fn noisy_version_is_below_floor_before_sanitizing() {
+        assert!(version_below(NOISY, "8.4.80"));
+    }
+
+    #[test]
+    fn sanitized_version_is_not_below_floor() {
+        assert!(!version_below(last_version_line(NOISY), "8.4.80"));
+    }
+
+    #[test]
+    fn version_probe_code_uses_distribution_metadata() {
+        let code = version_probe_code("ultralytics");
+        assert!(code.contains("importlib.metadata"));
+        assert!(!code.starts_with("import ultralytics"));
     }
 }
