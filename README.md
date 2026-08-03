@@ -240,6 +240,8 @@ Vision Export Studio now defaults to managed runtime in:
 
 Vision Export Studio creates this environment automatically and installs `ultralytics` there for the base runtime. Roboflow RF-DETR dependencies (`rfdetr`) install on demand the first time you pick an RF-DETR route.
 
+Ultralytics exports require Ultralytics 8.4.80 or newer; LiteRT requires 8.4.83 or newer and Python 3.10+. The app reports incompatible runtime versions before export and offers an in-app Ultralytics update when possible.
+
 Current bootstrap limitation:
 
 - first-time runtime creation still depends on Python 3 installed on the host machine

@@ -19,8 +19,8 @@ function findDepResult(depResults: DepCheckResult[] | undefined, name: string): 
   return depResults?.find((result) => result.item === name);
 }
 
-// 0 = installed/ready, 1 = required missing package/unknown/auto-installable binary,
-// 2 = required manual-only missing binary, 3 = optional
+// 0 = installed/ready, 1 = required auto-installable (missing package/unknown/
+// updateable version), 2 = required manual-only remediation, 3 = optional
 export function depGroup(dep: DepItem, result: DepCheckResult | undefined): number {
   if (dep.optional) return 3;
   if (!result) return 0;
@@ -31,6 +31,8 @@ export function depGroup(dep: DepItem, result: DepCheckResult | undefined): numb
     case "missing_package":
     case "unknown":
       return 1;
+    case "version_too_old":
+      return result.install_package ? 1 : 2;
     case "missing_binary":
       return dep.installHint.startsWith("pip install ") ? 1 : 2;
     default:
@@ -38,7 +40,7 @@ export function depGroup(dep: DepItem, result: DepCheckResult | undefined): numb
   }
 }
 
-function depIcon(result: DepCheckResult | undefined, installHint: string) {
+export function depIcon(result: DepCheckResult | undefined, installHint: string) {
   if (!result) return <PackageCheck className="size-4 text-teal-700" aria-hidden="true" />;
   switch (result.status) {
     case "ready":
@@ -47,6 +49,12 @@ function depIcon(result: DepCheckResult | undefined, installHint: string) {
       return <AlertTriangle className="size-4 shrink-0 text-amber-500" aria-label="Optional" />;
     case "missing_package":
       return <CloudDownload className="size-4 shrink-0 text-blue-500" aria-label="Will be installed" />;
+    case "version_too_old":
+      return result.install_package ? (
+        <CloudDownload className="size-4 shrink-0 text-blue-500" aria-label="Will be installed" />
+      ) : (
+        <XCircle className="size-4 shrink-0 text-red-600" aria-label="Manual install required" />
+      );
     case "missing_binary":
       return installHint.startsWith("pip install ") ? (
         <CloudDownload className="size-4 shrink-0 text-blue-500" aria-label="Will be installed" />
@@ -58,8 +66,12 @@ function depIcon(result: DepCheckResult | undefined, installHint: string) {
   }
 }
 
-export function buildDependencyItems(provider: ProviderSpec, route: RouteSpec): DepItem[] {
-  return [
+export function buildDependencyItems(
+  provider: ProviderSpec,
+  route: RouteSpec,
+  depResults?: DepCheckResult[],
+): DepItem[] {
+  const declaredItems: DepItem[] = [
     ...provider.baseDeps.map((dep) => ({
       name: dep.packageName,
       installHint: dep.installHint,
@@ -76,6 +88,20 @@ export function buildDependencyItems(provider: ProviderSpec, route: RouteSpec): 
       optional: dep.optional ?? false,
     })),
   ];
+
+  const extraRows = (depResults ?? []).flatMap((result) => {
+    if (result.status !== "version_too_old") return [];
+    if (declaredItems.some((item) => item.name === result.item)) return [];
+    return [
+      {
+        name: result.item,
+        installHint: result.install_hint,
+        optional: false,
+      },
+    ];
+  });
+
+  return [...declaredItems, ...extraRows];
 }
 
 export function sortDependencyItems(depItems: DepItem[], depResults?: DepCheckResult[]): DepItem[] {
@@ -93,7 +119,7 @@ export function DependencyPanel({
   depCheckLoading,
   depCheckError,
 }: DependencyPanelProps) {
-  const sorted = sortDependencyItems(buildDependencyItems(provider, route), depResults);
+  const sorted = sortDependencyItems(buildDependencyItems(provider, route, depResults), depResults);
 
   return (
     <div className="space-y-2">
@@ -110,39 +136,48 @@ export function DependencyPanel({
       )}
       {sorted.map((dep) => {
         const result = findDepResult(depResults, dep.name);
-        const isManualBinary = depGroup(dep, result) === 1;
+        const isVersionTooOld = result?.status === "version_too_old";
+        const displayHint = isVersionTooOld ? result.install_hint : dep.installHint;
+        const reason = isVersionTooOld ? result.reason.trim() : undefined;
+        const isManualRemediation = depGroup(dep, result) === 2;
 
-        return isManualBinary ? (
+        return isManualRemediation ? (
           <div
             key={dep.name}
             className="flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
           >
-            <span className="flex items-center gap-2 font-medium">
-              {depCheckLoading ? (
-                <Loader2 className="size-4 shrink-0 animate-spin text-amber-300" aria-hidden="true" />
-              ) : result ? (
-                depIcon(result, dep.installHint)
-              ) : (
-                <TerminalSquare className="size-4" aria-hidden="true" />
-              )}
-              {dep.name}
+            <span className="flex min-w-0 flex-col">
+              <span className="flex items-center gap-2 font-medium">
+                {depCheckLoading ? (
+                  <Loader2 className="size-4 shrink-0 animate-spin text-amber-300" aria-hidden="true" />
+                ) : result ? (
+                  depIcon(result, displayHint)
+                ) : (
+                  <TerminalSquare className="size-4" aria-hidden="true" />
+                )}
+                {dep.name}
+              </span>
+              {reason && <span className="ml-6 text-xs text-amber-700">{reason}</span>}
             </span>
-            <span className="min-w-0 truncate">{dep.installHint}</span>
+            <span className="min-w-0 truncate">{displayHint}</span>
           </div>
         ) : (
           <div
             key={dep.name}
             className="flex items-center justify-between gap-3 rounded-md border border-zinc-900/10 bg-zinc-50 px-3 py-2 text-sm"
           >
-            <span className="flex items-center gap-2 font-medium text-zinc-900">
-              {depCheckLoading ? (
-                <Loader2 className="size-4 shrink-0 animate-spin text-zinc-300" aria-hidden="true" />
-              ) : (
-                depIcon(result, dep.installHint)
-              )}
-              {dep.name}
+            <span className="flex min-w-0 flex-col">
+              <span className="flex items-center gap-2 font-medium text-zinc-900">
+                {depCheckLoading ? (
+                  <Loader2 className="size-4 shrink-0 animate-spin text-zinc-300" aria-hidden="true" />
+                ) : (
+                  depIcon(result, displayHint)
+                )}
+                {dep.name}
+              </span>
+              {reason && <span className="ml-6 text-xs text-zinc-500">{reason}</span>}
             </span>
-            <span className="min-w-0 truncate text-zinc-500">{dep.installHint}</span>
+            <span className="min-w-0 truncate text-zinc-500">{displayHint}</span>
           </div>
         );
       })}

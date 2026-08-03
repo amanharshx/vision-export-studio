@@ -162,6 +162,9 @@ export interface ExportCancelledPayload {
  *   "platform_unsupported" — route is locked to a different OS or architecture
  *   "warning"         — optional dep absent; export will still work
  *   "unknown"         — probe could not run (python crashed / spawn failed)
+ *   "version_too_old" — installed package or interpreter is below the route floor.
+ *                       `install_package` present when the app can auto-update
+ *                       the package; absent for manual interpreter remediation.
  */
 export type DepCheckStatus =
   | "ready"
@@ -169,7 +172,8 @@ export type DepCheckStatus =
   | "missing_binary"
   | "platform_unsupported"
   | "warning"
-  | "unknown";
+  | "unknown"
+  | "version_too_old";
 
 export interface DepCheckResult {
   item: string;
