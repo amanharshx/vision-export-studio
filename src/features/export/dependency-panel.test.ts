@@ -210,3 +210,98 @@ describe("DependencyPanel", () => {
     expect(html).not.toContain("improves model portability");
   });
 });
+
+describe("unchecked dependencies after preflight short-circuit", () => {
+  const pythonBlocker: DepCheckResult = {
+    item: "Python 3.10+",
+    status: "version_too_old",
+    reason: "Python 3.9.6 is selected; LiteRT requires Python 3.10 or newer.",
+    install_hint: "Install/select Python 3.10 or newer, then re-detect the environment.",
+  };
+
+  const platformUnsupported: DepCheckResult = {
+    item: "platform",
+    status: "platform_unsupported",
+    reason: "LiteRT export is not supported on this operating system.",
+    install_hint: "LiteRT export is not supported on this operating system.",
+  };
+
+  test("single version_too_old python result hides unchecked declared rows", () => {
+    const route = routesForProvider("ultralytics").find((item) => item.id === "ultralytics.pt.litert");
+    expect(route).toBeDefined();
+
+    const html = renderToStaticMarkup(
+      React.createElement(DependencyPanel, {
+        provider: providers.ultralytics,
+        route: route!,
+        depResults: [pythonBlocker],
+      }),
+    );
+
+    expect(html).toContain("Python 3.10+");
+    expect(html).toContain("Python 3.9.6 is selected; LiteRT requires Python 3.10 or newer.");
+    expect(html).not.toContain("ultralytics");
+  });
+
+  test("single platform_unsupported result renders only that row", () => {
+    const route = routesForProvider("ultralytics").find((item) => item.id === "ultralytics.pt.onnx");
+    expect(route).toBeDefined();
+
+    const html = renderToStaticMarkup(
+      React.createElement(DependencyPanel, {
+        provider: providers.ultralytics,
+        route: route!,
+        depResults: [platformUnsupported],
+      }),
+    );
+
+    expect(html).toContain("platform");
+    expect(html).toContain("LiteRT export is not supported on this operating system.");
+    expect(html).not.toContain("ultralytics");
+    expect(html).not.toContain("onnx");
+  });
+
+  test("undefined depResults keeps all declared rows (loading)", () => {
+    const route = routesForProvider("ultralytics").find((item) => item.id === "ultralytics.pt.onnx");
+    expect(route).toBeDefined();
+
+    const html = renderToStaticMarkup(
+      React.createElement(DependencyPanel, {
+        provider: providers.ultralytics,
+        route: route!,
+      }),
+    );
+
+    expect(html).toContain("ultralytics");
+    expect(html).toContain("onnx");
+    expect(html).toContain("onnxslim");
+  });
+
+  test("depResults covering every declared dep renders all rows", () => {
+    const route = routesForProvider("ultralytics").find((item) => item.id === "ultralytics.pt.onnx");
+    expect(route).toBeDefined();
+
+    const fullResults: DepCheckResult[] = [
+      { item: "ultralytics", status: "ready", reason: "", install_hint: "pip install ultralytics" },
+      { item: "onnx", status: "ready", reason: "", install_hint: "pip install onnx" },
+      {
+        item: "onnxslim",
+        status: "warning",
+        reason: "optional: improves model portability",
+        install_hint: "pip install onnxslim",
+      },
+    ];
+
+    const html = renderToStaticMarkup(
+      React.createElement(DependencyPanel, {
+        provider: providers.ultralytics,
+        route: route!,
+        depResults: fullResults,
+      }),
+    );
+
+    expect(html).toContain("ultralytics");
+    expect(html).toContain("onnx");
+    expect(html).toContain("onnxslim");
+  });
+});

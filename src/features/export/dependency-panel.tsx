@@ -89,8 +89,15 @@ export function buildDependencyItems(
     })),
   ];
 
-  const extraRows = (depResults ?? []).flatMap((result) => {
-    if (result.status !== "version_too_old") return [];
+  const results = depResults ?? [];
+
+  const resolvedDeclared =
+    results.length > 0
+      ? declaredItems.filter((item) => findDepResult(results, item.name))
+      : declaredItems;
+
+  const extraRows = results.flatMap((result) => {
+    if (result.status !== "version_too_old" && result.status !== "platform_unsupported") return [];
     if (declaredItems.some((item) => item.name === result.item)) return [];
     return [
       {
@@ -101,7 +108,7 @@ export function buildDependencyItems(
     ];
   });
 
-  return [...declaredItems, ...extraRows];
+  return [...resolvedDeclared, ...extraRows];
 }
 
 export function sortDependencyItems(depItems: DepItem[], depResults?: DepCheckResult[]): DepItem[] {
