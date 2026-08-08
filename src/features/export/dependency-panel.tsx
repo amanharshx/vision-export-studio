@@ -35,6 +35,8 @@ export function depGroup(dep: DepItem, result: DepCheckResult | undefined): numb
       return result.install_package ? 1 : 2;
     case "missing_binary":
       return dep.installHint.startsWith("pip install ") ? 1 : 2;
+    case "platform_unsupported":
+      return 2;
     default:
       return 0;
   }
@@ -60,6 +62,10 @@ export function depIcon(result: DepCheckResult | undefined, installHint: string)
         <CloudDownload className="size-4 shrink-0 text-blue-500" aria-label="Will be installed" />
       ) : (
         <XCircle className="size-4 shrink-0 text-red-600" aria-label="Manual install required" />
+      );
+    case "platform_unsupported":
+      return (
+        <XCircle className="size-4 shrink-0 text-red-600" aria-label="Not supported on this platform" />
       );
     default:
       return <HelpCircle className="size-4 shrink-0 text-zinc-400" aria-label="Unknown" />;
@@ -89,8 +95,15 @@ export function buildDependencyItems(
     })),
   ];
 
-  const extraRows = (depResults ?? []).flatMap((result) => {
-    if (result.status !== "version_too_old") return [];
+  const results = depResults ?? [];
+
+  const resolvedDeclared =
+    results.length > 0
+      ? declaredItems.filter((item) => findDepResult(results, item.name))
+      : declaredItems;
+
+  const extraRows = results.flatMap((result) => {
+    if (result.status !== "version_too_old" && result.status !== "platform_unsupported") return [];
     if (declaredItems.some((item) => item.name === result.item)) return [];
     return [
       {
@@ -101,7 +114,7 @@ export function buildDependencyItems(
     ];
   });
 
-  return [...declaredItems, ...extraRows];
+  return [...resolvedDeclared, ...extraRows];
 }
 
 export function sortDependencyItems(depItems: DepItem[], depResults?: DepCheckResult[]): DepItem[] {
@@ -144,22 +157,20 @@ export function DependencyPanel({
         return isManualRemediation ? (
           <div
             key={dep.name}
-            className="flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+            className="flex flex-col gap-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
           >
-            <span className="flex min-w-0 flex-col">
-              <span className="flex items-center gap-2 font-medium">
-                {depCheckLoading ? (
-                  <Loader2 className="size-4 shrink-0 animate-spin text-amber-300" aria-hidden="true" />
-                ) : result ? (
-                  depIcon(result, displayHint)
-                ) : (
-                  <TerminalSquare className="size-4" aria-hidden="true" />
-                )}
-                {dep.name}
-              </span>
-              {reason && <span className="ml-6 text-xs text-amber-700">{reason}</span>}
+            <span className="flex items-center gap-2 font-medium">
+              {depCheckLoading ? (
+                <Loader2 className="size-4 shrink-0 animate-spin text-amber-300" aria-hidden="true" />
+              ) : result ? (
+                depIcon(result, displayHint)
+              ) : (
+                <TerminalSquare className="size-4" aria-hidden="true" />
+              )}
+              {dep.name}
             </span>
-            <span className="min-w-0 truncate">{displayHint}</span>
+            {reason && <span className="ml-6 text-xs text-amber-700">{reason}</span>}
+            <span className="ml-6 text-xs text-amber-700">{displayHint}</span>
           </div>
         ) : (
           <div
@@ -177,7 +188,7 @@ export function DependencyPanel({
               </span>
               {reason && <span className="ml-6 text-xs text-zinc-500">{reason}</span>}
             </span>
-            <span className="min-w-0 truncate text-zinc-500">{displayHint}</span>
+            <span className="min-w-0 truncate text-zinc-500" title={displayHint}>{displayHint}</span>
           </div>
         );
       })}

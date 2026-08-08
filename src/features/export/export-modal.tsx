@@ -82,6 +82,74 @@ export function getExportFooterActions({
   return { secondary: "cancel", primary: "export" };
 }
 
+export function involvesPackageUpdate(depResults: DepCheckResult[] | undefined): boolean {
+  return (depResults ?? []).some(
+    (result) => result.status === "version_too_old" && Boolean(result.install_package),
+  );
+}
+
+export function PendingInstallConsent({
+  depResults,
+  missingPackageNames,
+}: {
+  depResults?: DepCheckResult[];
+  missingPackageNames: string[];
+}) {
+  const involvesUpdate = involvesPackageUpdate(depResults);
+  return (
+    <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
+      <p className="mb-1 text-sm font-medium text-blue-800">
+        {involvesUpdate ? "Package updates" : "Missing packages"}
+      </p>
+      <p className="mb-2 text-xs text-blue-700">
+        {involvesUpdate
+          ? "These will be updated or installed into your Python environment before export:"
+          : "These will be installed into your Python environment before export:"}
+      </p>
+      <ul className="space-y-0.5">
+        {missingPackageNames.map((pkg) => (
+          <li key={pkg} className="font-mono text-xs text-blue-900">
+            • {pkg}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+export function PrimaryExportActionLabel({
+  isInstalling,
+  isPendingConsent,
+  involvesUpdate,
+}: {
+  isInstalling: boolean;
+  isPendingConsent: boolean;
+  involvesUpdate: boolean;
+}) {
+  if (isInstalling) {
+    return (
+      <>
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        Installing...
+      </>
+    );
+  }
+  if (isPendingConsent) {
+    return (
+      <>
+        <Download className="mr-2 h-4 w-4" />
+        {involvesUpdate ? "Update & Export" : "Install & Export"}
+      </>
+    );
+  }
+  return (
+    <>
+      <Play className="mr-2 h-4 w-4" />
+      Start Export
+    </>
+  );
+}
+
 export function ExportModal({
   open,
   onOpenChange,
@@ -117,6 +185,7 @@ export function ExportModal({
     : null;
   const isPendingConsent = installPhase === "pending_consent";
   const isInstalling = installPhase === "installing";
+  const involvesUpdate = involvesPackageUpdate(depResults);
   const isStarting = exportStatus === "starting";
   const isRunning = exportStatus === "running";
   const exportDisabled = isRunning || isStarting || !sourcePath || isInstalling;
@@ -263,21 +332,7 @@ export function ExportModal({
             </div>
 
             {isPendingConsent && missingPackageNames.length > 0 && (
-              <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
-                <p className="mb-1 text-sm font-medium text-blue-800">
-                  Missing packages
-                </p>
-                <p className="mb-2 text-xs text-blue-700">
-                  These will be installed into your Python environment before export:
-                </p>
-                <ul className="space-y-0.5">
-                  {missingPackageNames.map((pkg) => (
-                    <li key={pkg} className="font-mono text-xs text-blue-900">
-                      • {pkg}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+              <PendingInstallConsent depResults={depResults} missingPackageNames={missingPackageNames} />
             )}
 
             {errorMsg && (
@@ -335,22 +390,11 @@ export function ExportModal({
               onClick={isPendingConsent ? onInstallAndExport : onExport}
               className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
-              {isInstalling ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Installing...
-                </>
-              ) : isPendingConsent ? (
-                <>
-                  <Download className="mr-2 h-4 w-4" />
-                  Install &amp; Export
-                </>
-              ) : (
-                <>
-                  <Play className="mr-2 h-4 w-4" />
-                  Start Export
-                </>
-              )}
+              <PrimaryExportActionLabel
+                isInstalling={isInstalling}
+                isPendingConsent={isPendingConsent}
+                involvesUpdate={involvesUpdate}
+              />
             </Button>
           )}
         </div>
