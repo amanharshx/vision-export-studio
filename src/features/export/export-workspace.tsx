@@ -1292,7 +1292,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                         <CircleHelp className="h-3 w-3 text-zinc-300 transition-colors hover:text-zinc-500" />
                       </TooltipTrigger>
                       <TooltipContent side="top" className="whitespace-nowrap">
-                        Recommended: Python 3.8 &ndash; 3.12
+                        Recommended: Python 3.12 (3.10&ndash;3.13 supported)
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>

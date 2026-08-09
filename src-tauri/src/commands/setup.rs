@@ -1,4 +1,4 @@
-use crate::commands::environment::resolve_python;
+use crate::commands::environment::{discover_managed_runtime_python, resolve_python};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -410,7 +410,10 @@ pub async fn create_runtime_venv(
     let venv_path = Path::new(&managed_runtime_dir).join(".venv");
 
     // Build argv: {python} -m venv {runtime_dir}/.venv
-    let python = resolve_python(None)?;
+    let python = match discover_managed_runtime_python() {
+        Some(python) => python,
+        None => resolve_python(None)?,
+    };
     let cmd = build_venv_command(&python, &venv_path);
 
     let sessions = Arc::clone(&state.sessions);
