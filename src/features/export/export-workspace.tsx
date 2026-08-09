@@ -168,22 +168,16 @@ export function mayActivateRoute(exportStatus: ExportStatus, installPhase: Insta
 export function getInstallStartFailureOutcome(error: string): {
   refused: boolean;
   message: string;
-  preserveExportState: boolean;
-  captureExportFailure: boolean;
 } {
   if (error.includes("another runtime operation is in progress")) {
     return {
       refused: true,
-      message: "Export is still running. Wait for it to finish before installing dependencies.",
-      preserveExportState: true,
-      captureExportFailure: false,
+      message: "Another runtime operation is in progress. Wait for it to finish before installing dependencies.",
     };
   }
   return {
     refused: false,
     message: "[error] Failed to start install: " + error,
-    preserveExportState: false,
-    captureExportFailure: true,
   };
 }
 
@@ -869,7 +863,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   // Install missing deps then auto-start export
   const handleInstallAndExport = async () => {
     if (!mayActivateRoute(exportStatus, installPhase)) {
-      setInvokeError("Export is still running. Wait for it to finish before installing dependencies.");
+      setInvokeError("Another runtime operation is in progress. Wait for it to finish before installing dependencies.");
       return;
     }
     const pythonPath = envInfo?.python_path;

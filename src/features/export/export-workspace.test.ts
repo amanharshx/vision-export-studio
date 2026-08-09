@@ -105,21 +105,24 @@ describe("runtime operation UI guards", () => {
     expect(mayActivateRoute("idle", "idle")).toBe(true);
   });
 
-  test("refused install start preserves export state and reports actionable error", () => {
-    expect(getInstallStartFailureOutcome("another runtime operation is in progress: export")).toEqual({
-      refused: true,
-      message: "Export is still running. Wait for it to finish before installing dependencies.",
-      preserveExportState: true,
-      captureExportFailure: false,
-    });
+  test("every backend runtime refusal uses generic actionable copy", () => {
+    for (const error of [
+      "another runtime operation is in progress: export",
+      "another runtime operation is in progress: dependency install",
+      "another runtime operation is in progress: setup",
+      "another runtime operation is in progress: managed runtime rebuild",
+    ]) {
+      expect(getInstallStartFailureOutcome(error)).toEqual({
+        refused: true,
+        message: "Another runtime operation is in progress. Wait for it to finish before installing dependencies.",
+      });
+    }
   });
 
-  test("genuine install start failure keeps failure state and analytics", () => {
+  test("genuine install start failure is not a refusal", () => {
     expect(getInstallStartFailureOutcome("spawn failed")).toEqual({
       refused: false,
       message: "[error] Failed to start install: spawn failed",
-      preserveExportState: false,
-      captureExportFailure: true,
     });
   });
 });
