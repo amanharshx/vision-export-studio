@@ -710,6 +710,64 @@ mod tests {
     }
 
     #[test]
+    fn windows_discovery_uses_location_python_when_launcher_is_missing_and_path_is_older() {
+        let root = std::env::temp_dir().join(format!(
+            "ves-windows-python-no-launcher-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let local_app_data = root.join("LocalAppData");
+        let location = local_app_data.join("Programs/Python/Python312/python.exe");
+        fs::create_dir_all(location.parent().unwrap()).unwrap();
+        File::create(&location).unwrap();
+        let location = location.to_str().unwrap().to_string();
+        let calls = RefCell::new(Vec::<Vec<String>>::new());
+
+        let resolved = discover_managed_runtime_python_candidate_with(
+            true,
+            windows_location_candidates(
+                &local_app_data,
+                &root.join("ProgramFiles"),
+                &root.join("C"),
+            ),
+            |argv| {
+                calls
+                    .borrow_mut()
+                    .push(argv.iter().map(|arg| arg.to_string()).collect());
+                if argv == ["py", "-0p"] {
+                    return Err("py is not recognized".to_string());
+                }
+                let (executable, version) = if argv[0] == location {
+                    (location.as_str(), "3.12.10")
+                } else if argv[0] == "python" {
+                    (
+                        "C:\\Users\\HP\\AppData\\Local\\Programs\\Python\\Python310\\python.exe",
+                        "3.10.11",
+                    )
+                } else {
+                    return Err("candidate unavailable".to_string());
+                };
+                Ok((
+                    format!(
+                        "__VES_PYTHON__={}\n__VES_PYTHON_VERSION__={}",
+                        executable, version
+                    ),
+                    String::new(),
+                    true,
+                ))
+            },
+        )
+        .unwrap();
+
+        assert_eq!(resolved.executable, location);
+        let calls = calls.borrow();
+        assert_eq!(calls[0], ["py", "-0p"]);
+        assert_eq!(calls[1][0], location);
+        assert_eq!(calls[2][0], "python");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn windows_python_candidates_use_expected_priority() {
         let candidates = python_candidates(true)
             .iter()
