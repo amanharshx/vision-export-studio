@@ -269,6 +269,25 @@ pub(crate) fn discover_managed_runtime_python() -> Option<String> {
     discover_managed_runtime_python_with(cfg!(windows), run)
 }
 
+/// Resolve an acceptable base for a managed runtime. Explicit paths are probed
+/// and then held to the managed-runtime support policy.
+pub(crate) fn resolve_managed_runtime_base(python_path: Option<&str>) -> Result<String, String> {
+    if let Some(path) = python_path {
+        let candidate = probe_python_candidate(&[path], &run)
+            .map_err(|error| format!("provided Python failed validation: {}", error))?;
+        return select_managed_runtime_python(vec![candidate])
+            .map(|candidate| candidate.executable)
+            .ok_or_else(|| {
+                "provided Python is not supported for managed runtime setup; choose Python 3.10 through 3.13".to_string()
+            });
+    }
+
+    discover_managed_runtime_python().ok_or_else(|| {
+        "no compatible Python 3.10 through 3.13 interpreter found for managed runtime setup"
+            .to_string()
+    })
+}
+
 fn resolve_python_with<F>(
     python_path: Option<&str>,
     is_windows: bool,

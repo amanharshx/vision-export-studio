@@ -1,7 +1,8 @@
 mod commands;
 
 use crate::commands::export::ExportState;
-use crate::commands::setup::{SettingsState, SetupState};
+use crate::commands::setup::{sweep_runtime_rebuild_artifacts, SettingsState, SetupState};
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -12,6 +13,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            if let Ok(home_dir) = app.path().home_dir() {
+                sweep_runtime_rebuild_artifacts(&home_dir.join(".vision-export-studio"));
+            }
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
@@ -37,6 +41,7 @@ pub fn run() {
             commands::rfdetr::inspect_rfdetr_checkpoint,
             commands::setup::load_settings,
             commands::setup::create_runtime_venv,
+            commands::setup::rebuild_managed_runtime,
             commands::setup::mark_setup_complete,
             commands::setup::save_python_override,
             commands::setup::save_output_dir_override,
