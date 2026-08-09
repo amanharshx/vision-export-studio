@@ -10,7 +10,9 @@ use uuid::Uuid;
 use crate::commands::provider_registry::{
     validate_current_route_platform, validate_route_platform,
 };
-use crate::commands::runtime_operations::{RuntimeOperation, RuntimeOperationCoordinator};
+use crate::commands::runtime_operations::{
+    emit_after_operation_released, RuntimeOperation, RuntimeOperationCoordinator,
+};
 
 // ---------------------------------------------------------------------------
 // Runtime version floors
@@ -743,7 +745,7 @@ pub async fn install_dependencies(
     for pkg in &packages {
         validate_package_name(pkg)?;
     }
-    let operation_guard = runtime_operations.acquire_shared(RuntimeOperation::Install)?;
+    let operation_guard = runtime_operations.acquire(RuntimeOperation::Install)?;
 
     // Build argv: python -m pip install pkg1 pkg2 ...
     let mut cmd = Command::new(&python_path);
@@ -817,38 +819,44 @@ pub async fn install_dependencies(
     let ah_wait = app_handle.clone();
     let sid_wait = session_id.clone();
     std::thread::spawn(move || {
-        let _operation_guard = operation_guard;
+        let operation_guard = operation_guard;
         let _ = stdout_handle.join();
         let _ = stderr_handle.join();
 
         match child.wait() {
             Ok(status) => {
                 if status.success() {
-                    let _ = ah_wait.emit(
-                        "install:finished",
-                        InstallFinishedPayload {
-                            session_id: sid_wait,
-                        },
-                    );
+                    emit_after_operation_released(operation_guard, || {
+                        let _ = ah_wait.emit(
+                            "install:finished",
+                            InstallFinishedPayload {
+                                session_id: sid_wait,
+                            },
+                        );
+                    });
                 } else {
                     let code = status.code().unwrap_or(-1);
+                    emit_after_operation_released(operation_guard, || {
+                        let _ = ah_wait.emit(
+                            "install:failed",
+                            InstallFailedPayload {
+                                session_id: sid_wait,
+                                error: format!("pip exited with code {}", code),
+                            },
+                        );
+                    });
+                }
+            }
+            Err(e) => {
+                emit_after_operation_released(operation_guard, || {
                     let _ = ah_wait.emit(
                         "install:failed",
                         InstallFailedPayload {
                             session_id: sid_wait,
-                            error: format!("pip exited with code {}", code),
+                            error: format!("wait error: {}", e),
                         },
                     );
-                }
-            }
-            Err(e) => {
-                let _ = ah_wait.emit(
-                    "install:failed",
-                    InstallFailedPayload {
-                        session_id: sid_wait,
-                        error: format!("wait error: {}", e),
-                    },
-                );
+                });
             }
         }
     });

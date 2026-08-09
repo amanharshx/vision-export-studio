@@ -5,6 +5,7 @@ pub enum RuntimeOperation {
     Export,
     Install,
     Setup,
+    Rebuild,
 }
 
 impl RuntimeOperation {
@@ -13,14 +14,14 @@ impl RuntimeOperation {
             Self::Export => "export",
             Self::Install => "dependency install",
             Self::Setup => "setup",
+            Self::Rebuild => "managed runtime rebuild",
         }
     }
 }
 
 #[derive(Default)]
 struct CoordinatorState {
-    shared: Vec<RuntimeOperation>,
-    rebuild_active: bool,
+    active: Option<RuntimeOperation>,
 }
 
 #[derive(Default, Clone)]
@@ -30,50 +31,25 @@ pub struct RuntimeOperationCoordinator {
 
 pub struct RuntimeOperationGuard {
     state: Arc<Mutex<CoordinatorState>>,
-    operation: Option<RuntimeOperation>,
+    operation: RuntimeOperation,
 }
 
 impl RuntimeOperationCoordinator {
-    pub fn acquire_shared(
-        &self,
-        operation: RuntimeOperation,
-    ) -> Result<RuntimeOperationGuard, String> {
+    pub fn acquire(&self, operation: RuntimeOperation) -> Result<RuntimeOperationGuard, String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "runtime operation coordinator lock poisoned".to_string())?;
-        if state.rebuild_active {
-            return Err(
-                "another runtime operation is in progress: managed runtime rebuild".to_string(),
-            );
-        }
-        state.shared.push(operation);
-        Ok(RuntimeOperationGuard {
-            state: Arc::clone(&self.state),
-            operation: Some(operation),
-        })
-    }
-
-    pub fn acquire_rebuild(&self) -> Result<RuntimeOperationGuard, String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "runtime operation coordinator lock poisoned".to_string())?;
-        if let Some(operation) = state.shared.first() {
+        if let Some(active) = state.active {
             return Err(format!(
-                "cannot rebuild managed runtime while {} is active",
-                operation.name()
+                "another runtime operation is in progress: {}",
+                active.name()
             ));
         }
-        if state.rebuild_active {
-            return Err(
-                "another runtime operation is in progress: managed runtime rebuild".to_string(),
-            );
-        }
-        state.rebuild_active = true;
+        state.active = Some(operation);
         Ok(RuntimeOperationGuard {
             state: Arc::clone(&self.state),
-            operation: None,
+            operation,
         })
     }
 }
@@ -83,15 +59,18 @@ impl Drop for RuntimeOperationGuard {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
-        match self.operation.take() {
-            Some(operation) => {
-                if let Some(index) = state.shared.iter().position(|item| *item == operation) {
-                    state.shared.remove(index);
-                }
-            }
-            None => state.rebuild_active = false,
+        if state.active == Some(self.operation) {
+            state.active = None;
         }
     }
+}
+
+pub(crate) fn emit_after_operation_released<T>(
+    operation_guard: RuntimeOperationGuard,
+    emit: impl FnOnce() -> T,
+) -> T {
+    drop(operation_guard);
+    emit()
 }
 
 #[cfg(test)]
@@ -99,64 +78,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rebuild_is_refused_while_shared_operation_is_active() {
+    fn active_operations_block_each_other_with_operation_name() {
         let coordinator = RuntimeOperationCoordinator::default();
-        let _export = coordinator
-            .acquire_shared(RuntimeOperation::Export)
-            .unwrap();
-
-        assert!(coordinator
-            .acquire_rebuild()
-            .err()
-            .unwrap()
-            .contains("export"));
-    }
-
-    #[test]
-    fn shared_operations_are_refused_while_rebuild_is_active() {
-        let coordinator = RuntimeOperationCoordinator::default();
-        let _rebuild = coordinator.acquire_rebuild().unwrap();
-
-        for operation in [
-            RuntimeOperation::Export,
-            RuntimeOperation::Install,
-            RuntimeOperation::Setup,
+        for (active, blocked, name) in [
+            (
+                RuntimeOperation::Export,
+                RuntimeOperation::Install,
+                "export",
+            ),
+            (
+                RuntimeOperation::Install,
+                RuntimeOperation::Rebuild,
+                "dependency install",
+            ),
+            (
+                RuntimeOperation::Rebuild,
+                RuntimeOperation::Export,
+                "managed runtime rebuild",
+            ),
+            (RuntimeOperation::Setup, RuntimeOperation::Rebuild, "setup"),
         ] {
-            assert!(coordinator.acquire_shared(operation).is_err());
+            let guard = coordinator.acquire(active).unwrap();
+            assert!(coordinator.acquire(blocked).err().unwrap().contains(name));
+            drop(guard);
         }
     }
 
     #[test]
-    fn shared_operations_can_run_together() {
+    fn dropping_guard_allows_next_operation() {
         let coordinator = RuntimeOperationCoordinator::default();
-        let _export = coordinator
-            .acquire_shared(RuntimeOperation::Export)
-            .unwrap();
-        let _install = coordinator
-            .acquire_shared(RuntimeOperation::Install)
-            .unwrap();
-    }
-
-    #[test]
-    fn dropping_shared_guard_allows_rebuild() {
-        let coordinator = RuntimeOperationCoordinator::default();
-        let operation = coordinator.acquire_shared(RuntimeOperation::Setup).unwrap();
+        let operation = coordinator.acquire(RuntimeOperation::Setup).unwrap();
         drop(operation);
 
-        assert!(coordinator.acquire_rebuild().is_ok());
+        assert!(coordinator.acquire(RuntimeOperation::Rebuild).is_ok());
     }
 
     #[test]
     fn dropping_guard_after_failure_path_unblocks_future_operations() {
         let coordinator = RuntimeOperationCoordinator::default();
         let result: Result<(), ()> = {
-            let _operation = coordinator
-                .acquire_shared(RuntimeOperation::Install)
-                .unwrap();
+            let _operation = coordinator.acquire(RuntimeOperation::Install).unwrap();
             Err(())
         };
         assert!(result.is_err());
 
-        assert!(coordinator.acquire_rebuild().is_ok());
+        assert!(coordinator.acquire(RuntimeOperation::Rebuild).is_ok());
+    }
+
+    #[test]
+    fn terminal_event_runs_after_guard_is_released() {
+        let coordinator = RuntimeOperationCoordinator::default();
+        let guard = coordinator.acquire(RuntimeOperation::Install).unwrap();
+
+        emit_after_operation_released(guard, || {
+            assert!(coordinator.acquire(RuntimeOperation::Export).is_ok());
+        });
     }
 }

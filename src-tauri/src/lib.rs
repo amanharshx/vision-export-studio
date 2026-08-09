@@ -5,6 +5,7 @@ use crate::commands::runtime_operations::RuntimeOperationCoordinator;
 use crate::commands::setup::{
     default_runtime_dir, sweep_runtime_rebuild_artifacts, SettingsState, SetupState,
 };
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -15,6 +16,11 @@ pub fn run() {
         .manage(RuntimeOperationCoordinator::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_focus();
+            }
+        }))
         .setup(|app| {
             if let Ok(runtime_dir) = default_runtime_dir(app.handle()) {
                 sweep_runtime_rebuild_artifacts(std::path::Path::new(&runtime_dir));

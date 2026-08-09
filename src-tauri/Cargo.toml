@@ -26,6 +26,7 @@ tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2.4.3"
 uuid = { version = "1", features = ["v4", "fast-rng"] }
 sha2 = "0.10"
 pep440_rs = "0.7.3"

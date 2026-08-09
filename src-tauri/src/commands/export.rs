@@ -10,7 +10,9 @@ use crate::commands::provider_registry::{
     validate_current_route_platform, validate_provider_route, validate_source_extension, ProviderId,
 };
 use crate::commands::providers::{self, ExportRequest};
-use crate::commands::runtime_operations::{RuntimeOperation, RuntimeOperationCoordinator};
+use crate::commands::runtime_operations::{
+    emit_after_operation_released, RuntimeOperation, RuntimeOperationCoordinator,
+};
 
 // ---------------------------------------------------------------------------
 // State
@@ -171,7 +173,7 @@ pub async fn start_export(
         } else {
             None
         };
-    let operation_guard = runtime_operations.acquire_shared(RuntimeOperation::Export)?;
+    let operation_guard = runtime_operations.acquire(RuntimeOperation::Export)?;
 
     let mut cmd = providers::build_command(&request, &app_handle)?;
     cmd.stdout(Stdio::piped());
@@ -254,7 +256,7 @@ pub async fn start_export(
     let request_wait = request.clone();
     let pre_snapshot_wait = pre_snapshot.clone();
     std::thread::spawn(move || {
-        let _operation_guard = operation_guard;
+        let mut operation_guard = Some(operation_guard);
         // Wait for both stream readers to finish.
         let _ = stdout_handle.join();
         let _ = stderr_handle.join();
@@ -264,13 +266,15 @@ pub async fn start_export(
             let mut sessions = match sessions_arc.lock() {
                 Ok(s) => s,
                 Err(_) => {
-                    let _ = ah_wait.emit(
-                        "export:failed",
-                        ExportFailedPayload {
-                            session_id: sid_wait.clone(),
-                            error: "sessions lock poisoned during wait".to_string(),
-                        },
-                    );
+                    emit_after_operation_released(operation_guard.take().unwrap(), || {
+                        let _ = ah_wait.emit(
+                            "export:failed",
+                            ExportFailedPayload {
+                                session_id: sid_wait.clone(),
+                                error: "sessions lock poisoned during wait".to_string(),
+                            },
+                        );
+                    });
                     return;
                 }
             };
@@ -289,39 +293,45 @@ pub async fn start_export(
                             ),
                             None => providers::confirm_artifacts(&request_wait),
                         };
-                        let _ = ah_wait.emit(
-                            "export:finished",
-                            ExportFinishedPayload {
-                                session_id: sid_wait,
-                                exit_code: 0,
-                                artifact_moved: artifact_status.artifact_moved,
-                                artifact_warning: artifact_status.artifact_warning,
-                                output_dir: if request_wait.output_dir.is_empty() {
-                                    None
-                                } else {
-                                    Some(request_wait.output_dir.clone())
+                        emit_after_operation_released(operation_guard.take().unwrap(), || {
+                            let _ = ah_wait.emit(
+                                "export:finished",
+                                ExportFinishedPayload {
+                                    session_id: sid_wait,
+                                    exit_code: 0,
+                                    artifact_moved: artifact_status.artifact_moved,
+                                    artifact_warning: artifact_status.artifact_warning,
+                                    output_dir: if request_wait.output_dir.is_empty() {
+                                        None
+                                    } else {
+                                        Some(request_wait.output_dir.clone())
+                                    },
                                 },
-                            },
-                        );
+                            );
+                        });
                     } else {
                         let code = status.code().unwrap_or(-1);
+                        emit_after_operation_released(operation_guard.take().unwrap(), || {
+                            let _ = ah_wait.emit(
+                                "export:failed",
+                                ExportFailedPayload {
+                                    session_id: sid_wait,
+                                    error: format!("exit code: {}", code),
+                                },
+                            );
+                        });
+                    }
+                }
+                Err(e) => {
+                    emit_after_operation_released(operation_guard.take().unwrap(), || {
                         let _ = ah_wait.emit(
                             "export:failed",
                             ExportFailedPayload {
                                 session_id: sid_wait,
-                                error: format!("exit code: {}", code),
+                                error: format!("wait error: {}", e),
                             },
                         );
-                    }
-                }
-                Err(e) => {
-                    let _ = ah_wait.emit(
-                        "export:failed",
-                        ExportFailedPayload {
-                            session_id: sid_wait,
-                            error: format!("wait error: {}", e),
-                        },
-                    );
+                    });
                 }
             },
         }

@@ -2,7 +2,8 @@ use crate::commands::environment::{
     discover_managed_runtime_python, resolve_managed_runtime_base, resolve_python,
 };
 use crate::commands::runtime_operations::{
-    RuntimeOperation, RuntimeOperationCoordinator, RuntimeOperationGuard,
+    emit_after_operation_released, RuntimeOperation, RuntimeOperationCoordinator,
+    RuntimeOperationGuard,
 };
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
@@ -245,7 +246,9 @@ fn cleanup_next_runtime(runtime_dir: &Path) {
 }
 
 pub(crate) fn sweep_runtime_rebuild_artifacts(runtime_dir: &Path) {
-    let _ = std::fs::remove_dir_all(runtime_dir.join(".venv-old"));
+    for name in [".venv-old", ".venv-next"] {
+        let _ = std::fs::remove_dir_all(runtime_dir.join(name));
+    }
 }
 
 fn swap_verified_runtime(runtime_dir: &Path) -> Result<(), String> {
@@ -344,7 +347,7 @@ fn spawn_and_stream(
     let sid_wait = session_id.clone();
     let sessions_arc = Arc::clone(&sessions);
     std::thread::spawn(move || {
-        let _operation_guard = operation_guard;
+        let mut operation_guard = Some(operation_guard);
         let _ = stdout_handle.join();
         let _ = stderr_handle.join();
 
@@ -352,13 +355,15 @@ fn spawn_and_stream(
             let mut map = match sessions_arc.lock() {
                 Ok(m) => m,
                 Err(_) => {
-                    let _ = ah_wait.emit(
-                        "setup:failed",
-                        SetupFailedPayload {
-                            session_id: sid_wait.clone(),
-                            error: "sessions lock poisoned during wait".to_string(),
-                        },
-                    );
+                    emit_after_operation_released(operation_guard.take().unwrap(), || {
+                        let _ = ah_wait.emit(
+                            "setup:failed",
+                            SetupFailedPayload {
+                                session_id: sid_wait.clone(),
+                                error: "sessions lock poisoned during wait".to_string(),
+                            },
+                        );
+                    });
                     return;
                 }
             };
@@ -372,31 +377,37 @@ fn spawn_and_stream(
             Some(mut child) => match child.wait() {
                 Ok(status) => {
                     if status.success() {
-                        let _ = ah_wait.emit(
-                            "setup:finished",
-                            SetupFinishedPayload {
-                                session_id: sid_wait,
-                            },
-                        );
+                        emit_after_operation_released(operation_guard.take().unwrap(), || {
+                            let _ = ah_wait.emit(
+                                "setup:finished",
+                                SetupFinishedPayload {
+                                    session_id: sid_wait,
+                                },
+                            );
+                        });
                     } else {
                         let code = status.code().unwrap_or(-1);
+                        emit_after_operation_released(operation_guard.take().unwrap(), || {
+                            let _ = ah_wait.emit(
+                                "setup:failed",
+                                SetupFailedPayload {
+                                    session_id: sid_wait,
+                                    error: format!("process exited with code {}", code),
+                                },
+                            );
+                        });
+                    }
+                }
+                Err(e) => {
+                    emit_after_operation_released(operation_guard.take().unwrap(), || {
                         let _ = ah_wait.emit(
                             "setup:failed",
                             SetupFailedPayload {
                                 session_id: sid_wait,
-                                error: format!("process exited with code {}", code),
+                                error: format!("wait error: {}", e),
                             },
                         );
-                    }
-                }
-                Err(e) => {
-                    let _ = ah_wait.emit(
-                        "setup:failed",
-                        SetupFailedPayload {
-                            session_id: sid_wait,
-                            error: format!("wait error: {}", e),
-                        },
-                    );
+                    });
                 }
             },
         }
@@ -416,7 +427,7 @@ fn spawn_and_stream_rebuild(
     let session_id = Uuid::new_v4().to_string();
     let sid_thread = session_id.clone();
     std::thread::spawn(move || {
-        let _operation_guard = operation_guard;
+        let operation_guard = operation_guard;
         let result = commands
             .into_iter()
             .try_for_each(|mut cmd| -> Result<(), String> {
@@ -493,21 +504,25 @@ fn spawn_and_stream_rebuild(
         }
         match result {
             Ok(()) => {
-                let _ = app_handle.emit(
-                    "setup:finished",
-                    SetupFinishedPayload {
-                        session_id: sid_thread,
-                    },
-                );
+                emit_after_operation_released(operation_guard, || {
+                    let _ = app_handle.emit(
+                        "setup:finished",
+                        SetupFinishedPayload {
+                            session_id: sid_thread,
+                        },
+                    );
+                });
             }
             Err(error) => {
-                let _ = app_handle.emit(
-                    "setup:failed",
-                    SetupFailedPayload {
-                        session_id: sid_thread,
-                        error,
-                    },
-                );
+                emit_after_operation_released(operation_guard, || {
+                    let _ = app_handle.emit(
+                        "setup:failed",
+                        SetupFailedPayload {
+                            session_id: sid_thread,
+                            error,
+                        },
+                    );
+                });
             }
         }
     });
@@ -573,7 +588,7 @@ pub async fn create_runtime_venv(
     let cmd = build_venv_command(&python, &venv_path);
 
     let sessions = Arc::clone(&state.sessions);
-    let operation_guard = runtime_operations.acquire_shared(RuntimeOperation::Setup)?;
+    let operation_guard = runtime_operations.acquire(RuntimeOperation::Setup)?;
     spawn_and_stream(app_handle, sessions, cmd, operation_guard)
 }
 
@@ -592,7 +607,7 @@ pub async fn rebuild_managed_runtime(
     }
     let managed_runtime_dir = ensure_managed_runtime_dir(&app_handle, &settings.runtime_dir)?;
     let sessions = Arc::clone(&state.sessions);
-    let operation_guard = runtime_operations.acquire_rebuild()?;
+    let operation_guard = runtime_operations.acquire(RuntimeOperation::Rebuild)?;
 
     let base_python = resolve_managed_runtime_base(python_path.as_deref())?;
     let runtime_path = PathBuf::from(&managed_runtime_dir);
@@ -737,7 +752,7 @@ mod tests {
 
         assert!(Path::new(&runtime_dir).join(".venv").exists());
         assert!(!Path::new(&runtime_dir).join(".venv-old").exists());
-        assert!(Path::new(&runtime_dir).join(".venv-next").exists());
+        assert!(!Path::new(&runtime_dir).join(".venv-next").exists());
         assert!(Path::new(&runtime_dir).join(".venv-backup").exists());
         fs::remove_dir_all(runtime_dir).unwrap();
     }
