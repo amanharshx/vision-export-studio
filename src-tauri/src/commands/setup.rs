@@ -231,6 +231,25 @@ fn build_venv_command(python: &str, venv_path: &Path) -> Command {
     command
 }
 
+const MANAGED_RUNTIME_VERSION_VERIFY_SCRIPT: &str =
+    "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] <= (3, 13) else 1)";
+
+fn build_managed_runtime_rebuild_commands(base_python: &str, runtime_dir: &str) -> Vec<Command> {
+    let next_venv = Path::new(runtime_dir).join(".venv-next");
+    let next_python = venv_python_in(runtime_dir, ".venv-next");
+
+    let mut verify_version = Command::new(&next_python);
+    verify_version.args(["-c", MANAGED_RUNTIME_VERSION_VERIFY_SCRIPT]);
+    let mut verify_pip = Command::new(&next_python);
+    verify_pip.args(["-m", "pip", "--version"]);
+
+    vec![
+        build_venv_command(base_python, &next_venv),
+        verify_version,
+        verify_pip,
+    ]
+}
+
 pub(crate) fn should_offer_managed_runtime_rebuild(
     has_python_override: bool,
     current_version: Option<(u8, u8)>,
@@ -295,6 +314,17 @@ fn swap_verified_runtime(runtime_dir: &Path) -> Result<(), String> {
     }
     let _ = std::fs::remove_dir_all(old);
     Ok(())
+}
+
+fn complete_managed_runtime_rebuild(
+    runtime_dir: &Path,
+    rebuild_result: Result<(), String>,
+) -> Result<(), String> {
+    let result = rebuild_result.and_then(|()| swap_verified_runtime(runtime_dir));
+    if result.is_err() {
+        cleanup_next_runtime(runtime_dir);
+    }
+    result
 }
 
 /// Spawn a child process, stream its stdout/stderr as Tauri events, and emit
@@ -528,10 +558,7 @@ fn spawn_and_stream_rebuild(
                 }
             });
 
-        let result = result.and_then(|()| swap_verified_runtime(&runtime_dir));
-        if result.is_err() {
-            cleanup_next_runtime(&runtime_dir);
-        }
+        let result = complete_managed_runtime_rebuild(&runtime_dir, result);
         match result {
             Ok(()) => {
                 emit_after_operation_released(operation_guard, || {
@@ -667,21 +694,11 @@ pub async fn rebuild_managed_runtime(
     let base_python = resolve_managed_runtime_base(python_path.as_deref())?;
     let runtime_path = PathBuf::from(&managed_runtime_dir);
     cleanup_next_runtime(&runtime_path);
-    let next_venv = runtime_path.join(".venv-next");
-    let next_python = venv_python_in(&managed_runtime_dir, ".venv-next");
-    let mut install = Command::new(&next_python);
-    install.args(["-m", "pip", "install", "ultralytics"]);
-    let mut verify = Command::new(&next_python);
-    verify.args(["-c", "import ultralytics"]);
 
     spawn_and_stream_rebuild(
         app_handle,
         sessions,
-        vec![
-            build_venv_command(&base_python, &next_venv),
-            install,
-            verify,
-        ],
+        build_managed_runtime_rebuild_commands(&base_python, &managed_runtime_dir),
         runtime_path,
         operation_guard,
     )
@@ -792,6 +809,56 @@ mod tests {
         cleanup_next_runtime(Path::new(&runtime_dir));
 
         assert_eq!(fs::read(&marker).unwrap(), before);
+        assert!(!next.exists());
+        fs::remove_dir_all(runtime_dir).unwrap();
+    }
+
+    #[test]
+    fn rebuild_commands_create_and_verify_python_without_provider_install() {
+        let commands =
+            build_managed_runtime_rebuild_commands("/opt/python3.12/bin/python3", "/tmp/runtime");
+        let command_args = commands
+            .iter()
+            .map(|command| {
+                command
+                    .get_args()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(command_args.len(), 3);
+        assert_eq!(
+            command_args[0],
+            vec!["-m", "venv", "/tmp/runtime/.venv-next"]
+        );
+        assert_eq!(command_args[1][0], "-c");
+        assert!(command_args[1][1].contains("sys.version_info"));
+        assert_eq!(command_args[2], vec!["-m", "pip", "--version"]);
+        assert!(!command_args
+            .iter()
+            .flatten()
+            .any(|arg| arg.contains("ultralytics")));
+    }
+
+    #[test]
+    fn unusable_pip_preserves_current_runtime_and_removes_next() {
+        let runtime_dir = test_runtime_dir("runtime-pip-verification-failure");
+        let current = Path::new(&runtime_dir).join(".venv");
+        let next = Path::new(&runtime_dir).join(".venv-next");
+        fs::create_dir_all(&current).unwrap();
+        fs::create_dir_all(&next).unwrap();
+        fs::write(current.join("marker"), "old").unwrap();
+        fs::write(next.join("marker"), "new").unwrap();
+
+        let error = complete_managed_runtime_rebuild(
+            Path::new(&runtime_dir),
+            Err("pip verification failed".to_string()),
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "pip verification failed");
+        assert_eq!(fs::read_to_string(current.join("marker")).unwrap(), "old");
         assert!(!next.exists());
         fs::remove_dir_all(runtime_dir).unwrap();
     }

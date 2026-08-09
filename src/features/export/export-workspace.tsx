@@ -68,16 +68,30 @@ type WorkspaceView = "drop" | "formats";
 type RuntimeInstallPhase = "idle" | "installing" | "ready" | "failed";
 
 export function getManagedRuntimeUpgradeNudge(
-  providerId: ProviderId,
   eligibility: ManagedRuntimeRebuildEligibility | null,
   mayStart = true,
 ): string | null {
-  if (providerId !== "ultralytics" || !eligibility?.eligible || !eligibility.candidate_version || !mayStart) return null;
+  if (!eligibility?.eligible || !eligibility.candidate_version || !mayStart) return null;
   return `Python ${eligibility.candidate_version} is available. Set up a new export runtime with it?`;
 }
 
 export function getManagedRuntimeUpgradeCopy(candidateVersion: string): string {
-  return `This creates a fresh Python environment using Python ${candidateVersion} and reinstalls Ultralytics. Your current runtime stays in place until the new one is verified. Packages for specific export formats may need reinstalling when you next use them. This may take a few minutes.`;
+  const details = getManagedRuntimeUpgradeDetails(candidateVersion);
+  return `This will:\n• ${details.steps.join("\n• ")}\n\n${details.note}`;
+}
+
+export function getManagedRuntimeUpgradeDetails(candidateVersion: string): {
+  steps: string[];
+  note: string;
+} {
+  return {
+    steps: [
+      `Create a new export environment using Python ${candidateVersion}`,
+      "Keep your current runtime if setup fails",
+      "Switch over once the new environment is verified",
+    ],
+    note: "Export-format packages install when you next use them. This may take a few minutes.",
+  };
 }
 
 // Exported separately: Radix portals render nothing in SSR; this keeps the dialog body testable.
@@ -98,12 +112,17 @@ export function ManagedRuntimeUpgradeDialogBody({
   onCancel: () => void;
   onContinue: () => void;
 }) {
+  const details = getManagedRuntimeUpgradeDetails(candidateVersion ?? "a compatible Python");
   return (
     <>
       <DialogHeader>
         <DialogTitle>Set up a new export runtime?</DialogTitle>
-        <DialogDescription>
-          {getManagedRuntimeUpgradeCopy(candidateVersion ?? "a compatible Python")}
+        <DialogDescription className="space-y-3">
+          <p>This will:</p>
+          <ul className="list-disc space-y-1 pl-5">
+            {details.steps.map((step) => <li key={step}>{step}</li>)}
+          </ul>
+          <p>{details.note}</p>
         </DialogDescription>
       </DialogHeader>
       {rebuilding && (
@@ -564,7 +583,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     managedRuntimeRebuilding,
   );
   const managedRuntimeUpgradeNudge = getManagedRuntimeUpgradeNudge(
-    selectedProviderId,
     managedRuntimeUpgrade,
     mayStartRuntimeUpgrade,
   );

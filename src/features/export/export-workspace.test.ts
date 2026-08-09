@@ -154,6 +154,7 @@ describe("managed runtime upgrade UI", () => {
     );
 
     expect(html).toContain("Set up a new export runtime?");
+    expect(html).toContain("<li");
   });
 
   test("runtime upgrade is available only while every operation is idle", () => {
@@ -165,24 +166,26 @@ describe("managed runtime upgrade UI", () => {
     expect(mayStartManagedRuntimeUpgrade("idle", "idle", "idle", false)).toBe(true);
   });
 
-  test("nudge renders only for eligible Ultralytics runtime with candidate", () => {
-    expect(getManagedRuntimeUpgradeNudge("ultralytics", { eligible: true, current_version: "3.9.6", candidate_version: "3.12.12" }))
+  test("nudge renders for either provider when eligible with candidate", () => {
+    expect(getManagedRuntimeUpgradeNudge({ eligible: true, current_version: "3.9.6", candidate_version: "3.12.12" }))
       .toBe("Python 3.12.12 is available. Set up a new export runtime with it?");
-    expect(getManagedRuntimeUpgradeNudge("ultralytics", { eligible: false, current_version: "3.9.6", candidate_version: null })).toBeNull();
-    expect(getManagedRuntimeUpgradeNudge("rfdetr", { eligible: true, current_version: "3.9.6", candidate_version: "3.12.12" })).toBeNull();
+    expect(getManagedRuntimeUpgradeNudge({ eligible: true, current_version: "3.9.6", candidate_version: "3.12.12" }))
+      .toBe("Python 3.12.12 is available. Set up a new export runtime with it?");
+    expect(getManagedRuntimeUpgradeNudge({ eligible: false, current_version: "3.9.6", candidate_version: null })).toBeNull();
   });
 
   test("nudge is suppressed while another runtime operation is active", () => {
     expect(getManagedRuntimeUpgradeNudge(
-      "ultralytics",
       { eligible: true, current_version: "3.9.6", candidate_version: "3.12.12" },
       false,
     )).toBeNull();
   });
 
-  test("confirmation copy names candidate and explains verified swap", () => {
-    expect(getManagedRuntimeUpgradeCopy("3.12.12")).toContain("using Python 3.12.12");
-    expect(getManagedRuntimeUpgradeCopy("3.12.12")).toContain("stays in place until the new one is verified");
+  test("confirmation copy names candidate, preserves failure assurance, and omits provider", () => {
+    const copy = getManagedRuntimeUpgradeCopy("3.12.12");
+    expect(copy).toContain("using Python 3.12.12");
+    expect(copy).toContain("Keep your current runtime if setup fails");
+    expect(copy).not.toContain("Ultralytics");
   });
 
   test("rebuild coordinator refusal is not reported as a failure", () => {
