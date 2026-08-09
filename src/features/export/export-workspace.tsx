@@ -161,6 +161,32 @@ export function getInstallableMissingPackages(results: DepCheckResult[] | null):
   return [...new Set([...pipMissing, ...binaryViaPip])];
 }
 
+export function mayActivateRoute(exportStatus: ExportStatus, installPhase: InstallPhase): boolean {
+  return exportStatus !== "starting" && exportStatus !== "running" && installPhase !== "installing";
+}
+
+export function getInstallStartFailureOutcome(error: string): {
+  refused: boolean;
+  message: string;
+  preserveExportState: boolean;
+  captureExportFailure: boolean;
+} {
+  if (error.includes("another runtime operation is in progress")) {
+    return {
+      refused: true,
+      message: "Export is still running. Wait for it to finish before installing dependencies.",
+      preserveExportState: true,
+      captureExportFailure: false,
+    };
+  }
+  return {
+    refused: false,
+    message: "[error] Failed to start install: " + error,
+    preserveExportState: false,
+    captureExportFailure: true,
+  };
+}
+
 function hasBlockingDependencies(results: DepCheckResult[] | null): boolean {
   if (!results) {
     return true;
@@ -415,6 +441,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const ultralyticsRuntimeInstalling = runtimeInstallPhase === "installing";
   const ultralyticsRuntimeBlocking =
     selectedProviderId === "ultralytics" && (!ultralyticsRuntimeReady || ultralyticsRuntimeInstalling);
+  const routeActivationAllowed = mayActivateRoute(exportStatus, installPhase);
+  const routeGridDisabled = ultralyticsRuntimeBlocking || !routeActivationAllowed;
+  const routeGridDisabledReason = !routeActivationAllowed
+    ? (installPhase === "installing" ? "Dependency installation in progress" : "Export in progress")
+    : getUltralyticsRuntimeDisabledReason(runtimeInstallPhase);
 
   // Ref to current sessionId for use inside event listener closures
   const sessionIdRef = useRef<string | null>(null);
@@ -837,6 +868,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
 
   // Install missing deps then auto-start export
   const handleInstallAndExport = async () => {
+    if (!mayActivateRoute(exportStatus, installPhase)) {
+      setInvokeError("Export is still running. Wait for it to finish before installing dependencies.");
+      return;
+    }
     const pythonPath = envInfo?.python_path;
     if (!pythonPath) return;
     const incompatibleMessage = getIncompatibleExportMessage(
@@ -890,6 +925,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         return;
       }
     } catch (e: unknown) {
+      const outcome = getInstallStartFailureOutcome(String(e));
+      if (outcome.refused) {
+        setInvokeError(outcome.message);
+        return;
+      }
       captureAnalyticsEvent("export_failed", {
         route_id: exportRoute.routeId,
         export_format: exportRoute.exportFormat,
@@ -897,7 +937,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         failure_kind: "install_start_failed",
       });
       setInstallPhase("failed");
-      setLogLines((prev) => [...prev, "[error] Failed to start install: " + String(e)]);
+      setLogLines((prev) => [...prev, outcome.message]);
       return;
     }
 
@@ -1120,6 +1160,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
 
   // Route row clicked — open modal for that route
   const handleActivateRoute = (routeId: string) => {
+    if (!mayActivateRoute(exportStatus, installPhase)) return;
     setSelectedRouteId(routeId);
 
     const saved = routeOptionsRef.current[routeId] ?? null;
@@ -1613,8 +1654,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
               routes={currentRoutes}
               platform={appPlatform}
               onSelectRoute={handleActivateRoute}
-              disabled={ultralyticsRuntimeBlocking}
-              disabledReason={getUltralyticsRuntimeDisabledReason(runtimeInstallPhase)}
+              disabled={routeGridDisabled}
+              disabledReason={routeGridDisabledReason}
             />
           </div>
         </main>

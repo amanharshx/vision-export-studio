@@ -1,7 +1,11 @@
 // @ts-expect-error Bun provides this module at test runtime.
 import { describe, expect, test } from "bun:test";
-import { getInstallableMissingPackages } from "./export-workspace";
-import type { DepCheckResult } from "@/lib/types";
+import {
+  getInstallStartFailureOutcome,
+  getInstallableMissingPackages,
+  mayActivateRoute,
+} from "./export-workspace";
+import type { DepCheckResult, ExportStatus, InstallPhase } from "@/lib/types";
 
 describe("getInstallableMissingPackages", () => {
   test("returns explicit install_package values", () => {
@@ -72,5 +76,50 @@ describe("getInstallableMissingPackages", () => {
     };
 
     expect(getInstallableMissingPackages([unknownUltralytics])).toEqual([]);
+  });
+});
+
+describe("runtime operation UI guards", () => {
+  const unchanged = {
+    selectedRouteId: "ultralytics.pt.onnx",
+    logLines: ["export output"],
+    exportStatus: "running" as ExportStatus,
+    installPhase: "idle" as InstallPhase,
+  };
+
+  test("route activation is blocked while export runs without changing current state", () => {
+    expect(mayActivateRoute(unchanged.exportStatus, unchanged.installPhase)).toBe(false);
+    expect(unchanged).toEqual({
+      selectedRouteId: "ultralytics.pt.onnx",
+      logLines: ["export output"],
+      exportStatus: "running",
+      installPhase: "idle",
+    });
+  });
+
+  test("route activation is blocked while install runs", () => {
+    expect(mayActivateRoute("idle", "installing")).toBe(false);
+  });
+
+  test("route activation works when idle", () => {
+    expect(mayActivateRoute("idle", "idle")).toBe(true);
+  });
+
+  test("refused install start preserves export state and reports actionable error", () => {
+    expect(getInstallStartFailureOutcome("another runtime operation is in progress: export")).toEqual({
+      refused: true,
+      message: "Export is still running. Wait for it to finish before installing dependencies.",
+      preserveExportState: true,
+      captureExportFailure: false,
+    });
+  });
+
+  test("genuine install start failure keeps failure state and analytics", () => {
+    expect(getInstallStartFailureOutcome("spawn failed")).toEqual({
+      refused: false,
+      message: "[error] Failed to start install: spawn failed",
+      preserveExportState: false,
+      captureExportFailure: true,
+    });
   });
 });
