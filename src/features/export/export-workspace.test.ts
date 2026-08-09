@@ -3,8 +3,10 @@ import { describe, expect, test } from "bun:test";
 import {
   getInstallStartFailureOutcome,
   getInstallableMissingPackages,
+  getManagedRuntimeRebuildFailureMessage,
   getManagedRuntimeUpgradeCopy,
   getManagedRuntimeUpgradeNudge,
+  mayStartManagedRuntimeUpgrade,
   mayActivateRoute,
 } from "./export-workspace";
 import type { DepCheckResult, ExportStatus, InstallPhase } from "@/lib/types";
@@ -130,6 +132,15 @@ describe("runtime operation UI guards", () => {
 });
 
 describe("managed runtime upgrade UI", () => {
+  test("runtime upgrade is available only while every operation is idle", () => {
+    expect(mayStartManagedRuntimeUpgrade("starting", "idle", "idle", false)).toBe(false);
+    expect(mayStartManagedRuntimeUpgrade("running", "idle", "idle", false)).toBe(false);
+    expect(mayStartManagedRuntimeUpgrade("idle", "installing", "idle", false)).toBe(false);
+    expect(mayStartManagedRuntimeUpgrade("idle", "idle", "installing", false)).toBe(false);
+    expect(mayStartManagedRuntimeUpgrade("idle", "idle", "idle", true)).toBe(false);
+    expect(mayStartManagedRuntimeUpgrade("idle", "idle", "idle", false)).toBe(true);
+  });
+
   test("nudge renders only for eligible Ultralytics runtime with candidate", () => {
     expect(getManagedRuntimeUpgradeNudge("ultralytics", { eligible: true, current_version: "3.9.6", candidate_version: "3.12.12" }))
       .toBe("Python 3.12.12 is available. Set up a new export runtime with it?");
@@ -137,9 +148,27 @@ describe("managed runtime upgrade UI", () => {
     expect(getManagedRuntimeUpgradeNudge("rfdetr", { eligible: true, current_version: "3.9.6", candidate_version: "3.12.12" })).toBeNull();
   });
 
+  test("nudge is suppressed while another runtime operation is active", () => {
+    expect(getManagedRuntimeUpgradeNudge(
+      "ultralytics",
+      { eligible: true, current_version: "3.9.6", candidate_version: "3.12.12" },
+      false,
+    )).toBeNull();
+  });
+
   test("confirmation copy names candidate and explains verified swap", () => {
     expect(getManagedRuntimeUpgradeCopy("3.12.12")).toContain("using Python 3.12.12");
     expect(getManagedRuntimeUpgradeCopy("3.12.12")).toContain("stays in place until the new one is verified");
+  });
+
+  test("rebuild coordinator refusal is not reported as a failure", () => {
+    expect(getManagedRuntimeRebuildFailureMessage("another runtime operation is in progress: export"))
+      .toBe("Another runtime operation is in progress. Wait for it to finish before setting up a new runtime.");
+  });
+
+  test("genuine rebuild failure keeps previous-runtime assurance", () => {
+    expect(getManagedRuntimeRebuildFailureMessage("pip install failed"))
+      .toBe("Runtime upgrade failed: pip install failed. Previous runtime is unchanged.");
   });
 
 });

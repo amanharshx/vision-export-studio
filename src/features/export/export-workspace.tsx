@@ -48,6 +48,7 @@ import {
   savePythonOverride,
   saveOutputDirOverride,
 } from "@/lib/tauri/setup";
+import type { ManagedRuntimeRebuildEligibility } from "@/lib/tauri/setup";
 import { openPythonExecutablePicker, openOutputDirPicker } from "@/lib/tauri/dialog";
 import {
   Dialog,
@@ -66,17 +67,12 @@ import { normalizeOptionsForRoute } from "./options/normalize";
 type WorkspaceView = "drop" | "formats";
 type RuntimeInstallPhase = "idle" | "installing" | "ready" | "failed";
 
-export interface ManagedRuntimeUpgradeEligibility {
-  eligible: boolean;
-  current_version: string;
-  candidate_version: string | null;
-}
-
 export function getManagedRuntimeUpgradeNudge(
   providerId: ProviderId,
-  eligibility: ManagedRuntimeUpgradeEligibility | null,
+  eligibility: ManagedRuntimeRebuildEligibility | null,
+  mayStart = true,
 ): string | null {
-  if (providerId !== "ultralytics" || !eligibility?.eligible || !eligibility.candidate_version) return null;
+  if (providerId !== "ultralytics" || !eligibility?.eligible || !eligibility.candidate_version || !mayStart) return null;
   return `Python ${eligibility.candidate_version} is available. Set up a new export runtime with it?`;
 }
 
@@ -197,20 +193,43 @@ export function mayActivateRoute(exportStatus: ExportStatus, installPhase: Insta
   return exportStatus !== "starting" && exportStatus !== "running" && installPhase !== "installing";
 }
 
+export function mayStartManagedRuntimeUpgrade(
+  exportStatus: ExportStatus,
+  installPhase: InstallPhase,
+  runtimeInstallPhase: RuntimeInstallPhase,
+  managedRuntimeRebuilding: boolean,
+): boolean {
+  return mayActivateRoute(exportStatus, installPhase)
+    && runtimeInstallPhase !== "installing"
+    && !managedRuntimeRebuilding;
+}
+
+function getRuntimeOperationRefusalMessage(error: string, action: string): string | null {
+  return error.includes("another runtime operation is in progress")
+    ? `Another runtime operation is in progress. Wait for it to finish before ${action}.`
+    : null;
+}
+
 export function getInstallStartFailureOutcome(error: string): {
   refused: boolean;
   message: string;
 } {
-  if (error.includes("another runtime operation is in progress")) {
+  const refusalMessage = getRuntimeOperationRefusalMessage(error, "installing dependencies");
+  if (refusalMessage) {
     return {
       refused: true,
-      message: "Another runtime operation is in progress. Wait for it to finish before installing dependencies.",
+      message: refusalMessage,
     };
   }
   return {
     refused: false,
     message: "[error] Failed to start install: " + error,
   };
+}
+
+export function getManagedRuntimeRebuildFailureMessage(error: string): string {
+  return getRuntimeOperationRefusalMessage(error, "setting up a new runtime")
+    ?? `Runtime upgrade failed: ${error}. Previous runtime is unchanged.`;
 }
 
 function hasBlockingDependencies(results: DepCheckResult[] | null): boolean {
@@ -424,7 +443,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const [runtimeInstallError, setRuntimeInstallError] = useState<string | null>(null);
   const [runtimeInstallDetailsOpen, setRuntimeInstallDetailsOpen] = useState(false);
   const [runtimeInstalledThisSession, setRuntimeInstalledThisSession] = useState(false);
-  const [managedRuntimeUpgrade, setManagedRuntimeUpgrade] = useState<ManagedRuntimeUpgradeEligibility | null>(null);
+  const [managedRuntimeUpgrade, setManagedRuntimeUpgrade] = useState<ManagedRuntimeRebuildEligibility | null>(null);
   const [managedRuntimeUpgradeOpen, setManagedRuntimeUpgradeOpen] = useState(false);
   const [managedRuntimeRebuilding, setManagedRuntimeRebuilding] = useState(false);
   const [managedRuntimeRebuildLines, setManagedRuntimeRebuildLines] = useState<string[]>([]);
@@ -477,7 +496,17 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const routeGridDisabledReason = !routeActivationAllowed
     ? (installPhase === "installing" ? "Dependency installation in progress" : "Export in progress")
     : getUltralyticsRuntimeDisabledReason(runtimeInstallPhase);
-  const managedRuntimeUpgradeNudge = getManagedRuntimeUpgradeNudge(selectedProviderId, managedRuntimeUpgrade);
+  const mayStartRuntimeUpgrade = mayStartManagedRuntimeUpgrade(
+    exportStatus,
+    installPhase,
+    runtimeInstallPhase,
+    managedRuntimeRebuilding,
+  );
+  const managedRuntimeUpgradeNudge = getManagedRuntimeUpgradeNudge(
+    selectedProviderId,
+    managedRuntimeUpgrade,
+    mayStartRuntimeUpgrade,
+  );
 
   // Ref to current sessionId for use inside event listener closures
   const sessionIdRef = useRef<string | null>(null);
@@ -1282,18 +1311,22 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       const result = await resultPromise;
       cleanup();
       if (result !== "ok") {
-        setManagedRuntimeRebuildError(`Runtime upgrade failed: ${result}. Previous runtime is unchanged.`);
+        setManagedRuntimeRebuildError(getManagedRuntimeRebuildFailureMessage(result));
         return;
       }
       setManagedRuntimeUpgradeOpen(false);
       await handleRedetect();
     } catch (error) {
       cleanup();
-      setManagedRuntimeRebuildError(`Runtime upgrade failed: ${String(error)}. Previous runtime is unchanged.`);
+      setManagedRuntimeRebuildError(getManagedRuntimeRebuildFailureMessage(String(error)));
     } finally {
       setManagedRuntimeRebuilding(false);
     }
   }, [handleRedetect]);
+
+  const openManagedRuntimeUpgrade = useCallback(() => {
+    if (mayStartRuntimeUpgrade) setManagedRuntimeUpgradeOpen(true);
+  }, [mayStartRuntimeUpgrade]);
 
   // Save python path override and re-detect
   const handleSaveAndRedetect = useCallback(async () => {
@@ -1422,7 +1455,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                 {managedRuntimeUpgradeNudge && (
                   <div className="mt-3 flex items-center justify-between gap-3 rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
                     <span>{managedRuntimeUpgradeNudge}</span>
-                    <Button size="sm" variant="outline" className="shrink-0" onClick={() => setManagedRuntimeUpgradeOpen(true)}>
+                    <Button size="sm" variant="outline" className="shrink-0" onClick={openManagedRuntimeUpgrade} disabled={!mayStartRuntimeUpgrade}>
                       Set up
                     </Button>
                   </div>
@@ -1780,7 +1813,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         completedOutputDir={completedOutputDir}
         onShowExportFolder={handleShowExportFolder}
         managedRuntimeUpgradeEligible={Boolean(managedRuntimeUpgrade?.eligible)}
-        onManagedRuntimeUpgrade={() => setManagedRuntimeUpgradeOpen(true)}
+        managedRuntimeUpgradeDisabled={!mayStartRuntimeUpgrade}
+        onManagedRuntimeUpgrade={openManagedRuntimeUpgrade}
         rfdetrSummary={selectedProviderId === "rfdetr" ? {
           variantMode: rfdetrVariantMode,
           detectedClass: rfdetrInspectResult?.class_symbol ?? null,
@@ -1809,7 +1843,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
             <Button variant="outline" onClick={() => setManagedRuntimeUpgradeOpen(false)} disabled={managedRuntimeRebuilding}>
               Cancel
             </Button>
-            <Button onClick={handleRebuildManagedRuntime} disabled={managedRuntimeRebuilding}>
+            <Button onClick={handleRebuildManagedRuntime} disabled={!mayStartRuntimeUpgrade}>
               {managedRuntimeRebuilding ? "Setting up..." : "Continue"}
             </Button>
           </DialogFooter>

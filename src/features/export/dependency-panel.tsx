@@ -9,6 +9,7 @@ interface DependencyPanelProps {
   depCheckLoading?: boolean;
   depCheckError?: string | null;
   managedRuntimeUpgradeEligible?: boolean;
+  managedRuntimeUpgradeDisabled?: boolean;
   onManagedRuntimeUpgrade?: () => void;
 }
 
@@ -135,6 +136,7 @@ export function DependencyPanel({
   depCheckLoading,
   depCheckError,
   managedRuntimeUpgradeEligible = false,
+  managedRuntimeUpgradeDisabled = false,
   onManagedRuntimeUpgrade,
 }: DependencyPanelProps) {
   const sorted = sortDependencyItems(buildDependencyItems(provider, route, depResults), depResults);
@@ -181,7 +183,7 @@ export function DependencyPanel({
             <span className="ml-6 text-xs text-amber-700">{displayHint}</span>
             {showRuntimeUpgrade && onManagedRuntimeUpgrade && (
               <div className="ml-6 mt-1">
-                <Button size="sm" variant="outline" onClick={onManagedRuntimeUpgrade}>
+                <Button size="sm" variant="outline" onClick={onManagedRuntimeUpgrade} disabled={managedRuntimeUpgradeDisabled}>
                   Set up a new export runtime
                 </Button>
               </div>
