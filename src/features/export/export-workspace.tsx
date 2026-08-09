@@ -80,6 +80,7 @@ export function getManagedRuntimeUpgradeCopy(candidateVersion: string): string {
   return `This creates a fresh Python environment using Python ${candidateVersion} and reinstalls Ultralytics. Your current runtime stays in place until the new one is verified. Packages for specific export formats may need reinstalling when you next use them. This may take a few minutes.`;
 }
 
+// Exported separately: Radix portals render nothing in SSR; this keeps the dialog body testable.
 export function ManagedRuntimeUpgradeDialogBody({
   candidateVersion,
   rebuilding,
