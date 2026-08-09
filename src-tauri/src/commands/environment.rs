@@ -48,7 +48,7 @@ fn run(argv: &[&str]) -> Result<(String, String, bool), String> {
 
 const PYTHON_PROBE_MARKER: &str = "__VES_PYTHON__=";
 const PYTHON_VERSION_PROBE_MARKER: &str = "__VES_PYTHON_VERSION__=";
-const PYTHON_PROBE_SCRIPT: &str = "import os, sys; print('__VES_PYTHON__=' + os.path.abspath(sys.executable)); print('__VES_PYTHON_VERSION__={}.{}'.format(*sys.version_info[:2])); raise SystemExit(0 if sys.version_info[0] == 3 else 1)";
+const PYTHON_PROBE_SCRIPT: &str = "import os, sys; print('__VES_PYTHON__=' + os.path.abspath(sys.executable)); print('__VES_PYTHON_VERSION__={}.{}.{}'.format(*sys.version_info[:3])); raise SystemExit(0 if sys.version_info[0] == 3 else 1)";
 
 const WINDOWS_PYTHON_CANDIDATES: &[&[&str]] = &[&["python"], &["py", "-3"], &["python3"]];
 const UNIX_PYTHON_CANDIDATES: &[&[&str]] = &[&["python3"], &["python"]];
@@ -58,6 +58,7 @@ pub(crate) struct PythonCandidate {
     pub executable: String,
     pub major: u8,
     pub minor: u8,
+    pub patch: u8,
 }
 
 fn python_candidates(is_windows: bool) -> &'static [&'static [&'static str]] {
@@ -93,7 +94,11 @@ fn parse_python_probe_candidate(stdout: &str, success: bool) -> Option<PythonCan
             .strip_prefix(PYTHON_VERSION_PROBE_MARKER)
             .and_then(|version| {
                 let mut parts = version.trim().split('.');
-                Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+                Some((
+                    parts.next()?.parse().ok()?,
+                    parts.next()?.parse().ok()?,
+                    parts.next()?.parse().ok()?,
+                ))
             })
     })?;
 
@@ -101,6 +106,7 @@ fn parse_python_probe_candidate(stdout: &str, success: bool) -> Option<PythonCan
         executable,
         major: version.0,
         minor: version.1,
+        patch: version.2,
     })
 }
 
@@ -218,7 +224,10 @@ fn select_managed_runtime_python(candidates: Vec<PythonCandidate>) -> Option<Pyt
         })
 }
 
-fn discover_managed_runtime_python_with<F>(is_windows: bool, runner: F) -> Option<String>
+fn discover_managed_runtime_python_candidate_with<F>(
+    is_windows: bool,
+    runner: F,
+) -> Option<PythonCandidate>
 where
     F: Fn(&[&str]) -> Result<(String, String, bool), String>,
 {
@@ -260,13 +269,18 @@ where
             probe_python_candidate(&argv, &runner).ok()
         })
         .collect();
-    select_managed_runtime_python(candidates).map(|candidate| candidate.executable)
+    select_managed_runtime_python(candidates)
 }
 
 /// Discover compatible Python bases for new managed runtimes. Location discovery
 /// precedes PATH because GUI-launched macOS apps do not inherit shell pyenv shims.
 pub(crate) fn discover_managed_runtime_python() -> Option<String> {
-    discover_managed_runtime_python_with(cfg!(windows), run)
+    discover_managed_runtime_python_candidate_with(cfg!(windows), run)
+        .map(|candidate| candidate.executable)
+}
+
+pub(crate) fn discover_managed_runtime_python_candidate() -> Option<PythonCandidate> {
+    discover_managed_runtime_python_candidate_with(cfg!(windows), run)
 }
 
 /// Resolve an acceptable base for a managed runtime. Explicit paths are probed
@@ -498,6 +512,7 @@ mod tests {
                         executable: format!("/python{}.{}", major, minor),
                         major,
                         minor,
+                        patch: 0,
                     })
                     .collect(),
             )

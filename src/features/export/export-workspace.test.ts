@@ -3,6 +3,8 @@ import { describe, expect, test } from "bun:test";
 import {
   getInstallStartFailureOutcome,
   getInstallableMissingPackages,
+  getManagedRuntimeUpgradeCopy,
+  getManagedRuntimeUpgradeNudge,
   mayActivateRoute,
 } from "./export-workspace";
 import type { DepCheckResult, ExportStatus, InstallPhase } from "@/lib/types";
@@ -125,4 +127,19 @@ describe("runtime operation UI guards", () => {
       message: "[error] Failed to start install: spawn failed",
     });
   });
+});
+
+describe("managed runtime upgrade UI", () => {
+  test("nudge renders only for eligible Ultralytics runtime with candidate", () => {
+    expect(getManagedRuntimeUpgradeNudge("ultralytics", { eligible: true, current_version: "3.9.6", candidate_version: "3.12.12" }))
+      .toBe("Python 3.12.12 is available. Set up a new export runtime with it?");
+    expect(getManagedRuntimeUpgradeNudge("ultralytics", { eligible: false, current_version: "3.9.6", candidate_version: null })).toBeNull();
+    expect(getManagedRuntimeUpgradeNudge("rfdetr", { eligible: true, current_version: "3.9.6", candidate_version: "3.12.12" })).toBeNull();
+  });
+
+  test("confirmation copy names candidate and explains verified swap", () => {
+    expect(getManagedRuntimeUpgradeCopy("3.12.12")).toContain("using Python 3.12.12");
+    expect(getManagedRuntimeUpgradeCopy("3.12.12")).toContain("stays in place until the new one is verified");
+  });
+
 });

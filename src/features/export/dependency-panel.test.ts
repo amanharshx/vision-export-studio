@@ -138,6 +138,40 @@ describe("version_too_old preflight results", () => {
 });
 
 describe("DependencyPanel", () => {
+  test("LiteRT Python blocker offers runtime upgrade only when eligible", () => {
+    const route = routesForProvider("ultralytics").find((item) => item.id === "ultralytics.pt.litert");
+    const pythonBlocker: DepCheckResult = {
+      item: "Python 3.10+",
+      status: "version_too_old",
+      reason: "Python 3.9.6 is selected; LiteRT requires Python 3.10 or newer.",
+      install_hint: "Install/select Python 3.10 or newer...",
+    };
+    const render = (eligible: boolean) => renderToStaticMarkup(
+      React.createElement(DependencyPanel, {
+        provider: providers.ultralytics,
+        route: route!,
+        depResults: [pythonBlocker],
+        managedRuntimeUpgradeEligible: eligible,
+        onManagedRuntimeUpgrade: () => {},
+      }),
+    );
+
+    expect(render(true)).toContain("Set up a new export runtime");
+    expect(render(false)).not.toContain("Set up a new export runtime");
+
+    const rfdetrRoute = routesForProvider("rfdetr").find((item) => item.id === "rfdetr.pth.onnx");
+    const rfdetr = renderToStaticMarkup(
+      React.createElement(DependencyPanel, {
+        provider: providers.rfdetr,
+        route: rfdetrRoute!,
+        depResults: [pythonBlocker],
+        managedRuntimeUpgradeEligible: true,
+        onManagedRuntimeUpgrade: () => {},
+      }),
+    );
+    expect(rfdetr).not.toContain("Set up a new export runtime");
+  });
+
   test("old ultralytics renders backend reason and pinned install command", () => {
     const route = routesForProvider("ultralytics").find((item) => item.id === "ultralytics.pt.onnx");
     expect(route).toBeDefined();

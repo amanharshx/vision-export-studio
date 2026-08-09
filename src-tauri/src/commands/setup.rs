@@ -1,5 +1,6 @@
 use crate::commands::environment::{
-    discover_managed_runtime_python, resolve_managed_runtime_base, resolve_python,
+    discover_managed_runtime_python, discover_managed_runtime_python_candidate,
+    resolve_managed_runtime_base, resolve_python,
 };
 use crate::commands::runtime_operations::{
     emit_after_operation_released, RuntimeOperation, RuntimeOperationCoordinator,
@@ -230,7 +231,6 @@ fn build_venv_command(python: &str, venv_path: &Path) -> Command {
     command
 }
 
-#[allow(dead_code)] // Task 3 UI consumes this pure eligibility policy.
 pub(crate) fn should_offer_managed_runtime_rebuild(
     has_python_override: bool,
     current_version: Option<(u8, u8)>,
@@ -239,6 +239,36 @@ pub(crate) fn should_offer_managed_runtime_rebuild(
     !has_python_override
         && current_version.is_some_and(|(major, minor)| major == 3 && minor < 10)
         && has_compatible_candidate
+}
+
+#[derive(serde::Serialize)]
+pub struct ManagedRuntimeRebuildEligibility {
+    pub eligible: bool,
+    pub current_version: String,
+    pub candidate_version: Option<String>,
+}
+
+fn parse_python_version(version: &str) -> Option<(u8, u8)> {
+    let mut parts = version
+        .trim()
+        .strip_prefix("Python ")
+        .unwrap_or(version)
+        .split('.');
+    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+}
+
+fn managed_runtime_python_version(runtime_dir: &str) -> String {
+    let python = venv_python(runtime_dir);
+    let output = Command::new(python).arg("--version").output();
+    output
+        .ok()
+        .and_then(|output| {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let version = if text.trim().is_empty() { stderr } else { text };
+            version.lines().next().map(str::trim).map(str::to_string)
+        })
+        .unwrap_or_default()
 }
 
 fn cleanup_next_runtime(runtime_dir: &Path) {
@@ -563,6 +593,31 @@ pub fn load_settings(app_handle: tauri::AppHandle) -> Result<AppSettings, String
         write_settings(&app_handle, &normalized)?;
     }
     Ok(normalized)
+}
+
+#[tauri::command]
+pub fn get_managed_runtime_rebuild_eligibility(
+    app_handle: tauri::AppHandle,
+) -> Result<ManagedRuntimeRebuildEligibility, String> {
+    let settings = load_settings(app_handle)?;
+    let current_version = managed_runtime_python_version(&settings.runtime_dir);
+    let candidate = discover_managed_runtime_python_candidate();
+    let eligible = should_offer_managed_runtime_rebuild(
+        has_python_override(settings.python_path_override.as_deref()),
+        parse_python_version(&current_version),
+        candidate.is_some(),
+    );
+
+    Ok(ManagedRuntimeRebuildEligibility {
+        eligible,
+        current_version,
+        candidate_version: candidate.map(|candidate| {
+            format!(
+                "{}.{}.{}",
+                candidate.major, candidate.minor, candidate.patch
+            )
+        }),
+    })
 }
 
 #[tauri::command]

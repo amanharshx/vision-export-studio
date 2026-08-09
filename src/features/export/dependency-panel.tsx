@@ -1,5 +1,6 @@
 import type { DepCheckResult, ProviderSpec, RouteSpec } from "@/lib/types";
 import { AlertTriangle, CheckCircle2, CloudDownload, HelpCircle, Loader2, PackageCheck, TerminalSquare, XCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 interface DependencyPanelProps {
   provider: ProviderSpec;
@@ -7,6 +8,8 @@ interface DependencyPanelProps {
   depResults?: DepCheckResult[];
   depCheckLoading?: boolean;
   depCheckError?: string | null;
+  managedRuntimeUpgradeEligible?: boolean;
+  onManagedRuntimeUpgrade?: () => void;
 }
 
 export interface DepItem {
@@ -131,6 +134,8 @@ export function DependencyPanel({
   depResults,
   depCheckLoading,
   depCheckError,
+  managedRuntimeUpgradeEligible = false,
+  onManagedRuntimeUpgrade,
 }: DependencyPanelProps) {
   const sorted = sortDependencyItems(buildDependencyItems(provider, route, depResults), depResults);
 
@@ -153,6 +158,9 @@ export function DependencyPanel({
         const displayHint = isVersionTooOld ? result.install_hint : dep.installHint;
         const reason = isVersionTooOld ? result.reason.trim() : undefined;
         const isManualRemediation = depGroup(dep, result) === 2;
+        const showRuntimeUpgrade = route.id === "ultralytics.pt.litert"
+          && isVersionTooOld
+          && managedRuntimeUpgradeEligible;
 
         return isManualRemediation ? (
           <div
@@ -171,6 +179,13 @@ export function DependencyPanel({
             </span>
             {reason && <span className="ml-6 text-xs text-amber-700">{reason}</span>}
             <span className="ml-6 text-xs text-amber-700">{displayHint}</span>
+            {showRuntimeUpgrade && onManagedRuntimeUpgrade && (
+              <div className="ml-6 mt-1">
+                <Button size="sm" variant="outline" onClick={onManagedRuntimeUpgrade}>
+                  Set up a new export runtime
+                </Button>
+              </div>
+            )}
           </div>
         ) : (
           <div
