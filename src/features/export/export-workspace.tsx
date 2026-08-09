@@ -80,6 +80,66 @@ export function getManagedRuntimeUpgradeCopy(candidateVersion: string): string {
   return `This creates a fresh Python environment using Python ${candidateVersion} and reinstalls Ultralytics. Your current runtime stays in place until the new one is verified. Packages for specific export formats may need reinstalling when you next use them. This may take a few minutes.`;
 }
 
+export function ManagedRuntimeUpgradeDialogBody({
+  candidateVersion,
+  rebuilding,
+  lines,
+  error,
+  mayStart,
+  onCancel,
+  onContinue,
+}: {
+  candidateVersion: string | null;
+  rebuilding: boolean;
+  lines: string[];
+  error: string | null;
+  mayStart: boolean;
+  onCancel: () => void;
+  onContinue: () => void;
+}) {
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle>Set up a new export runtime?</DialogTitle>
+        <DialogDescription>
+          {getManagedRuntimeUpgradeCopy(candidateVersion ?? "a compatible Python")}
+        </DialogDescription>
+      </DialogHeader>
+      {rebuilding && (
+        <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-200 bg-zinc-50 p-3 font-mono text-xs text-zinc-700">
+          {lines.join("\n") || "[info] Setting up new export runtime..."}
+        </div>
+      )}
+      {error && <p className="text-sm text-red-700">{error}</p>}
+      <DialogFooter>
+        <Button variant="outline" onClick={onCancel} disabled={rebuilding}>
+          Cancel
+        </Button>
+        <Button onClick={onContinue} disabled={!mayStart}>
+          {rebuilding ? "Setting up..." : "Continue"}
+        </Button>
+      </DialogFooter>
+    </>
+  );
+}
+
+export function ManagedRuntimeUpgradeDialog({
+  open,
+  onOpenChange,
+  ...bodyProps
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+} & Omit<Parameters<typeof ManagedRuntimeUpgradeDialogBody>[0], "onCancel">) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent showCloseButton={!bodyProps.rebuilding}>
+        <ManagedRuntimeUpgradeDialogBody {...bodyProps} onCancel={() => onOpenChange(false)} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function getUltralyticsRuntimeDisabledReason(runtimeInstallPhase: RuntimeInstallPhase): string | undefined {
   return runtimeInstallPhase === "installing"
     ? undefined
@@ -1608,6 +1668,19 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     </div>
   );
 
+  const managedRuntimeUpgradeDialog = (
+    <ManagedRuntimeUpgradeDialog
+      open={managedRuntimeUpgradeOpen}
+      candidateVersion={managedRuntimeUpgrade?.candidate_version ?? null}
+      rebuilding={managedRuntimeRebuilding}
+      lines={managedRuntimeRebuildLines}
+      error={managedRuntimeRebuildError}
+      mayStart={mayStartRuntimeUpgrade}
+      onOpenChange={setManagedRuntimeUpgradeOpen}
+      onContinue={handleRebuildManagedRuntime}
+    />
+  );
+
   if (view === "drop") {
     return (
       <div className="flex min-h-screen flex-col">
@@ -1642,6 +1715,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
             />
           </div>
         </main>
+        {managedRuntimeUpgradeDialog}
       </div>
     );
   }
@@ -1825,30 +1899,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         } : null}
       />
 
-      <Dialog open={managedRuntimeUpgradeOpen} onOpenChange={setManagedRuntimeUpgradeOpen}>
-        <DialogContent showCloseButton={!managedRuntimeRebuilding}>
-          <DialogHeader>
-            <DialogTitle>Set up a new export runtime?</DialogTitle>
-            <DialogDescription>
-              {getManagedRuntimeUpgradeCopy(managedRuntimeUpgrade?.candidate_version ?? "a compatible Python")}
-            </DialogDescription>
-          </DialogHeader>
-          {managedRuntimeRebuilding && (
-            <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-200 bg-zinc-50 p-3 font-mono text-xs text-zinc-700">
-              {managedRuntimeRebuildLines.join("\n") || "[info] Setting up new export runtime..."}
-            </div>
-          )}
-          {managedRuntimeRebuildError && <p className="text-sm text-red-700">{managedRuntimeRebuildError}</p>}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setManagedRuntimeUpgradeOpen(false)} disabled={managedRuntimeRebuilding}>
-              Cancel
-            </Button>
-            <Button onClick={handleRebuildManagedRuntime} disabled={!mayStartRuntimeUpgrade}>
-              {managedRuntimeRebuilding ? "Setting up..." : "Continue"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {managedRuntimeUpgradeDialog}
     </div>
   );
 }

@@ -1,11 +1,15 @@
 // @ts-expect-error Bun provides this module at test runtime.
 import { describe, expect, test } from "bun:test";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { Dialog } from "@/components/ui/dialog";
 import {
   getInstallStartFailureOutcome,
   getInstallableMissingPackages,
   getManagedRuntimeRebuildFailureMessage,
   getManagedRuntimeUpgradeCopy,
   getManagedRuntimeUpgradeNudge,
+  ManagedRuntimeUpgradeDialogBody,
   mayStartManagedRuntimeUpgrade,
   mayActivateRoute,
 } from "./export-workspace";
@@ -132,6 +136,26 @@ describe("runtime operation UI guards", () => {
 });
 
 describe("managed runtime upgrade UI", () => {
+  test("runtime upgrade dialog container renders when open", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(
+        Dialog,
+        { open: true },
+        React.createElement(ManagedRuntimeUpgradeDialogBody, {
+          candidateVersion: "3.12.12",
+          rebuilding: false,
+          lines: [],
+          error: null,
+          mayStart: true,
+          onCancel: () => {},
+          onContinue: () => {},
+        }),
+      ),
+    );
+
+    expect(html).toContain("Set up a new export runtime?");
+  });
+
   test("runtime upgrade is available only while every operation is idle", () => {
     expect(mayStartManagedRuntimeUpgrade("starting", "idle", "idle", false)).toBe(false);
     expect(mayStartManagedRuntimeUpgrade("running", "idle", "idle", false)).toBe(false);
