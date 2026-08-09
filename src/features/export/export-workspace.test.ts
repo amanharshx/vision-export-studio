@@ -7,7 +7,6 @@ import {
   getInstallStartFailureOutcome,
   getInstallableMissingPackages,
   getManagedRuntimeRebuildFailureMessage,
-  getManagedRuntimeUpgradeCopy,
   getManagedRuntimeUpgradeNudge,
   ManagedRuntimeUpgradeDialogBody,
   mayStartManagedRuntimeUpgrade,
@@ -155,6 +154,9 @@ describe("managed runtime upgrade UI", () => {
 
     expect(html).toContain("Set up a new export runtime?");
     expect(html).toContain("<li");
+    expect(html).toContain("using Python 3.12.12");
+    expect(html).toContain("Keep your current runtime if setup fails");
+    expect(html).not.toContain("Ultralytics");
   });
 
   test("runtime upgrade is available only while every operation is idle", () => {
@@ -179,13 +181,6 @@ describe("managed runtime upgrade UI", () => {
       { eligible: true, current_version: "3.9.6", candidate_version: "3.12.12" },
       false,
     )).toBeNull();
-  });
-
-  test("confirmation copy names candidate, preserves failure assurance, and omits provider", () => {
-    const copy = getManagedRuntimeUpgradeCopy("3.12.12");
-    expect(copy).toContain("using Python 3.12.12");
-    expect(copy).toContain("Keep your current runtime if setup fails");
-    expect(copy).not.toContain("Ultralytics");
   });
 
   test("rebuild coordinator refusal is not reported as a failure", () => {

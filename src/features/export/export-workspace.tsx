@@ -75,11 +75,6 @@ export function getManagedRuntimeUpgradeNudge(
   return `Python ${eligibility.candidate_version} is available. Set up a new export runtime with it?`;
 }
 
-export function getManagedRuntimeUpgradeCopy(candidateVersion: string): string {
-  const details = getManagedRuntimeUpgradeDetails(candidateVersion);
-  return `This will:\n• ${details.steps.join("\n• ")}\n\n${details.note}`;
-}
-
 export function getManagedRuntimeUpgradeDetails(candidateVersion: string): {
   steps: string[];
   note: string;
@@ -1542,7 +1537,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
               </EnvCard>
 
               <EnvCard
-                title="Ultralytics"
+                title="Ultralytics YOLO"
                 status={
                   redetecting || (!envInfo && !envError)
                     ? "loading"
