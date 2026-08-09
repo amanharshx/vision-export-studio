@@ -238,15 +238,19 @@ Vision Export Studio now defaults to managed runtime in:
 ~/.vision-export-studio/.venv
 ```
 
-Vision Export Studio creates this environment automatically and installs `ultralytics` there for the base runtime. Roboflow RF-DETR dependencies (`rfdetr`) install on demand the first time you pick an RF-DETR route.
+Vision Export Studio creates this environment automatically. Export-format packages, including `ultralytics` and Roboflow RF-DETR (`rfdetr`), install on demand when you pick a route.
 
 Ultralytics exports require Ultralytics 8.4.80 or newer; LiteRT requires 8.4.83 or newer and Python 3.10+. The app reports incompatible runtime versions before export and offers an in-app Ultralytics update when possible.
+
+- managed runtime selection prefers installed Python `3.12` and supports Python `3.10` through `3.13`
+- a managed runtime below Python `3.10` can be upgraded with **Set up a new export runtime** on the Environment panel's Python card
+- the upgrade creates a fresh Python environment; export-format packages reinstall on demand afterwards
+- an explicit Python override still takes precedence over managed selection
 
 Current bootstrap limitation:
 
 - first-time runtime creation still depends on Python 3 installed on the host machine
-- on Windows, Vision Export Studio checks `python`, `py -3`, then `python3`
-- restart Vision Export Studio after installing Python or changing `PATH`
+- restart Vision Export Studio after installing Python
 - bundled Python is not implemented yet
 
 ---
