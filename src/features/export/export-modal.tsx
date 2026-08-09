@@ -51,6 +51,9 @@ interface ExportModalProps {
   outputDir?: string;
   completedOutputDir?: string | null;
   onShowExportFolder: () => void;
+  managedRuntimeUpgradeEligible: boolean;
+  managedRuntimeUpgradeDisabled: boolean;
+  onManagedRuntimeUpgrade: () => void;
   rfdetrSummary?: {
     variantMode: RfDetrVariantMode;
     detectedClass?: string | null;
@@ -173,6 +176,9 @@ export function ExportModal({
   outputDir,
   completedOutputDir,
   onShowExportFolder,
+  managedRuntimeUpgradeEligible,
+  managedRuntimeUpgradeDisabled,
+  onManagedRuntimeUpgrade,
   rfdetrSummary,
 }: ExportModalProps) {
   const format = formats[route.targetFormat];
@@ -296,6 +302,9 @@ export function ExportModal({
                 depResults={depResults}
                 depCheckLoading={depCheckLoading}
                 depCheckError={depCheckError}
+                managedRuntimeUpgradeEligible={managedRuntimeUpgradeEligible}
+                managedRuntimeUpgradeDisabled={managedRuntimeUpgradeDisabled}
+                onManagedRuntimeUpgrade={onManagedRuntimeUpgrade}
               />
             </div>
 

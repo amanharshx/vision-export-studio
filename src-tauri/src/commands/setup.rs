@@ -1,4 +1,11 @@
-use crate::commands::environment::resolve_python;
+use crate::commands::environment::{
+    discover_managed_runtime_python, discover_managed_runtime_python_candidate,
+    resolve_managed_runtime_base, resolve_python,
+};
+use crate::commands::runtime_operations::{
+    emit_after_operation_released, RuntimeOperation, RuntimeOperationCoordinator,
+    RuntimeOperationGuard,
+};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -110,7 +117,7 @@ fn default_runtime_dir_from_home(home_dir: &str) -> Result<String, String> {
     ))
 }
 
-fn default_runtime_dir(app_handle: &tauri::AppHandle) -> Result<String, String> {
+pub(crate) fn default_runtime_dir(app_handle: &tauri::AppHandle) -> Result<String, String> {
     let home_dir = app_handle
         .path()
         .home_dir()
@@ -119,13 +126,17 @@ fn default_runtime_dir(app_handle: &tauri::AppHandle) -> Result<String, String> 
 }
 
 pub(crate) fn venv_python(runtime_dir: &str) -> String {
+    venv_python_in(runtime_dir, ".venv")
+}
+
+fn venv_python_in(runtime_dir: &str, venv_name: &str) -> String {
     #[cfg(windows)]
     {
-        format!("{}/.venv/Scripts/python.exe", runtime_dir)
+        format!("{}/{}/Scripts/python.exe", runtime_dir, venv_name)
     }
     #[cfg(not(windows))]
     {
-        format!("{}/.venv/bin/python", runtime_dir)
+        format!("{}/{}/bin/python", runtime_dir, venv_name)
     }
 }
 
@@ -220,12 +231,109 @@ fn build_venv_command(python: &str, venv_path: &Path) -> Command {
     command
 }
 
+const MANAGED_RUNTIME_VERSION_VERIFY_SCRIPT: &str =
+    "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] <= (3, 13) else 1)";
+
+fn build_managed_runtime_rebuild_commands(base_python: &str, runtime_dir: &str) -> Vec<Command> {
+    let next_venv = Path::new(runtime_dir).join(".venv-next");
+    let next_python = venv_python_in(runtime_dir, ".venv-next");
+
+    let mut verify_version = Command::new(&next_python);
+    verify_version.args(["-c", MANAGED_RUNTIME_VERSION_VERIFY_SCRIPT]);
+    let mut verify_pip = Command::new(&next_python);
+    verify_pip.args(["-m", "pip", "--version"]);
+
+    vec![
+        build_venv_command(base_python, &next_venv),
+        verify_version,
+        verify_pip,
+    ]
+}
+
+pub(crate) fn should_offer_managed_runtime_rebuild(
+    has_python_override: bool,
+    current_version: Option<(u8, u8)>,
+    has_compatible_candidate: bool,
+) -> bool {
+    !has_python_override
+        && current_version.is_some_and(|(major, minor)| major == 3 && minor < 10)
+        && has_compatible_candidate
+}
+
+#[derive(serde::Serialize)]
+pub struct ManagedRuntimeRebuildEligibility {
+    pub eligible: bool,
+    pub current_version: String,
+    pub candidate_version: Option<String>,
+}
+
+fn parse_python_version(version: &str) -> Option<(u8, u8)> {
+    let mut parts = version
+        .trim()
+        .strip_prefix("Python ")
+        .unwrap_or(version)
+        .split('.');
+    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+}
+
+fn managed_runtime_python_version(runtime_dir: &str) -> String {
+    let python = venv_python(runtime_dir);
+    let output = Command::new(python).arg("--version").output();
+    output
+        .ok()
+        .and_then(|output| {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let version = if text.trim().is_empty() { stderr } else { text };
+            version.lines().next().map(str::trim).map(str::to_string)
+        })
+        .unwrap_or_default()
+}
+
+fn cleanup_next_runtime(runtime_dir: &Path) {
+    let _ = std::fs::remove_dir_all(runtime_dir.join(".venv-next"));
+}
+
+pub(crate) fn sweep_runtime_rebuild_artifacts(runtime_dir: &Path) {
+    for name in [".venv-old", ".venv-next"] {
+        let _ = std::fs::remove_dir_all(runtime_dir.join(name));
+    }
+}
+
+fn swap_verified_runtime(runtime_dir: &Path) -> Result<(), String> {
+    let current = runtime_dir.join(".venv");
+    let next = runtime_dir.join(".venv-next");
+    let old = runtime_dir.join(".venv-old");
+
+    let _ = std::fs::remove_dir_all(&old);
+    std::fs::rename(&current, &old)
+        .map_err(|error| format!("failed to preserve current runtime: {}", error))?;
+    if let Err(error) = std::fs::rename(&next, &current) {
+        let _ = std::fs::rename(&old, &current);
+        return Err(format!("failed to activate rebuilt runtime: {}", error));
+    }
+    let _ = std::fs::remove_dir_all(old);
+    Ok(())
+}
+
+fn complete_managed_runtime_rebuild(
+    runtime_dir: &Path,
+    rebuild_result: Result<(), String>,
+) -> Result<(), String> {
+    let result = rebuild_result.and_then(|()| swap_verified_runtime(runtime_dir));
+    if result.is_err() {
+        cleanup_next_runtime(runtime_dir);
+    }
+    result
+}
+
 /// Spawn a child process, stream its stdout/stderr as Tauri events, and emit
 /// `setup:finished` or `setup:failed` when it exits.  Returns the session id.
 fn spawn_and_stream(
     app_handle: tauri::AppHandle,
     sessions: Arc<Mutex<HashMap<String, Child>>>,
     mut cmd: Command,
+    operation_guard: RuntimeOperationGuard,
 ) -> Result<String, String> {
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -299,6 +407,7 @@ fn spawn_and_stream(
     let sid_wait = session_id.clone();
     let sessions_arc = Arc::clone(&sessions);
     std::thread::spawn(move || {
+        let mut operation_guard = Some(operation_guard);
         let _ = stdout_handle.join();
         let _ = stderr_handle.join();
 
@@ -306,13 +415,15 @@ fn spawn_and_stream(
             let mut map = match sessions_arc.lock() {
                 Ok(m) => m,
                 Err(_) => {
-                    let _ = ah_wait.emit(
-                        "setup:failed",
-                        SetupFailedPayload {
-                            session_id: sid_wait.clone(),
-                            error: "sessions lock poisoned during wait".to_string(),
-                        },
-                    );
+                    emit_after_operation_released(operation_guard.take().unwrap(), || {
+                        let _ = ah_wait.emit(
+                            "setup:failed",
+                            SetupFailedPayload {
+                                session_id: sid_wait.clone(),
+                                error: "sessions lock poisoned during wait".to_string(),
+                            },
+                        );
+                    });
                     return;
                 }
             };
@@ -326,36 +437,152 @@ fn spawn_and_stream(
             Some(mut child) => match child.wait() {
                 Ok(status) => {
                     if status.success() {
-                        let _ = ah_wait.emit(
-                            "setup:finished",
-                            SetupFinishedPayload {
-                                session_id: sid_wait,
-                            },
-                        );
+                        emit_after_operation_released(operation_guard.take().unwrap(), || {
+                            let _ = ah_wait.emit(
+                                "setup:finished",
+                                SetupFinishedPayload {
+                                    session_id: sid_wait,
+                                },
+                            );
+                        });
                     } else {
                         let code = status.code().unwrap_or(-1);
+                        emit_after_operation_released(operation_guard.take().unwrap(), || {
+                            let _ = ah_wait.emit(
+                                "setup:failed",
+                                SetupFailedPayload {
+                                    session_id: sid_wait,
+                                    error: format!("process exited with code {}", code),
+                                },
+                            );
+                        });
+                    }
+                }
+                Err(e) => {
+                    emit_after_operation_released(operation_guard.take().unwrap(), || {
                         let _ = ah_wait.emit(
                             "setup:failed",
                             SetupFailedPayload {
                                 session_id: sid_wait,
-                                error: format!("process exited with code {}", code),
+                                error: format!("wait error: {}", e),
                             },
                         );
-                    }
-                }
-                Err(e) => {
-                    let _ = ah_wait.emit(
-                        "setup:failed",
-                        SetupFailedPayload {
-                            session_id: sid_wait,
-                            error: format!("wait error: {}", e),
-                        },
-                    );
+                    });
                 }
             },
         }
     });
 
+    Ok(session_id)
+}
+
+/// Reuse setup stdout/stderr and terminal events for a sequential runtime rebuild.
+fn spawn_and_stream_rebuild(
+    app_handle: tauri::AppHandle,
+    sessions: Arc<Mutex<HashMap<String, Child>>>,
+    commands: Vec<Command>,
+    runtime_dir: PathBuf,
+    operation_guard: RuntimeOperationGuard,
+) -> Result<String, String> {
+    let session_id = Uuid::new_v4().to_string();
+    let sid_thread = session_id.clone();
+    std::thread::spawn(move || {
+        let operation_guard = operation_guard;
+        let result = commands
+            .into_iter()
+            .try_for_each(|mut cmd| -> Result<(), String> {
+                cmd.stdout(Stdio::piped());
+                cmd.stderr(Stdio::piped());
+                let mut child = cmd
+                    .spawn()
+                    .map_err(|error| format!("failed to spawn process: {}", error))?;
+                let stdout = child
+                    .stdout
+                    .take()
+                    .ok_or_else(|| "no stdout handle".to_string())?;
+                let stderr = child
+                    .stderr
+                    .take()
+                    .ok_or_else(|| "no stderr handle".to_string())?;
+                {
+                    let mut map = sessions
+                        .lock()
+                        .map_err(|error| format!("sessions lock poisoned: {}", error))?;
+                    map.insert(sid_thread.clone(), child);
+                }
+
+                let ah_out = app_handle.clone();
+                let sid_out = sid_thread.clone();
+                let stdout_handle = std::thread::spawn(move || {
+                    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                        let _ = ah_out.emit(
+                            "setup:stdout",
+                            SetupLinePayload {
+                                session_id: sid_out.clone(),
+                                line,
+                            },
+                        );
+                    }
+                });
+                let ah_err = app_handle.clone();
+                let sid_err = sid_thread.clone();
+                let stderr_handle = std::thread::spawn(move || {
+                    for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                        let _ = ah_err.emit(
+                            "setup:stderr",
+                            SetupLinePayload {
+                                session_id: sid_err.clone(),
+                                line,
+                            },
+                        );
+                    }
+                });
+                let _ = stdout_handle.join();
+                let _ = stderr_handle.join();
+
+                let mut child = sessions
+                    .lock()
+                    .map_err(|_| "sessions lock poisoned during wait".to_string())?
+                    .remove(&sid_thread)
+                    .ok_or_else(|| "setup session was cancelled".to_string())?;
+                let status = child
+                    .wait()
+                    .map_err(|error| format!("wait error: {}", error))?;
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "process exited with code {}",
+                        status.code().unwrap_or(-1)
+                    ))
+                }
+            });
+
+        let result = complete_managed_runtime_rebuild(&runtime_dir, result);
+        match result {
+            Ok(()) => {
+                emit_after_operation_released(operation_guard, || {
+                    let _ = app_handle.emit(
+                        "setup:finished",
+                        SetupFinishedPayload {
+                            session_id: sid_thread,
+                        },
+                    );
+                });
+            }
+            Err(error) => {
+                emit_after_operation_released(operation_guard, || {
+                    let _ = app_handle.emit(
+                        "setup:failed",
+                        SetupFailedPayload {
+                            session_id: sid_thread,
+                            error,
+                        },
+                    );
+                });
+            }
+        }
+    });
     Ok(session_id)
 }
 
@@ -396,9 +623,35 @@ pub fn load_settings(app_handle: tauri::AppHandle) -> Result<AppSettings, String
 }
 
 #[tauri::command]
+pub fn get_managed_runtime_rebuild_eligibility(
+    app_handle: tauri::AppHandle,
+) -> Result<ManagedRuntimeRebuildEligibility, String> {
+    let settings = load_settings(app_handle)?;
+    let current_version = managed_runtime_python_version(&settings.runtime_dir);
+    let candidate = discover_managed_runtime_python_candidate();
+    let eligible = should_offer_managed_runtime_rebuild(
+        has_python_override(settings.python_path_override.as_deref()),
+        parse_python_version(&current_version),
+        candidate.is_some(),
+    );
+
+    Ok(ManagedRuntimeRebuildEligibility {
+        eligible,
+        current_version,
+        candidate_version: candidate.map(|candidate| {
+            format!(
+                "{}.{}.{}",
+                candidate.major, candidate.minor, candidate.patch
+            )
+        }),
+    })
+}
+
+#[tauri::command]
 pub async fn create_runtime_venv(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, SetupState>,
+    runtime_operations: tauri::State<'_, RuntimeOperationCoordinator>,
     runtime_dir: String,
 ) -> Result<String, String> {
     let managed_runtime_dir = ensure_managed_runtime_dir(&app_handle, &runtime_dir)?;
@@ -410,11 +663,45 @@ pub async fn create_runtime_venv(
     let venv_path = Path::new(&managed_runtime_dir).join(".venv");
 
     // Build argv: {python} -m venv {runtime_dir}/.venv
-    let python = resolve_python(None)?;
+    let python = match discover_managed_runtime_python() {
+        Some(python) => python,
+        None => resolve_python(None)?,
+    };
     let cmd = build_venv_command(&python, &venv_path);
 
     let sessions = Arc::clone(&state.sessions);
-    spawn_and_stream(app_handle, sessions, cmd)
+    let operation_guard = runtime_operations.acquire(RuntimeOperation::Setup)?;
+    spawn_and_stream(app_handle, sessions, cmd, operation_guard)
+}
+
+#[tauri::command]
+pub async fn rebuild_managed_runtime(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, SetupState>,
+    runtime_operations: tauri::State<'_, RuntimeOperationCoordinator>,
+    python_path: Option<String>,
+) -> Result<String, String> {
+    let settings = load_settings(app_handle.clone())?;
+    if has_python_override(settings.python_path_override.as_deref()) {
+        return Err(
+            "cannot rebuild managed runtime while a Python override is configured".to_string(),
+        );
+    }
+    let managed_runtime_dir = ensure_managed_runtime_dir(&app_handle, &settings.runtime_dir)?;
+    let sessions = Arc::clone(&state.sessions);
+    let operation_guard = runtime_operations.acquire(RuntimeOperation::Rebuild)?;
+
+    let base_python = resolve_managed_runtime_base(python_path.as_deref())?;
+    let runtime_path = PathBuf::from(&managed_runtime_dir);
+    cleanup_next_runtime(&runtime_path);
+
+    spawn_and_stream_rebuild(
+        app_handle,
+        sessions,
+        build_managed_runtime_rebuild_commands(&base_python, &managed_runtime_dir),
+        runtime_path,
+        operation_guard,
+    )
 }
 
 #[tauri::command]
@@ -462,6 +749,135 @@ pub fn save_output_dir_override(
 mod tests {
     use super::*;
     use std::fs::{self, File};
+
+    #[test]
+    fn rebuild_eligibility_requires_old_managed_python_and_discovered_candidate() {
+        assert!(!should_offer_managed_runtime_rebuild(
+            true,
+            Some((3, 9)),
+            true
+        ));
+        for version in [(3, 10), (3, 11), (3, 12), (3, 13)] {
+            assert!(!should_offer_managed_runtime_rebuild(
+                false,
+                Some(version),
+                true
+            ));
+        }
+        assert!(should_offer_managed_runtime_rebuild(
+            false,
+            Some((3, 9)),
+            true
+        ));
+        assert!(!should_offer_managed_runtime_rebuild(
+            false,
+            Some((3, 9)),
+            false
+        ));
+    }
+
+    #[test]
+    fn swap_verified_runtime_replaces_old_venv_and_cleans_backup() {
+        let runtime_dir = test_runtime_dir("runtime-swap");
+        let current = Path::new(&runtime_dir).join(".venv");
+        let next = Path::new(&runtime_dir).join(".venv-next");
+        fs::create_dir_all(&current).unwrap();
+        fs::create_dir_all(&next).unwrap();
+        fs::write(current.join("marker"), "old").unwrap();
+        fs::write(next.join("marker"), "new").unwrap();
+
+        swap_verified_runtime(Path::new(&runtime_dir)).unwrap();
+
+        assert_eq!(fs::read_to_string(current.join("marker")).unwrap(), "new");
+        assert!(!Path::new(&runtime_dir).join(".venv-old").exists());
+        assert!(!next.exists());
+        fs::remove_dir_all(runtime_dir).unwrap();
+    }
+
+    #[test]
+    fn failed_verification_preserves_current_runtime_and_removes_next() {
+        let runtime_dir = test_runtime_dir("runtime-failed-verification");
+        let current = Path::new(&runtime_dir).join(".venv");
+        let next = Path::new(&runtime_dir).join(".venv-next");
+        fs::create_dir_all(&current).unwrap();
+        fs::create_dir_all(&next).unwrap();
+        let marker = current.join("marker");
+        fs::write(&marker, b"old runtime bytes").unwrap();
+        fs::write(next.join("marker"), b"new runtime bytes").unwrap();
+        let before = fs::read(&marker).unwrap();
+
+        cleanup_next_runtime(Path::new(&runtime_dir));
+
+        assert_eq!(fs::read(&marker).unwrap(), before);
+        assert!(!next.exists());
+        fs::remove_dir_all(runtime_dir).unwrap();
+    }
+
+    #[test]
+    fn rebuild_commands_create_and_verify_python_without_provider_install() {
+        let commands =
+            build_managed_runtime_rebuild_commands("/opt/python3.12/bin/python3", "/tmp/runtime");
+        let command_args = commands
+            .iter()
+            .map(|command| {
+                command
+                    .get_args()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(command_args.len(), 3);
+        assert_eq!(
+            command_args[0],
+            vec!["-m", "venv", "/tmp/runtime/.venv-next"]
+        );
+        assert_eq!(command_args[1][0], "-c");
+        assert!(command_args[1][1].contains("sys.version_info"));
+        assert_eq!(command_args[2], vec!["-m", "pip", "--version"]);
+        assert!(!command_args
+            .iter()
+            .flatten()
+            .any(|arg| arg.contains("ultralytics")));
+    }
+
+    #[test]
+    fn unusable_pip_preserves_current_runtime_and_removes_next() {
+        let runtime_dir = test_runtime_dir("runtime-pip-verification-failure");
+        let current = Path::new(&runtime_dir).join(".venv");
+        let next = Path::new(&runtime_dir).join(".venv-next");
+        fs::create_dir_all(&current).unwrap();
+        fs::create_dir_all(&next).unwrap();
+        fs::write(current.join("marker"), "old").unwrap();
+        fs::write(next.join("marker"), "new").unwrap();
+
+        let error = complete_managed_runtime_rebuild(
+            Path::new(&runtime_dir),
+            Err("pip verification failed".to_string()),
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "pip verification failed");
+        assert_eq!(fs::read_to_string(current.join("marker")).unwrap(), "old");
+        assert!(!next.exists());
+        fs::remove_dir_all(runtime_dir).unwrap();
+    }
+
+    #[test]
+    fn startup_sweep_removes_only_exact_rebuild_artifacts() {
+        let runtime_dir = test_runtime_dir("runtime-sweep");
+        for name in [".venv", ".venv-old", ".venv-next", ".venv-backup"] {
+            fs::create_dir_all(Path::new(&runtime_dir).join(name)).unwrap();
+        }
+
+        sweep_runtime_rebuild_artifacts(Path::new(&runtime_dir));
+
+        assert!(Path::new(&runtime_dir).join(".venv").exists());
+        assert!(!Path::new(&runtime_dir).join(".venv-old").exists());
+        assert!(!Path::new(&runtime_dir).join(".venv-next").exists());
+        assert!(Path::new(&runtime_dir).join(".venv-backup").exists());
+        fs::remove_dir_all(runtime_dir).unwrap();
+    }
 
     #[test]
     fn default_runtime_dir_uses_vision_export_studio_dir_in_home() {

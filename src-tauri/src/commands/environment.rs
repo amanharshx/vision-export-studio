@@ -1,6 +1,6 @@
 use crate::commands::deps;
 use crate::commands::setup::{load_settings, venv_python, venv_yolo};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(serde::Serialize)]
@@ -47,10 +47,19 @@ fn run(argv: &[&str]) -> Result<(String, String, bool), String> {
 }
 
 const PYTHON_PROBE_MARKER: &str = "__VES_PYTHON__=";
-const PYTHON_PROBE_SCRIPT: &str = "import os, sys; print('__VES_PYTHON__=' + os.path.abspath(sys.executable)); raise SystemExit(0 if sys.version_info[0] == 3 else 1)";
+const PYTHON_VERSION_PROBE_MARKER: &str = "__VES_PYTHON_VERSION__=";
+const PYTHON_PROBE_SCRIPT: &str = "import os, sys; print('__VES_PYTHON__=' + os.path.abspath(sys.executable)); print('__VES_PYTHON_VERSION__={}.{}.{}'.format(*sys.version_info[:3])); raise SystemExit(0 if sys.version_info[0] == 3 else 1)";
 
 const WINDOWS_PYTHON_CANDIDATES: &[&[&str]] = &[&["python"], &["py", "-3"], &["python3"]];
 const UNIX_PYTHON_CANDIDATES: &[&[&str]] = &[&["python3"], &["python"]];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PythonCandidate {
+    pub executable: String,
+    pub major: u8,
+    pub minor: u8,
+    pub patch: u8,
+}
 
 fn python_candidates(is_windows: bool) -> &'static [&'static [&'static str]] {
     if is_windows {
@@ -71,6 +80,33 @@ fn parse_python_probe(stdout: &str, success: bool) -> Option<String> {
             .map(str::trim)
             .filter(|path| !path.is_empty())
             .map(str::to_string)
+    })
+}
+
+fn parse_python_probe_candidate(stdout: &str, success: bool) -> Option<PythonCandidate> {
+    if !success {
+        return None;
+    }
+
+    let executable = parse_python_probe(stdout, true)?;
+    let version = stdout.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix(PYTHON_VERSION_PROBE_MARKER)
+            .and_then(|version| {
+                let mut parts = version.trim().split('.');
+                Some((
+                    parts.next()?.parse().ok()?,
+                    parts.next()?.parse().ok()?,
+                    parts.next()?.parse().ok()?,
+                ))
+            })
+    })?;
+
+    Some(PythonCandidate {
+        executable,
+        major: version.0,
+        minor: version.1,
+        patch: version.2,
     })
 }
 
@@ -95,6 +131,175 @@ where
         candidate.join(" "),
         detail
     ))
+}
+
+fn probe_python_candidate<F>(candidate: &[&str], runner: &F) -> Result<PythonCandidate, String>
+where
+    F: Fn(&[&str]) -> Result<(String, String, bool), String>,
+{
+    let mut argv = candidate.to_vec();
+    argv.push("-c");
+    argv.push(PYTHON_PROBE_SCRIPT);
+
+    let (stdout, stderr, success) = runner(&argv)?;
+    parse_python_probe_candidate(&stdout, success).ok_or_else(|| {
+        let detail = first_line(&stderr)
+            .or_else(|| first_line(&stdout))
+            .unwrap_or("probe returned no valid Python 3 executable and version");
+        format!("{} failed validation: {}", candidate.join(" "), detail)
+    })
+}
+
+fn parse_windows_py_zero_p(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let remainder = line.strip_prefix('-')?;
+            let (_, path) = remainder.split_once(char::is_whitespace)?;
+            let path = path.trim().trim_start_matches('*').trim();
+            (!path.is_empty()).then_some(path.to_string())
+        })
+        .collect()
+}
+
+fn directory_entries_matching(dir: &Path, prefix: &str) -> Vec<PathBuf> {
+    let mut entries = std::fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(prefix))
+        })
+        .collect::<Vec<_>>();
+    entries.sort();
+    entries
+}
+
+fn unix_location_candidates(
+    framework_versions: &Path,
+    homebrew_bin: &Path,
+    usr_local_bin: &Path,
+    pyenv_versions: &Path,
+) -> Vec<PathBuf> {
+    let mut candidates = directory_entries_matching(framework_versions, "3.")
+        .into_iter()
+        .map(|version_dir| version_dir.join("bin/python3"))
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    candidates.extend(
+        directory_entries_matching(homebrew_bin, "python3.")
+            .into_iter()
+            .filter(|path| path.is_file()),
+    );
+    candidates.extend(
+        directory_entries_matching(usr_local_bin, "python3.")
+            .into_iter()
+            .filter(|path| path.is_file()),
+    );
+    candidates.extend(
+        directory_entries_matching(pyenv_versions, "")
+            .into_iter()
+            .map(|version_dir| version_dir.join("bin/python"))
+            .filter(|path| path.is_file()),
+    );
+    candidates
+}
+
+// Prefer 3.12 because rfdetr[tflite] declares every dependency only for 3.12.
+// Keep 3.14+ out: coremltools has wheels through cp313, not cp314. Python 3.10
+// is floor because LiteRT, torch, and rfdetr require it or newer.
+fn select_managed_runtime_python(candidates: Vec<PythonCandidate>) -> Option<PythonCandidate> {
+    [(3, 12), (3, 13), (3, 11), (3, 10)]
+        .iter()
+        .find_map(|&(major, minor)| {
+            candidates
+                .iter()
+                .find(|candidate| candidate.major == major && candidate.minor == minor)
+                .cloned()
+        })
+}
+
+fn discover_managed_runtime_python_candidate_with<F>(
+    is_windows: bool,
+    runner: F,
+) -> Option<PythonCandidate>
+where
+    F: Fn(&[&str]) -> Result<(String, String, bool), String>,
+{
+    let mut commands = Vec::<Vec<String>>::new();
+    if is_windows {
+        if let Ok((stdout, _, true)) = runner(&["py", "-0p"]) {
+            commands.extend(
+                parse_windows_py_zero_p(&stdout)
+                    .into_iter()
+                    .map(|path| vec![path]),
+            );
+        }
+    } else {
+        let pyenv_versions = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(".pyenv/versions"))
+            .unwrap_or_default();
+        commands.extend(
+            unix_location_candidates(
+                Path::new("/Library/Frameworks/Python.framework/Versions"),
+                Path::new("/opt/homebrew/bin"),
+                Path::new("/usr/local/bin"),
+                &pyenv_versions,
+            )
+            .into_iter()
+            .filter_map(|path| path.to_str().map(|path| vec![path.to_string()])),
+        );
+    }
+    commands.extend(
+        python_candidates(is_windows)
+            .iter()
+            .map(|candidate| candidate.iter().map(|arg| (*arg).to_string()).collect()),
+    );
+
+    let candidates = commands
+        .iter()
+        .filter_map(|command| {
+            let argv = command.iter().map(String::as_str).collect::<Vec<_>>();
+            probe_python_candidate(&argv, &runner).ok()
+        })
+        .collect();
+    select_managed_runtime_python(candidates)
+}
+
+/// Discover compatible Python bases for new managed runtimes. Location discovery
+/// precedes PATH because GUI-launched macOS apps do not inherit shell pyenv shims.
+pub(crate) fn discover_managed_runtime_python() -> Option<String> {
+    discover_managed_runtime_python_candidate_with(cfg!(windows), run)
+        .map(|candidate| candidate.executable)
+}
+
+pub(crate) fn discover_managed_runtime_python_candidate() -> Option<PythonCandidate> {
+    discover_managed_runtime_python_candidate_with(cfg!(windows), run)
+}
+
+/// Resolve an acceptable base for a managed runtime. Explicit paths are probed
+/// and then held to the managed-runtime support policy.
+pub(crate) fn resolve_managed_runtime_base(python_path: Option<&str>) -> Result<String, String> {
+    if let Some(path) = python_path {
+        let candidate = probe_python_candidate(&[path], &run)
+            .map_err(|error| format!("provided Python failed validation: {}", error))?;
+        return select_managed_runtime_python(vec![candidate])
+            .map(|candidate| candidate.executable)
+            .ok_or_else(|| {
+                "provided Python is not supported for managed runtime setup; choose Python 3.10 through 3.13".to_string()
+            });
+    }
+
+    discover_managed_runtime_python().ok_or_else(|| {
+        "no compatible Python 3.10 through 3.13 interpreter found for managed runtime setup"
+            .to_string()
+    })
 }
 
 fn resolve_python_with<F>(
@@ -295,6 +500,81 @@ pub async fn detect_environment(
 mod tests {
     use super::*;
     use std::cell::RefCell;
+    use std::fs::{self, File};
+
+    #[test]
+    fn managed_runtime_ranking_prefers_supported_versions_in_order() {
+        let select = |versions: &[(u8, u8)]| {
+            select_managed_runtime_python(
+                versions
+                    .iter()
+                    .map(|&(major, minor)| PythonCandidate {
+                        executable: format!("/python{}.{}", major, minor),
+                        major,
+                        minor,
+                        patch: 0,
+                    })
+                    .collect(),
+            )
+            .map(|candidate| (candidate.major, candidate.minor))
+        };
+
+        assert_eq!(select(&[(3, 9), (3, 12), (3, 13)]), Some((3, 12)));
+        assert_eq!(select(&[(3, 13), (3, 11)]), Some((3, 13)));
+        assert_eq!(select(&[(3, 10), (3, 14)]), Some((3, 10)));
+        assert_eq!(select(&[(3, 14)]), None);
+        assert_eq!(select(&[(3, 9)]), None);
+        assert_eq!(select(&[]), None);
+    }
+
+    #[test]
+    fn windows_py_zero_p_parser_skips_noise() {
+        let output = "Installed Pythons found by py Launcher for Windows\r\n -3.13-64 * C:\\\\Users\\\\test\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe\r\nnot a version entry\r\n -V:3.12-64 C:\\\\Python312\\\\python.exe\r\n";
+
+        assert_eq!(
+            parse_windows_py_zero_p(output),
+            vec![
+                "C:\\\\Users\\\\test\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe",
+                "C:\\\\Python312\\\\python.exe",
+            ]
+        );
+    }
+
+    #[test]
+    fn unix_location_expansion_finds_known_install_paths() {
+        let root =
+            std::env::temp_dir().join(format!("ves-python-locations-{}", uuid::Uuid::new_v4()));
+        let framework_versions = root.join("Library/Frameworks/Python.framework/Versions");
+        let homebrew_bin = root.join("opt/homebrew/bin");
+        let usr_local_bin = root.join("usr/local/bin");
+        let pyenv_versions = root.join(".pyenv/versions");
+
+        for path in [
+            framework_versions.join("3.12/bin/python3"),
+            homebrew_bin.join("python3.13"),
+            usr_local_bin.join("python3.11"),
+            pyenv_versions.join("3.10.14/bin/python"),
+        ] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            File::create(path).unwrap();
+        }
+
+        let candidates = unix_location_candidates(
+            &framework_versions,
+            &homebrew_bin,
+            &usr_local_bin,
+            &pyenv_versions,
+        );
+        let expected = vec![
+            framework_versions.join("3.12/bin/python3"),
+            homebrew_bin.join("python3.13"),
+            usr_local_bin.join("python3.11"),
+            pyenv_versions.join("3.10.14/bin/python"),
+        ];
+        assert_eq!(candidates, expected);
+
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn windows_python_candidates_use_expected_priority() {
