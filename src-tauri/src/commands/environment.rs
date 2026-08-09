@@ -210,6 +210,32 @@ fn unix_location_candidates(
     candidates
 }
 
+fn windows_location_candidates(
+    local_app_data: &Path,
+    program_files: &Path,
+    c_drive: &Path,
+) -> Vec<PathBuf> {
+    let mut candidates =
+        directory_entries_matching(&local_app_data.join("Programs/Python"), "Python3")
+            .into_iter()
+            .map(|version_dir| version_dir.join("python.exe"))
+            .filter(|path| path.is_file())
+            .collect::<Vec<_>>();
+    candidates.extend(
+        directory_entries_matching(program_files, "Python3")
+            .into_iter()
+            .map(|version_dir| version_dir.join("python.exe"))
+            .filter(|path| path.is_file()),
+    );
+    candidates.extend(
+        directory_entries_matching(c_drive, "Python3")
+            .into_iter()
+            .map(|version_dir| version_dir.join("python.exe"))
+            .filter(|path| path.is_file()),
+    );
+    candidates
+}
+
 // Prefer 3.12 because rfdetr[tflite] declares every dependency only for 3.12.
 // Keep 3.14+ out: coremltools has wheels through cp313, not cp314. Python 3.10
 // is floor because LiteRT, torch, and rfdetr require it or newer.
@@ -226,6 +252,7 @@ fn select_managed_runtime_python(candidates: Vec<PythonCandidate>) -> Option<Pyt
 
 fn discover_managed_runtime_python_candidate_with<F>(
     is_windows: bool,
+    windows_locations: Vec<PathBuf>,
     runner: F,
 ) -> Option<PythonCandidate>
 where
@@ -240,6 +267,11 @@ where
                     .map(|path| vec![path]),
             );
         }
+        commands.extend(
+            windows_locations
+                .into_iter()
+                .filter_map(|path| path.to_str().map(|path| vec![path.to_string()])),
+        );
     } else {
         let pyenv_versions = std::env::var_os("HOME")
             .map(PathBuf::from)
@@ -275,12 +307,34 @@ where
 /// Discover compatible Python bases for new managed runtimes. Location discovery
 /// precedes PATH because GUI-launched macOS apps do not inherit shell pyenv shims.
 pub(crate) fn discover_managed_runtime_python() -> Option<String> {
-    discover_managed_runtime_python_candidate_with(cfg!(windows), run)
-        .map(|candidate| candidate.executable)
+    discover_managed_runtime_python_candidate_with(
+        cfg!(windows),
+        managed_runtime_windows_location_candidates(),
+        run,
+    )
+    .map(|candidate| candidate.executable)
 }
 
 pub(crate) fn discover_managed_runtime_python_candidate() -> Option<PythonCandidate> {
-    discover_managed_runtime_python_candidate_with(cfg!(windows), run)
+    discover_managed_runtime_python_candidate_with(
+        cfg!(windows),
+        managed_runtime_windows_location_candidates(),
+        run,
+    )
+}
+
+fn managed_runtime_windows_location_candidates() -> Vec<PathBuf> {
+    if !cfg!(windows) {
+        return Vec::new();
+    }
+
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let program_files = std::env::var_os("PROGRAMFILES")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    windows_location_candidates(&local_app_data, &program_files, Path::new(r"C:\"))
 }
 
 /// Resolve an acceptable base for a managed runtime. Explicit paths are probed
@@ -572,6 +626,85 @@ mod tests {
             pyenv_versions.join("3.10.14/bin/python"),
         ];
         assert_eq!(candidates, expected);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn windows_location_expansion_finds_known_install_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "ves-windows-python-locations-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let local_app_data = root.join("LocalAppData");
+        let program_files = root.join("ProgramFiles");
+        let c_drive = root.join("C");
+
+        for path in [
+            local_app_data.join("Programs/Python/Python312/python.exe"),
+            program_files.join("Python311/python.exe"),
+            c_drive.join("Python310/python.exe"),
+            local_app_data.join("Programs/Python/Python2.7/python.exe"),
+            program_files.join("PythonXYZ/python.exe"),
+        ] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            File::create(path).unwrap();
+        }
+        fs::create_dir_all(program_files.join("Python312")).unwrap();
+
+        assert_eq!(
+            windows_location_candidates(&local_app_data, &program_files, &c_drive),
+            vec![
+                local_app_data.join("Programs/Python/Python312/python.exe"),
+                program_files.join("Python311/python.exe"),
+                c_drive.join("Python310/python.exe"),
+            ]
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn windows_discovery_probes_launcher_before_location_candidates() {
+        let root =
+            std::env::temp_dir().join(format!("ves-windows-python-order-{}", uuid::Uuid::new_v4()));
+        let local_app_data = root.join("LocalAppData");
+        let program_files = root.join("ProgramFiles");
+        let c_drive = root.join("C");
+        let location = local_app_data.join("Programs/Python/Python312/python.exe");
+        fs::create_dir_all(location.parent().unwrap()).unwrap();
+        File::create(&location).unwrap();
+        let location = location.to_str().unwrap().to_string();
+        let calls = RefCell::new(Vec::<Vec<String>>::new());
+
+        let resolved = discover_managed_runtime_python_candidate_with(
+            true,
+            windows_location_candidates(&local_app_data, &program_files, &c_drive),
+            |argv| {
+                calls
+                    .borrow_mut()
+                    .push(argv.iter().map(|arg| arg.to_string()).collect());
+                if argv == ["py", "-0p"] {
+                    return Ok((
+                        " -3.13-64 C:\\Launcher\\python.exe".to_string(),
+                        String::new(),
+                        true,
+                    ));
+                }
+                Ok((
+                    format!("__VES_PYTHON__={}\n__VES_PYTHON_VERSION__=3.12.0", argv[0]),
+                    String::new(),
+                    true,
+                ))
+            },
+        )
+        .unwrap();
+
+        assert_eq!(resolved.executable, "C:\\Launcher\\python.exe");
+        let calls = calls.borrow();
+        assert_eq!(calls[0], ["py", "-0p"]);
+        assert_eq!(calls[1][0], "C:\\Launcher\\python.exe");
+        assert_eq!(calls[2][0], location);
 
         fs::remove_dir_all(root).unwrap();
     }
