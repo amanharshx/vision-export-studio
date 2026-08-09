@@ -75,20 +75,6 @@ export function getManagedRuntimeUpgradeNudge(
   return `Python ${eligibility.candidate_version} is available. Set up a new export runtime with it?`;
 }
 
-export function getManagedRuntimeUpgradeDetails(candidateVersion: string): {
-  steps: string[];
-  note: string;
-} {
-  return {
-    steps: [
-      `Create a new export environment using Python ${candidateVersion}`,
-      "Keep your current runtime if setup fails",
-      "Switch over once the new environment is verified",
-    ],
-    note: "Export-format packages install when you next use them. This may take a few minutes.",
-  };
-}
-
 // Exported separately: Radix portals render nothing in SSR; this keeps the dialog body testable.
 export function ManagedRuntimeUpgradeDialogBody({
   candidateVersion,
@@ -107,7 +93,13 @@ export function ManagedRuntimeUpgradeDialogBody({
   onCancel: () => void;
   onContinue: () => void;
 }) {
-  const details = getManagedRuntimeUpgradeDetails(candidateVersion ?? "a compatible Python");
+  const version = candidateVersion ?? "a compatible Python";
+  const steps = [
+    `Create a new export environment using Python ${version}`,
+    "Keep your current runtime if setup fails",
+    "Switch over once the new environment is verified",
+  ];
+  const note = "Export-format packages install when you next use them. This may take a few minutes.";
   return (
     <>
       <DialogHeader>
@@ -115,9 +107,9 @@ export function ManagedRuntimeUpgradeDialogBody({
         <DialogDescription className="space-y-3">
           <p>This will:</p>
           <ul className="list-disc space-y-1 pl-5">
-            {details.steps.map((step) => <li key={step}>{step}</li>)}
+            {steps.map((step) => <li key={step}>{step}</li>)}
           </ul>
-          <p>{details.note}</p>
+          <p>{note}</p>
         </DialogDescription>
       </DialogHeader>
       {rebuilding && (
