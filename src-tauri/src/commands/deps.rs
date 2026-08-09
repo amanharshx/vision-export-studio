@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::commands::provider_registry::{
     validate_current_route_platform, validate_route_platform,
 };
+use crate::commands::runtime_operations::{RuntimeOperation, RuntimeOperationCoordinator};
 
 // ---------------------------------------------------------------------------
 // Runtime version floors
@@ -717,6 +718,7 @@ fn validate_package_name(name: &str) -> Result<(), String> {
 #[tauri::command]
 pub async fn install_dependencies(
     app_handle: tauri::AppHandle,
+    runtime_operations: tauri::State<'_, RuntimeOperationCoordinator>,
     route_id: Option<String>,
     packages: Vec<String>,
     python_path: String,
@@ -741,6 +743,7 @@ pub async fn install_dependencies(
     for pkg in &packages {
         validate_package_name(pkg)?;
     }
+    let operation_guard = runtime_operations.acquire_shared(RuntimeOperation::Install)?;
 
     // Build argv: python -m pip install pkg1 pkg2 ...
     let mut cmd = Command::new(&python_path);
@@ -814,6 +817,7 @@ pub async fn install_dependencies(
     let ah_wait = app_handle.clone();
     let sid_wait = session_id.clone();
     std::thread::spawn(move || {
+        let _operation_guard = operation_guard;
         let _ = stdout_handle.join();
         let _ = stderr_handle.join();
 

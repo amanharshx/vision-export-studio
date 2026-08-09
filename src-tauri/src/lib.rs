@@ -1,8 +1,10 @@
 mod commands;
 
 use crate::commands::export::ExportState;
-use crate::commands::setup::{sweep_runtime_rebuild_artifacts, SettingsState, SetupState};
-use tauri::Manager;
+use crate::commands::runtime_operations::RuntimeOperationCoordinator;
+use crate::commands::setup::{
+    default_runtime_dir, sweep_runtime_rebuild_artifacts, SettingsState, SetupState,
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -10,11 +12,12 @@ pub fn run() {
         .manage(ExportState::default())
         .manage(SetupState::default())
         .manage(SettingsState::default())
+        .manage(RuntimeOperationCoordinator::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            if let Ok(home_dir) = app.path().home_dir() {
-                sweep_runtime_rebuild_artifacts(&home_dir.join(".vision-export-studio"));
+            if let Ok(runtime_dir) = default_runtime_dir(app.handle()) {
+                sweep_runtime_rebuild_artifacts(std::path::Path::new(&runtime_dir));
             }
             #[cfg(desktop)]
             app.handle()

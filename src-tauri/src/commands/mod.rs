@@ -6,4 +6,5 @@ pub mod gpu;
 pub mod provider_registry;
 pub mod providers;
 pub mod rfdetr;
+pub mod runtime_operations;
 pub mod setup;

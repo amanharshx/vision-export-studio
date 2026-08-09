@@ -1,6 +1,9 @@
 use crate::commands::environment::{
     discover_managed_runtime_python, resolve_managed_runtime_base, resolve_python,
 };
+use crate::commands::runtime_operations::{
+    RuntimeOperation, RuntimeOperationCoordinator, RuntimeOperationGuard,
+};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -112,7 +115,7 @@ fn default_runtime_dir_from_home(home_dir: &str) -> Result<String, String> {
     ))
 }
 
-fn default_runtime_dir(app_handle: &tauri::AppHandle) -> Result<String, String> {
+pub(crate) fn default_runtime_dir(app_handle: &tauri::AppHandle) -> Result<String, String> {
     let home_dir = app_handle
         .path()
         .home_dir()
@@ -226,14 +229,6 @@ fn build_venv_command(python: &str, venv_path: &Path) -> Command {
     command
 }
 
-fn ensure_no_active_setup_sessions(session_count: usize) -> Result<(), String> {
-    if session_count == 0 {
-        Ok(())
-    } else {
-        Err("cannot rebuild managed runtime while setup or install session is active".to_string())
-    }
-}
-
 #[allow(dead_code)] // Task 3 UI consumes this pure eligibility policy.
 pub(crate) fn should_offer_managed_runtime_rebuild(
     has_python_override: bool,
@@ -250,9 +245,7 @@ fn cleanup_next_runtime(runtime_dir: &Path) {
 }
 
 pub(crate) fn sweep_runtime_rebuild_artifacts(runtime_dir: &Path) {
-    for name in [".venv-old", ".venv-next"] {
-        let _ = std::fs::remove_dir_all(runtime_dir.join(name));
-    }
+    let _ = std::fs::remove_dir_all(runtime_dir.join(".venv-old"));
 }
 
 fn swap_verified_runtime(runtime_dir: &Path) -> Result<(), String> {
@@ -277,6 +270,7 @@ fn spawn_and_stream(
     app_handle: tauri::AppHandle,
     sessions: Arc<Mutex<HashMap<String, Child>>>,
     mut cmd: Command,
+    operation_guard: RuntimeOperationGuard,
 ) -> Result<String, String> {
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -350,6 +344,7 @@ fn spawn_and_stream(
     let sid_wait = session_id.clone();
     let sessions_arc = Arc::clone(&sessions);
     std::thread::spawn(move || {
+        let _operation_guard = operation_guard;
         let _ = stdout_handle.join();
         let _ = stderr_handle.join();
 
@@ -416,10 +411,12 @@ fn spawn_and_stream_rebuild(
     sessions: Arc<Mutex<HashMap<String, Child>>>,
     commands: Vec<Command>,
     runtime_dir: PathBuf,
+    operation_guard: RuntimeOperationGuard,
 ) -> Result<String, String> {
     let session_id = Uuid::new_v4().to_string();
     let sid_thread = session_id.clone();
     std::thread::spawn(move || {
+        let _operation_guard = operation_guard;
         let result = commands
             .into_iter()
             .try_for_each(|mut cmd| -> Result<(), String> {
@@ -557,6 +554,7 @@ pub fn load_settings(app_handle: tauri::AppHandle) -> Result<AppSettings, String
 pub async fn create_runtime_venv(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, SetupState>,
+    runtime_operations: tauri::State<'_, RuntimeOperationCoordinator>,
     runtime_dir: String,
 ) -> Result<String, String> {
     let managed_runtime_dir = ensure_managed_runtime_dir(&app_handle, &runtime_dir)?;
@@ -575,13 +573,15 @@ pub async fn create_runtime_venv(
     let cmd = build_venv_command(&python, &venv_path);
 
     let sessions = Arc::clone(&state.sessions);
-    spawn_and_stream(app_handle, sessions, cmd)
+    let operation_guard = runtime_operations.acquire_shared(RuntimeOperation::Setup)?;
+    spawn_and_stream(app_handle, sessions, cmd, operation_guard)
 }
 
 #[tauri::command]
 pub async fn rebuild_managed_runtime(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, SetupState>,
+    runtime_operations: tauri::State<'_, RuntimeOperationCoordinator>,
     python_path: Option<String>,
 ) -> Result<String, String> {
     let settings = load_settings(app_handle.clone())?;
@@ -592,11 +592,7 @@ pub async fn rebuild_managed_runtime(
     }
     let managed_runtime_dir = ensure_managed_runtime_dir(&app_handle, &settings.runtime_dir)?;
     let sessions = Arc::clone(&state.sessions);
-    let session_count = sessions
-        .lock()
-        .map_err(|error| format!("sessions lock poisoned: {}", error))?
-        .len();
-    ensure_no_active_setup_sessions(session_count)?;
+    let operation_guard = runtime_operations.acquire_rebuild()?;
 
     let base_python = resolve_managed_runtime_base(python_path.as_deref())?;
     let runtime_path = PathBuf::from(&managed_runtime_dir);
@@ -617,6 +613,7 @@ pub async fn rebuild_managed_runtime(
             verify,
         ],
         runtime_path,
+        operation_guard,
     )
 }
 
@@ -740,14 +737,9 @@ mod tests {
 
         assert!(Path::new(&runtime_dir).join(".venv").exists());
         assert!(!Path::new(&runtime_dir).join(".venv-old").exists());
-        assert!(!Path::new(&runtime_dir).join(".venv-next").exists());
+        assert!(Path::new(&runtime_dir).join(".venv-next").exists());
         assert!(Path::new(&runtime_dir).join(".venv-backup").exists());
         fs::remove_dir_all(runtime_dir).unwrap();
-    }
-
-    #[test]
-    fn rebuild_rejects_active_setup_session() {
-        assert!(ensure_no_active_setup_sessions(1).is_err());
     }
 
     #[test]

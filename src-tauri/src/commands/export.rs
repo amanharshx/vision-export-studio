@@ -10,6 +10,7 @@ use crate::commands::provider_registry::{
     validate_current_route_platform, validate_provider_route, validate_source_extension, ProviderId,
 };
 use crate::commands::providers::{self, ExportRequest};
+use crate::commands::runtime_operations::{RuntimeOperation, RuntimeOperationCoordinator};
 
 // ---------------------------------------------------------------------------
 // State
@@ -59,6 +60,7 @@ struct ExportCancelledPayload {
 pub async fn start_export(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, ExportState>,
+    runtime_operations: tauri::State<'_, RuntimeOperationCoordinator>,
     provider_id: String,
     source_path: String,
     route_id: String,
@@ -169,6 +171,7 @@ pub async fn start_export(
         } else {
             None
         };
+    let operation_guard = runtime_operations.acquire_shared(RuntimeOperation::Export)?;
 
     let mut cmd = providers::build_command(&request, &app_handle)?;
     cmd.stdout(Stdio::piped());
@@ -251,6 +254,7 @@ pub async fn start_export(
     let request_wait = request.clone();
     let pre_snapshot_wait = pre_snapshot.clone();
     std::thread::spawn(move || {
+        let _operation_guard = operation_guard;
         // Wait for both stream readers to finish.
         let _ = stdout_handle.join();
         let _ = stderr_handle.join();
