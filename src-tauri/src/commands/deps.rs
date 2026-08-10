@@ -485,37 +485,51 @@ pub async fn check_dependencies(
         return Err("python_path must not be empty".to_string());
     }
 
-    // Validate python_path points to an executable that exists on disk.
-    // For bare names like "python3" we skip the existence check (they live on PATH).
-    let python_is_path = python_path.contains('/') || python_path.contains('\\');
-    if python_is_path && !Path::new(&python_path).exists() {
-        return Err(format!("python executable not found: {}", python_path));
+    let stack_runtime_dir = if stack_for_route(&route_id).is_some() {
+        Some(load_settings(app_handle)?.runtime_dir)
+    } else {
+        None
+    };
+
+    check_dependencies_for_runtime(&route_id, &python_path, stack_runtime_dir.as_deref())
+}
+
+fn check_dependencies_for_runtime(
+    route_id: &str,
+    python_path: &str,
+    stack_runtime_dir: Option<&str>,
+) -> Result<DepCheckResponse, String> {
+    let deps = route_deps(route_id).ok_or_else(|| format!("unknown route_id: {}", route_id))?;
+
+    if stack_for_route(route_id).is_none() {
+        // For bare names like "python3" skip the existence check; they live on PATH.
+        let python_is_path = python_path.contains('/') || python_path.contains('\\');
+        if python_is_path && !Path::new(python_path).exists() {
+            return Err(format!("python executable not found: {}", python_path));
+        }
     }
 
-    // Resolve route deps.
-    let deps = route_deps(&route_id).ok_or_else(|| format!("unknown route_id: {}", route_id))?;
-
-    if let Err(reason) = validate_current_route_platform(&route_id) {
+    if let Err(reason) = validate_current_route_platform(route_id) {
         return Ok(DepCheckResponse {
             results: vec![platform_unsupported_result(reason)],
         });
     }
 
-    let dependency_python = if stack_for_route(&route_id).is_some() {
-        let settings = load_settings(app_handle.clone())?;
-        if let Some(results) = missing_stack_results_if_absent(&settings.runtime_dir, &route_id) {
+    let dependency_python = if stack_for_route(route_id).is_some() {
+        let runtime_dir = stack_runtime_dir.expect("mapped route has a runtime directory");
+        if let Some(results) = missing_stack_results_if_absent(runtime_dir, route_id) {
             return Ok(DepCheckResponse { results });
         }
-        stack_python(&settings.runtime_dir, &route_id).expect("mapped route has Python path")
+        stack_python(runtime_dir, route_id).expect("mapped route has Python path")
     } else {
-        python_path.clone()
+        python_path.to_string()
     };
 
     let mut results: Vec<DepCheckResult> = Vec::new();
 
     // LiteRT Python floor: below 3.10 this is the only blocker and LiteRT package
     // checks are skipped entirely to avoid predictable pip failures.
-    if let Some(required_python) = minimum_python_version(&route_id) {
+    if let Some(required_python) = minimum_python_version(route_id) {
         if let Ok(installed_python) = probe_python_version(&dependency_python) {
             if version_below(&installed_python, required_python) {
                 return Ok(DepCheckResponse {
@@ -527,7 +541,7 @@ pub async fn check_dependencies(
 
     // Check ultralytics only for Ultralytics routes.
     if route_id.starts_with("ultralytics.") {
-        let required = minimum_ultralytics_version(&route_id)
+        let required = minimum_ultralytics_version(route_id)
             .expect("ultralytics routes always declare a minimum version");
         results.push(check_ultralytics_dep(&dependency_python, required));
     }
@@ -1073,6 +1087,43 @@ mod tests {
         assert!(!stack_venv_dir(&runtime, "rfdetr.pth.onnx")
             .unwrap()
             .exists());
+    }
+
+    #[test]
+    fn existing_rfdetr_stack_ignores_missing_base_python() {
+        let runtime = std::env::temp_dir().join(format!("rfdetr-stack-{}", Uuid::new_v4()));
+        let runtime = runtime.to_string_lossy().into_owned();
+        let stack_python = stack_python(&runtime, "rfdetr.pth.onnx").unwrap();
+        std::fs::create_dir_all(Path::new(&stack_python).parent().unwrap()).unwrap();
+        std::fs::write(&stack_python, b"not a Python interpreter").unwrap();
+
+        let response = check_dependencies_for_runtime(
+            "rfdetr.pth.onnx",
+            "/missing/base/python",
+            Some(&runtime),
+        )
+        .expect("RF-DETR check uses existing stack, not base Python");
+
+        assert_eq!(response.results[0].status, "missing_package");
+        assert_eq!(
+            response.results[0].install_package.as_deref(),
+            Some("rfdetr[onnx]")
+        );
+        std::fs::remove_dir_all(runtime).unwrap();
+    }
+
+    #[test]
+    fn ultralytics_check_rejects_missing_base_python() {
+        let error = match check_dependencies_for_runtime(
+            "ultralytics.pt.onnx",
+            "/missing/base/python",
+            None,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("Ultralytics check must validate base Python"),
+        };
+
+        assert_eq!(error, "python executable not found: /missing/base/python");
     }
 
     #[test]
