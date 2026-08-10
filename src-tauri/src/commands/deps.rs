@@ -14,9 +14,7 @@ use crate::commands::runtime_operations::{
     emit_after_operation_released, RuntimeOperation, RuntimeOperationCoordinator,
 };
 use crate::commands::setup::{build_venv_command, load_settings};
-use crate::commands::stack_environments::{
-    stack_for_route, stack_minimum_python, stack_python, stack_venv_dir,
-};
+use crate::commands::stack_environments::{stack_for_route, stack_python, stack_venv_dir};
 
 // ---------------------------------------------------------------------------
 // Runtime version floors
@@ -517,9 +515,7 @@ pub async fn check_dependencies(
 
     // LiteRT Python floor: below 3.10 this is the only blocker and LiteRT package
     // checks are skipped entirely to avoid predictable pip failures.
-    if let Some(required_python) =
-        stack_minimum_python(&route_id).or_else(|| minimum_python_version(&route_id))
-    {
+    if let Some(required_python) = minimum_python_version(&route_id) {
         if let Ok(installed_python) = probe_python_version(&dependency_python) {
             if version_below(&installed_python, required_python) {
                 return Ok(DepCheckResponse {
