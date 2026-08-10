@@ -11,8 +11,9 @@ import {
   ManagedRuntimeUpgradeDialogBody,
   mayStartManagedRuntimeUpgrade,
   mayActivateRoute,
+  refreshStackEnvironments,
 } from "./export-workspace";
-import type { DepCheckResult, ExportStatus, InstallPhase } from "@/lib/types";
+import type { DepCheckResult, ExportStatus, InstallPhase, StackEnvironment } from "@/lib/types";
 
 describe("getInstallableMissingPackages", () => {
   test("returns explicit install_package values", () => {
@@ -193,4 +194,22 @@ describe("managed runtime upgrade UI", () => {
       .toBe("Runtime upgrade failed: pip install failed. Previous runtime is unchanged.");
   });
 
+});
+
+describe("stack environment refresh", () => {
+  test("redetect refresh callback replaces stack cards", async () => {
+    const stacks: StackEnvironment[] = [{
+      key: "rfdetr-default",
+      display_name: "RF-DETR",
+      python_path: "/tmp/runtime/envs/rfdetr-default/.venv/bin/python",
+      python_version: { status: "available", version: "3.12.12" },
+    }];
+    let received: StackEnvironment[] | undefined;
+
+    await refreshStackEnvironments((next) => {
+      received = next;
+    }, async () => stacks);
+
+    expect(received).toEqual(stacks);
+  });
 });

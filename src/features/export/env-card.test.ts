@@ -2,7 +2,8 @@
 import { describe, expect, test } from "bun:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { EnvCard } from "./export-workspace";
+import { EnvCard, StackEnvironmentCards } from "./export-workspace";
+import type { StackEnvironment } from "@/lib/types";
 
 function render(version: string, status: "ok" | "error" | "loading" = "ok") {
   return renderToStaticMarkup(
@@ -36,5 +37,27 @@ describe("EnvCard version badge", () => {
 
   test("an empty version renders Unknown", () => {
     expect(render("")).toContain("Unknown");
+  });
+});
+
+describe("StackEnvironmentCards", () => {
+  const stacks: StackEnvironment[] = [
+    {
+      key: "rfdetr-default",
+      display_name: "RF-DETR",
+      python_path: "/tmp/runtime/envs/rfdetr-default/.venv/bin/python",
+      python_version: { status: "available", version: "3.12.12" },
+    },
+  ];
+
+  test("renders one card for each returned stack", () => {
+    const html = renderToStaticMarkup(React.createElement(StackEnvironmentCards, { stacks }));
+    expect(html).toContain("RF-DETR");
+    expect(html).toContain("3.12.12");
+    expect(html).toContain(stacks[0].python_path);
+  });
+
+  test("renders nothing when no stack environments exist", () => {
+    expect(renderToStaticMarkup(React.createElement(StackEnvironmentCards, { stacks: [] }))).toBe("");
   });
 });

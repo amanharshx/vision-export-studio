@@ -1,4 +1,5 @@
 import { detectEnvironment } from "@/lib/tauri/environment";
+import { listStackEnvironments } from "@/lib/tauri/stack-environments";
 import { captureAnalyticsEvent } from "@/lib/analytics";
 import { checkDependencies, installDependencies } from "@/lib/tauri/deps";
 import { cancelExport, openExportFolder, startExport } from "@/lib/tauri/export";
@@ -27,6 +28,7 @@ import type {
   RfDetrVariantMode,
   RouteOptionsState,
   RouteSpec,
+  StackEnvironment,
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -454,6 +456,33 @@ export function EnvCard({
   );
 }
 
+export function StackEnvironmentCards({ stacks }: { stacks: StackEnvironment[] }) {
+  return (
+    <>
+      {stacks.map((stack) => (
+        <EnvCard
+          key={stack.key}
+          title={stack.display_name}
+          status={stack.python_version.status === "available" ? "ok" : "error"}
+          version={stack.python_version.status === "available" ? stack.python_version.version : "Unavailable"}
+          path={stack.python_path}
+        />
+      ))}
+    </>
+  );
+}
+
+export async function refreshStackEnvironments(
+  setStacks: (stacks: StackEnvironment[]) => void,
+  list = listStackEnvironments,
+): Promise<void> {
+  try {
+    setStacks(await list());
+  } catch {
+    setStacks([]);
+  }
+}
+
 interface ExportWorkspaceProps {
   onBack: () => void;
   updatesEnabled: boolean;
@@ -480,6 +509,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const [envError, setEnvError] = useState<string | null>(null);
   const [pythonOverride, setPythonOverride] = useState("");
   const [redetecting, setRedetecting] = useState(false);
+  const [stackEnvironments, setStackEnvironments] = useState<StackEnvironment[]>([]);
+  const refreshStackEnvironmentCards = useCallback(
+    () => refreshStackEnvironments(setStackEnvironments),
+    [],
+  );
 
   // Output directory
   const [outputDirOverride, setOutputDirOverride] = useState("");
@@ -600,7 +634,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       .then(setEnvInfo)
       .catch((e: unknown) => setEnvError(String(e)));
     void getManagedRuntimeRebuildEligibility().then(setManagedRuntimeUpgrade).catch(() => setManagedRuntimeUpgrade(null));
-  }, []);
+    void refreshStackEnvironmentCards();
+  }, [refreshStackEnvironmentCards]);
 
   const refreshRouteDependencies = useCallback(async (routeId: string | null, pythonPath: string | null) => {
     const requestId = depRefreshRequestRef.current + 1;
@@ -1052,6 +1087,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         setLogLines((prev) => [...prev, "[error] Install failed: " + result]);
         return;
       }
+      await refreshStackEnvironmentCards();
     } catch (e: unknown) {
       const outcome = getInstallStartFailureOutcome(String(e));
       if (outcome.refused) {
@@ -1332,6 +1368,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       setEnvInfo(info);
       await refreshRouteDependencies(selectedRouteId, info.python_path || null);
       setManagedRuntimeUpgrade(await getManagedRuntimeRebuildEligibility());
+      await refreshStackEnvironmentCards();
       setRuntimeInstallPhase("idle");
       setRuntimeInstallLines([]);
       setRuntimeInstallError(null);
@@ -1342,7 +1379,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     } finally {
       setRedetecting(false);
     }
-  }, [refreshRouteDependencies, selectedRouteId]);
+  }, [refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId]);
 
   const handleRebuildManagedRuntime = useCallback(async () => {
     setManagedRuntimeRebuilding(true);
@@ -1540,6 +1577,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                 version={envInfo?.ultralytics_version || (redetecting ? "..." : "Not found")}
                 path={envInfo?.yolo_path || undefined}
               />
+              <StackEnvironmentCards stacks={stackEnvironments} />
             </div>
 
             {/* Configuration */}
