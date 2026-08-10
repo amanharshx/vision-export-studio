@@ -55,7 +55,7 @@ export const rfdetrRoutes: RouteSpec[] = [
     id: "rfdetr.pth.coreml",
     targetFormat: "coreml",
     title: "CoreML",
-    displayPath: "checkpoint.pth -> model_fp32.mlpackage",
+    displayPath: "checkpoint.pth -> rfdetr-small.mlpackage",
     pipDeps: [{ packageName: "rfdetr[coreml]", installHint: 'pip install "rfdetr[coreml]"' }],
     platformLock: "macos",
     precisionModes: ["fp32", "fp16"],

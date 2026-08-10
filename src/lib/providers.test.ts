@@ -74,6 +74,7 @@ describe("provider route registry", () => {
     expect(route?.intermediates).toEqual([]);
     expect(route?.precisionModes).toEqual(["fp32", "fp16"]);
     expect(route?.defaultPrecision).toBe("fp32");
+    expect(route?.displayPath).toBe("checkpoint.pth -> rfdetr-small.mlpackage");
     expect(route?.requiresGpu).toBe(false);
     expect(route?.oneWay).toBe(true);
   });

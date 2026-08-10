@@ -1,7 +1,8 @@
 import { Input } from "@/components/ui/input";
 import { InputRow, type OptionsPanelProps } from "./_base";
+import { PrecisionOptions } from "./precision";
 
-export function RfDetrOptions({ options, onOptionsChange, recommendedImgsz, patchSize }: OptionsPanelProps) {
+export function RfDetrOptions({ route, options, onOptionsChange, recommendedImgsz, patchSize }: OptionsPanelProps) {
   return (
     <div className="space-y-4">
       <InputRow label="Image Size" description={`Input image size in pixels (64–8192${patchSize ? `, must be divisible by ${patchSize}` : ""})`}>
@@ -34,16 +35,19 @@ export function RfDetrOptions({ options, onOptionsChange, recommendedImgsz, patc
           className="h-8 w-20 text-xs"
         />
       </InputRow>
-      <InputRow label="Opset" description="ONNX opset version (11–20)">
-        <Input
-          type="number"
-          min={11}
-          step={1}
-          value={options.opset ?? 17}
-          onChange={(e) => onOptionsChange({ ...options, opset: Number(e.target.value) })}
-          className="h-8 w-20 text-xs"
-        />
-      </InputRow>
+      <PrecisionOptions route={route} options={options} onOptionsChange={onOptionsChange} />
+      {route.targetFormat === "onnx" && (
+        <InputRow label="Opset" description="ONNX opset version (11–20)">
+          <Input
+            type="number"
+            min={11}
+            step={1}
+            value={options.opset ?? 17}
+            onChange={(e) => onOptionsChange({ ...options, opset: Number(e.target.value) })}
+            className="h-8 w-20 text-xs"
+          />
+        </InputRow>
+      )}
       <p className="text-xs leading-5 text-zinc-500">
         {patchSize
           ? `RF-DETR image size must be divisible by ${patchSize} (model patch size).`

@@ -208,8 +208,11 @@ def infer_native_export_shape(checkpoint_path, model, checkpoint=None):
 def inspect_checkpoint(checkpoint_path):
     try:
         checkpoint = load_checkpoint(checkpoint_path)
-        model = load_model_for_inspect(checkpoint_path, checkpoint)
-        class_symbol = model.__class__.__name__
+        class_symbol = resolve_model_class_symbol(checkpoint)
+        model = None
+        if not class_symbol:
+            model = load_model_for_inspect(checkpoint_path, checkpoint)
+            class_symbol = model.__class__.__name__
         requires_plus = class_symbol in PLUS_ONLY_CLASSES
         family = class_family(class_symbol)
         success = family is not None and not requires_plus
@@ -271,7 +274,7 @@ def export_checkpoint(args):
         elif args.route_id == "rfdetr.pth.coreml":
             kwargs["format"] = "coreml"
             kwargs["coreml_precision"] = "float16" if args.precision == "fp16" else "float32"
-        if args.opset is not None:
+        if args.route_id == "rfdetr.pth.onnx" and args.opset is not None:
             kwargs["opset_version"] = args.opset
         model.export(**kwargs)
 

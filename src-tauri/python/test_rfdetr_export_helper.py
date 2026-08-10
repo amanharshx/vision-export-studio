@@ -33,6 +33,23 @@ class RfDetrExportHelperTests(unittest.TestCase):
 
         self.assertIs(model, expected_model)
 
+    def test_inspect_checkpoint_uses_checkpoint_metadata_without_rfdetr_import(self):
+        checkpoint = {
+            "model_name": "RFDETRSmall",
+            "state_dict": {
+                "model.backbone.0.encoder.encoder.embeddings.position_embeddings": SimpleNamespace(
+                    shape=(1, 1025, 384)
+                ),
+            },
+        }
+
+        with patch.object(helper, "load_checkpoint", return_value=checkpoint):
+            with patch.object(helper, "load_model_for_inspect") as load_model:
+                result = helper.inspect_checkpoint("/tmp/model.pth")
+
+        self.assertEqual(result, 0)
+        load_model.assert_not_called()
+
     def test_infer_native_export_shape_prefers_model_config(self):
         model = SimpleNamespace(model_config=SimpleNamespace(resolution=512, patch_size=16))
 
@@ -92,7 +109,7 @@ class RfDetrExportHelperTests(unittest.TestCase):
             export = Mock()
             args = SimpleNamespace(
                 checkpoint="/tmp/model.pth", output_dir="/tmp/out", route_id="rfdetr.pth.coreml",
-                imgsz=640, batch=1, opset=None, precision=precision,
+                imgsz=640, batch=1, opset=17, precision=precision,
                 variant_mode="auto", manual_class_symbol=None,
             )
 
@@ -104,6 +121,7 @@ class RfDetrExportHelperTests(unittest.TestCase):
             self.assertEqual(export.call_args.kwargs["format"], "coreml")
             self.assertEqual(export.call_args.kwargs["coreml_precision"], expected)
             self.assertNotIn("fp16", export.call_args.kwargs)
+            self.assertNotIn("opset_version", export.call_args.kwargs)
 
     def test_parse_args_defaults_tensorrt_precision_to_fp32(self):
         with patch("sys.argv", [
