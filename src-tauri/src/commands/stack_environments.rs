@@ -11,11 +11,18 @@ pub(crate) struct StackEnvironment {
     pub route_ids: &'static [&'static str],
 }
 
-const KNOWN_STACKS: &[StackEnvironment] = &[StackEnvironment {
-    key: "rfdetr-default",
-    display_name: "RF-DETR",
-    route_ids: &["rfdetr.pth.onnx", "rfdetr.pth.engine"],
-}];
+const KNOWN_STACKS: &[StackEnvironment] = &[
+    StackEnvironment {
+        key: "rfdetr-default",
+        display_name: "RF-DETR",
+        route_ids: &["rfdetr.pth.onnx"],
+    },
+    StackEnvironment {
+        key: "rfdetr-tensorrt",
+        display_name: "RF-DETR TensorRT",
+        route_ids: &["rfdetr.pth.engine"],
+    },
+];
 
 pub(crate) fn known_stacks() -> &'static [StackEnvironment] {
     KNOWN_STACKS
@@ -102,9 +109,9 @@ mod tests {
     }
 
     #[test]
-    fn known_stacks_and_routes_share_one_declaration() {
+    fn known_stacks_map_onnx_and_tensorrt_routes_to_separate_environments() {
         let stacks = known_stacks();
-        assert_eq!(stacks.len(), 1);
+        assert_eq!(stacks.len(), 2);
 
         for stack in stacks {
             assert!(!stack.key.is_empty());
@@ -115,11 +122,14 @@ mod tests {
             }
         }
 
-        for route_id in ["rfdetr.pth.onnx", "rfdetr.pth.engine"] {
-            assert!(stacks
-                .iter()
-                .any(|stack| stack.route_ids.contains(&route_id)));
-        }
+        assert_eq!(
+            stack_for_route("rfdetr.pth.onnx").unwrap().key,
+            "rfdetr-default"
+        );
+        assert_eq!(
+            stack_for_route("rfdetr.pth.engine").unwrap().key,
+            "rfdetr-tensorrt"
+        );
         assert!(stack_for_route("ultralytics.pt.onnx").is_none());
         assert!(stack_for_route("unknown.route").is_none());
     }
@@ -127,33 +137,40 @@ mod tests {
     #[test]
     fn listing_includes_only_existing_stack_interpreters_and_marks_failed_probe_unavailable() {
         let runtime_dir = temp_runtime_dir();
-        let present_stack = known_stacks().first().unwrap();
         assert!(list_stack_environments_for_runtime(runtime_dir.to_str().unwrap()).is_empty());
 
-        let interpreter = Path::new(&runtime_dir)
-            .join("envs")
-            .join(present_stack.key)
-            .join(".venv")
-            .join(if cfg!(windows) {
-                "Scripts/python.exe"
-            } else {
-                "bin/python"
-            });
-        fs::create_dir_all(interpreter.parent().unwrap()).unwrap();
-        fs::File::create(&interpreter).unwrap();
-        #[cfg(unix)]
-        fs::set_permissions(&interpreter, fs::Permissions::from_mode(0o0)).unwrap();
+        let interpreters: Vec<PathBuf> = known_stacks()
+            .iter()
+            .map(|stack| {
+                Path::new(&runtime_dir)
+                    .join("envs")
+                    .join(stack.key)
+                    .join(".venv")
+                    .join(if cfg!(windows) {
+                        "Scripts/python.exe"
+                    } else {
+                        "bin/python"
+                    })
+            })
+            .collect();
+        for interpreter in &interpreters {
+            fs::create_dir_all(interpreter.parent().unwrap()).unwrap();
+            fs::File::create(interpreter).unwrap();
+            #[cfg(unix)]
+            fs::set_permissions(interpreter, fs::Permissions::from_mode(0o0)).unwrap();
+        }
 
         let stacks = list_stack_environments_for_runtime(runtime_dir.to_str().unwrap());
 
-        assert_eq!(stacks.len(), 1);
-        assert_eq!(stacks[0].key, present_stack.key);
-        assert_eq!(stacks[0].display_name, present_stack.display_name);
-        assert_eq!(stacks[0].python_path, interpreter.to_string_lossy());
-        assert!(matches!(
-            stacks[0].python_version,
-            PythonVersion::Unavailable
-        ));
+        assert_eq!(stacks.len(), 2);
+        for ((stack, expected_stack), interpreter) in
+            stacks.iter().zip(known_stacks()).zip(interpreters)
+        {
+            assert_eq!(stack.key, expected_stack.key);
+            assert_eq!(stack.display_name, expected_stack.display_name);
+            assert_eq!(stack.python_path, interpreter.to_string_lossy());
+            assert!(matches!(stack.python_version, PythonVersion::Unavailable));
+        }
         fs::remove_dir_all(runtime_dir).unwrap();
     }
 
