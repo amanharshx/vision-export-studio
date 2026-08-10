@@ -13,6 +13,10 @@ use crate::commands::provider_registry::{
 use crate::commands::runtime_operations::{
     emit_after_operation_released, RuntimeOperation, RuntimeOperationCoordinator,
 };
+use crate::commands::setup::{build_venv_command, load_settings};
+use crate::commands::stack_environments::{
+    stack_for_route, stack_minimum_python, stack_python, stack_venv_dir,
+};
 
 // ---------------------------------------------------------------------------
 // Runtime version floors
@@ -471,6 +475,7 @@ fn probe_installed_version(python: &str, importable: &str) -> Result<String, Str
 
 #[tauri::command]
 pub async fn check_dependencies(
+    app_handle: tauri::AppHandle,
     route_id: String,
     python_path: String,
 ) -> Result<DepCheckResponse, String> {
@@ -498,12 +503,24 @@ pub async fn check_dependencies(
         });
     }
 
+    let dependency_python = if stack_for_route(&route_id).is_some() {
+        let settings = load_settings(app_handle.clone())?;
+        if let Some(results) = missing_stack_results_if_absent(&settings.runtime_dir, &route_id) {
+            return Ok(DepCheckResponse { results });
+        }
+        stack_python(&settings.runtime_dir, &route_id).expect("mapped route has Python path")
+    } else {
+        python_path.clone()
+    };
+
     let mut results: Vec<DepCheckResult> = Vec::new();
 
     // LiteRT Python floor: below 3.10 this is the only blocker and LiteRT package
     // checks are skipped entirely to avoid predictable pip failures.
-    if let Some(required_python) = minimum_python_version(&route_id) {
-        if let Ok(installed_python) = probe_python_version(&python_path) {
+    if let Some(required_python) =
+        stack_minimum_python(&route_id).or_else(|| minimum_python_version(&route_id))
+    {
+        if let Ok(installed_python) = probe_python_version(&dependency_python) {
             if version_below(&installed_python, required_python) {
                 return Ok(DepCheckResponse {
                     results: vec![python_version_too_old_result(&installed_python)],
@@ -516,13 +533,13 @@ pub async fn check_dependencies(
     if route_id.starts_with("ultralytics.") {
         let required = minimum_ultralytics_version(&route_id)
             .expect("ultralytics routes always declare a minimum version");
-        results.push(check_ultralytics_dep(&python_path, required));
+        results.push(check_ultralytics_dep(&dependency_python, required));
     }
 
     // Check route pip deps — RF-DETR routes use probe-based checks for extras.
     if route_id == "rfdetr.pth.onnx" || route_id == "rfdetr.pth.engine" {
         results.push(check_python_probe_dep(
-            &python_path,
+            &dependency_python,
             "rfdetr[onnx]",
             "import importlib.util; ok = importlib.util.find_spec('rfdetr') is not None and importlib.util.find_spec('onnx') is not None; print(ok)",
             "pip install \"rfdetr[onnx]\"",
@@ -531,7 +548,7 @@ pub async fn check_dependencies(
     } else {
         for dep in deps.pip {
             let result = check_pip_dep(
-                &python_path,
+                &dependency_python,
                 dep.package_name,
                 dep.install_hint,
                 dep.optional,
@@ -542,11 +559,42 @@ pub async fn check_dependencies(
 
     // Check route sys deps.
     for dep in deps.sys {
-        let result = check_sys_dep(&python_path, dep.binary_name, dep.install_hint);
+        let result = check_sys_dep(&dependency_python, dep.binary_name, dep.install_hint);
         results.push(result);
     }
 
     Ok(DepCheckResponse { results })
+}
+
+fn stack_paths_from_settings(
+    app_handle: &tauri::AppHandle,
+    route_id: &str,
+) -> Result<Option<(std::path::PathBuf, String)>, String> {
+    let settings = load_settings(app_handle.clone())?;
+    Ok(stack_venv_dir(&settings.runtime_dir, route_id)
+        .zip(stack_python(&settings.runtime_dir, route_id)))
+}
+
+fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
+    match route_id {
+        "rfdetr.pth.onnx" | "rfdetr.pth.engine" => Some(vec![DepCheckResult {
+            item: "rfdetr[onnx]".to_string(),
+            status: "missing_package".to_string(),
+            reason: "RF-DETR stack environment has not been created.".to_string(),
+            install_hint: "pip install \"rfdetr[onnx]\"".to_string(),
+            install_package: Some("rfdetr[onnx]".to_string()),
+        }]),
+        _ => None,
+    }
+}
+
+fn missing_stack_results_if_absent(
+    runtime_dir: &str,
+    route_id: &str,
+) -> Option<Vec<DepCheckResult>> {
+    let stack_python = stack_python(runtime_dir, route_id)?;
+    (!Path::new(&stack_python).exists())
+        .then(|| missing_stack_results(route_id).expect("mapped stack has dependencies"))
 }
 
 // ---------------------------------------------------------------------------
@@ -747,14 +795,30 @@ pub async fn install_dependencies(
     }
     let operation_guard = runtime_operations.acquire(RuntimeOperation::Install)?;
 
+    let install_python = if let Some(route_id) = route_id.as_deref() {
+        if let Some((stack_venv, stack_python)) = stack_paths_from_settings(&app_handle, route_id)?
+        {
+            if !Path::new(&stack_python).exists() {
+                let status = build_venv_command(&python_path, &stack_venv)
+                    .status()
+                    .map_err(|e| format!("failed to create RF-DETR environment: {}", e))?;
+                if !status.success() {
+                    return Err(format!(
+                        "failed to create RF-DETR environment: exit code {:?}",
+                        status.code()
+                    ));
+                }
+            }
+            stack_python
+        } else {
+            python_path.clone()
+        }
+    } else {
+        python_path.clone()
+    };
+
     // Build argv: python -m pip install pkg1 pkg2 ...
-    let mut cmd = Command::new(&python_path);
-    cmd.arg("-m");
-    cmd.arg("pip");
-    cmd.arg("install");
-    for pkg in &packages {
-        cmd.arg(pkg);
-    }
+    let mut cmd = build_pip_install_command(&install_python, &packages);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
@@ -862,6 +926,13 @@ pub async fn install_dependencies(
     });
 
     Ok(session_id)
+}
+
+fn build_pip_install_command(python: &str, packages: &[String]) -> Command {
+    let mut cmd = Command::new(python);
+    cmd.args(["-m", "pip", "install"]);
+    cmd.args(packages);
+    cmd
 }
 
 // ---------------------------------------------------------------------------
@@ -991,6 +1062,58 @@ mod tests {
     fn rfdetr_extra_install_package_survives_validation() {
         assert!(validate_package_name("rfdetr").is_ok());
         assert!(validate_package_name("rfdetr[onnx]").is_ok());
+    }
+
+    #[test]
+    fn absent_rfdetr_stack_returns_installable_missing_results() {
+        let runtime = std::env::temp_dir().join(format!("rfdetr-stack-{}", Uuid::new_v4()));
+        let runtime = runtime.to_string_lossy();
+        let results = missing_stack_results_if_absent(&runtime, "rfdetr.pth.onnx")
+            .expect("RF-DETR stack results");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, "missing_package");
+        assert_eq!(results[0].install_package.as_deref(), Some("rfdetr[onnx]"));
+        assert!(!stack_venv_dir(&runtime, "rfdetr.pth.onnx")
+            .unwrap()
+            .exists());
+    }
+
+    #[test]
+    fn rfdetr_install_command_targets_stack_python() {
+        let command = build_pip_install_command(
+            "/tmp/runtime/envs/rfdetr-default/.venv/bin/python",
+            &["rfdetr[onnx]".to_string()],
+        );
+
+        assert_eq!(
+            command.get_program(),
+            "/tmp/runtime/envs/rfdetr-default/.venv/bin/python"
+        );
+    }
+
+    #[test]
+    fn ultralytics_install_command_keeps_base_python() {
+        let command =
+            build_pip_install_command("/tmp/runtime/.venv/bin/python", &["onnx".to_string()]);
+
+        assert_eq!(command.get_program(), "/tmp/runtime/.venv/bin/python");
+    }
+
+    #[test]
+    fn rfdetr_install_creates_stack_from_base_then_pips_into_stack() {
+        let stack_venv = stack_venv_dir("/tmp/runtime", "rfdetr.pth.onnx").unwrap();
+        let create = build_venv_command("/base/python", &stack_venv);
+        let install = build_pip_install_command(
+            &stack_python("/tmp/runtime", "rfdetr.pth.onnx").unwrap(),
+            &["rfdetr[onnx]".to_string()],
+        );
+
+        assert_eq!(create.get_program(), "/base/python");
+        assert_eq!(
+            install.get_program(),
+            std::ffi::OsStr::new(&stack_python("/tmp/runtime", "rfdetr.pth.onnx").unwrap())
+        );
     }
 
     #[test]

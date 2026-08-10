@@ -13,6 +13,8 @@ use crate::commands::providers::{self, ExportRequest};
 use crate::commands::runtime_operations::{
     emit_after_operation_released, RuntimeOperation, RuntimeOperationCoordinator,
 };
+use crate::commands::setup::load_settings;
+use crate::commands::stack_environments::stack_python;
 
 // ---------------------------------------------------------------------------
 // State
@@ -100,6 +102,12 @@ pub async fn start_export(
     let provider = validate_provider_route(&provider_id, &route_id)?;
     validate_source_extension(provider, &source_path)?;
     validate_current_route_platform(&route_id)?;
+    let export_python = if provider == ProviderId::RfDetr {
+        let settings = load_settings(app_handle.clone())?;
+        resolve_export_python(&route_id, &python_path, &settings.runtime_dir)?
+    } else {
+        python_path
+    };
 
     if !output_dir.is_empty() {
         if output_dir.contains('=') {
@@ -139,7 +147,7 @@ pub async fn start_export(
         route_id: route_id.clone(),
         output_dir: output_dir.clone(),
         yolo_path,
-        python_path,
+        python_path: export_python,
         imgsz,
         batch,
         precision: precision.trim().to_string(),
@@ -340,6 +348,23 @@ pub async fn start_export(
     Ok(session_id)
 }
 
+fn resolve_export_python(
+    route_id: &str,
+    base_python: &str,
+    runtime_dir: &str,
+) -> Result<String, String> {
+    let Some(stack_python) = stack_python(runtime_dir, route_id) else {
+        return Ok(base_python.to_string());
+    };
+    if !Path::new(&stack_python).exists() {
+        return Err(
+            "RF-DETR environment is missing. Install route dependencies before exporting."
+                .to_string(),
+        );
+    }
+    Ok(stack_python)
+}
+
 // ---------------------------------------------------------------------------
 // cancel_export
 // ---------------------------------------------------------------------------
@@ -425,4 +450,44 @@ pub async fn open_export_folder(path: String) -> Result<(), String> {
         .map_err(|e| format!("failed to open export folder: {}", e))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::stack_environments::stack_python;
+
+    #[test]
+    fn rfdetr_export_uses_existing_stack_python() {
+        let runtime = std::env::temp_dir().join(format!("rfdetr-export-{}", Uuid::new_v4()));
+        let runtime = runtime.to_string_lossy().into_owned();
+        let stack = stack_python(&runtime, "rfdetr.pth.onnx").unwrap();
+        std::fs::create_dir_all(Path::new(&stack).parent().unwrap()).unwrap();
+        std::fs::write(&stack, b"python").unwrap();
+
+        assert_eq!(
+            resolve_export_python("rfdetr.pth.onnx", "/base/python", &runtime).unwrap(),
+            stack
+        );
+
+        std::fs::remove_dir_all(runtime).unwrap();
+    }
+
+    #[test]
+    fn missing_rfdetr_stack_blocks_export() {
+        let runtime = std::env::temp_dir().join(format!("rfdetr-export-{}", Uuid::new_v4()));
+        let error =
+            resolve_export_python("rfdetr.pth.onnx", "/base/python", runtime.to_str().unwrap())
+                .unwrap_err();
+
+        assert!(error.contains("RF-DETR environment is missing"));
+    }
+
+    #[test]
+    fn ultralytics_export_keeps_base_python() {
+        assert_eq!(
+            resolve_export_python("ultralytics.pt.onnx", "/base/python", "/unused").unwrap(),
+            "/base/python"
+        );
+    }
 }

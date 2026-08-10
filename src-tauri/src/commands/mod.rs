@@ -8,3 +8,4 @@ pub mod providers;
 pub mod rfdetr;
 pub mod runtime_operations;
 pub mod setup;
+pub mod stack_environments;
