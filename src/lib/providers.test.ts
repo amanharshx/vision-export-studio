@@ -24,10 +24,11 @@ describe("provider route registry", () => {
     expect(defaultRouteForProvider("ultralytics").id).toBe("ultralytics.pt.onnx");
   });
 
-  test("RF-DETR exposes only supported v1 routes", () => {
+  test("RF-DETR exposes supported native routes", () => {
     expect(routesForProvider("rfdetr").map((route) => route.id)).toEqual([
       "rfdetr.pth.onnx",
       "rfdetr.pth.engine",
+      "rfdetr.pth.coreml",
     ]);
   });
 
@@ -63,6 +64,19 @@ describe("provider route registry", () => {
     expect(route?.defaultPrecision).toBe("fp32");
     expect(onnxRoute?.precisionModes).toEqual(["fp32"]);
     expect(onnxRoute?.defaultPrecision).toBe("fp32");
+  });
+
+  test("RF-DETR CoreML is macOS-only and offers FP32 or FP16", () => {
+    const route = routesForProvider("rfdetr").find((item) => item.id === "rfdetr.pth.coreml");
+
+    expect(route?.pipDeps.map((dep) => dep.packageName)).toEqual(["rfdetr[coreml]"]);
+    expect(route?.platformLock).toBe("macos");
+    expect(route?.intermediates).toEqual([]);
+    expect(route?.precisionModes).toEqual(["fp32", "fp16"]);
+    expect(route?.defaultPrecision).toBe("fp32");
+    expect(route?.displayPath).toBe("checkpoint.pth -> rfdetr-small.mlpackage");
+    expect(route?.requiresGpu).toBe(false);
+    expect(route?.oneWay).toBe(true);
   });
 
   test("Ultralytics routes keep Ultralytics base dependency", () => {

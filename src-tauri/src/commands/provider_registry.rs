@@ -35,7 +35,7 @@ pub const ULTRALYTICS_ROUTES: &[&str] = &[
     "ultralytics.pt.pb",
 ];
 
-pub const RFDETR_ROUTES: &[&str] = &["rfdetr.pth.onnx", "rfdetr.pth.engine"];
+pub const RFDETR_ROUTES: &[&str] = &["rfdetr.pth.onnx", "rfdetr.pth.engine", "rfdetr.pth.coreml"];
 
 pub fn validate_provider_route(provider_id: &str, route_id: &str) -> Result<ProviderId, String> {
     let provider = ProviderId::parse(provider_id)?;
@@ -72,6 +72,7 @@ pub fn validate_source_extension(provider: ProviderId, source_path: &str) -> Res
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PlatformLock {
     Any,
+    Macos,
     Linux,
     LinuxX86_64,
     LinuxWindows,
@@ -82,6 +83,7 @@ enum PlatformLock {
 fn route_platform_lock(route_id: &str) -> PlatformLock {
     match route_id {
         "ultralytics.pt.engine" | "rfdetr.pth.engine" => PlatformLock::LinuxWindows,
+        "rfdetr.pth.coreml" => PlatformLock::Macos,
         "ultralytics.pt.coreml" => PlatformLock::MacosLinux,
         "ultralytics.pt.litert" => PlatformLock::MacosLinuxX86_64,
         "ultralytics.pt.edgetpu" => PlatformLock::LinuxX86_64,
@@ -95,6 +97,7 @@ fn route_platform_lock(route_id: &str) -> PlatformLock {
 fn platform_tags(lock: PlatformLock) -> &'static str {
     match lock {
         PlatformLock::Any => "all platforms",
+        PlatformLock::Macos => "macOS",
         PlatformLock::Linux => "Linux",
         PlatformLock::LinuxX86_64 => "Linux x86-64",
         PlatformLock::LinuxWindows => "Linux and Windows",
@@ -125,6 +128,7 @@ pub fn validate_route_platform(route_id: &str, os: &str, arch: &str) -> Result<(
     let lock = route_platform_lock(route_id);
     let compatible = match lock {
         PlatformLock::Any => true,
+        PlatformLock::Macos => os == "macos",
         PlatformLock::Linux => os == "linux",
         PlatformLock::LinuxX86_64 => os == "linux" && arch == "x86_64",
         PlatformLock::LinuxWindows => os == "linux" || os == "windows",
@@ -175,6 +179,9 @@ pub fn rfdetr_artifact_rule(route_id: &str) -> Option<RfDetrArtifactRule> {
             exact: "inference_model",
         }),
         "rfdetr.pth.engine" => Some(RfDetrArtifactRule::Extension { extension: ".trt" }),
+        "rfdetr.pth.coreml" => Some(RfDetrArtifactRule::Extension {
+            extension: ".mlpackage",
+        }),
         _ => None,
     }
 }
@@ -213,6 +220,7 @@ mod tests {
     fn validates_provider_route_match() {
         assert!(validate_provider_route("ultralytics", "ultralytics.pt.onnx").is_ok());
         assert!(validate_provider_route("rfdetr", "rfdetr.pth.onnx").is_ok());
+        assert!(validate_provider_route("rfdetr", "rfdetr.pth.coreml").is_ok());
         assert!(validate_provider_route("rfdetr", "rfdetr.pth.tflite").is_err());
         assert!(validate_provider_route("rfdetr", "ultralytics.pt.onnx").is_err());
     }
@@ -278,6 +286,18 @@ mod tests {
         assert!(matches!(
             rfdetr_artifact_rule("rfdetr.pth.engine"),
             Some(RfDetrArtifactRule::Extension { .. })
+        ));
+    }
+
+    #[test]
+    fn rfdetr_coreml_is_macos_only_with_mlpackage_artifacts() {
+        assert!(validate_route_platform("rfdetr.pth.coreml", "macos", "aarch64").is_ok());
+        assert!(validate_route_platform("rfdetr.pth.coreml", "linux", "x86_64").is_err());
+        assert!(matches!(
+            rfdetr_artifact_rule("rfdetr.pth.coreml"),
+            Some(RfDetrArtifactRule::Extension {
+                extension: ".mlpackage"
+            })
         ));
     }
 

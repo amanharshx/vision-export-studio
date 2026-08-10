@@ -10,6 +10,7 @@ import {
   PRECISION_LABELS,
   PrecisionOptions,
 } from "./precision";
+import { RfDetrOptions } from "./rfdetr";
 
 const baseOptions: ExportOptions = {
   imgsz: 640,
@@ -61,6 +62,21 @@ describe("PrecisionOptions", () => {
     expect(coreml.precisionModes.map((mode) => PRECISION_LABELS[mode])).toContain("W8A16");
     const markup = renderPrecision(coreml, { ...baseOptions, precision: "fp16" });
     expect(markup).toContain("data-slot=\"select-trigger\"");
+  });
+
+  test("RF-DETR CoreML renders precision but not ONNX opset", () => {
+    const route = routesForProvider("rfdetr").find((item) => item.id === "rfdetr.pth.coreml");
+    expect(route).toBeDefined();
+    const markup = renderToStaticMarkup(
+      createElement(RfDetrOptions, {
+        route: route!,
+        options: { ...baseOptions, precision: "fp32" },
+        onOptionsChange: () => {},
+      }),
+    );
+
+    expect(markup).toContain("data-slot=\"select-trigger\"");
+    expect(markup).not.toContain("Opset");
   });
 
   test("FP32 hides calibration picker", () => {

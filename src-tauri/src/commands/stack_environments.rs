@@ -22,6 +22,11 @@ const KNOWN_STACKS: &[StackEnvironment] = &[
         display_name: "RF-DETR TensorRT",
         route_ids: &["rfdetr.pth.engine"],
     },
+    StackEnvironment {
+        key: "rfdetr-coreml",
+        display_name: "RF-DETR CoreML",
+        route_ids: &["rfdetr.pth.coreml"],
+    },
 ];
 
 pub(crate) fn known_stacks() -> &'static [StackEnvironment] {
@@ -109,9 +114,9 @@ mod tests {
     }
 
     #[test]
-    fn known_stacks_map_onnx_and_tensorrt_routes_to_separate_environments() {
+    fn known_stacks_map_rfdetr_routes_to_separate_environments() {
         let stacks = known_stacks();
-        assert_eq!(stacks.len(), 2);
+        assert_eq!(stacks.len(), 3);
 
         for stack in stacks {
             assert!(!stack.key.is_empty());
@@ -129,6 +134,10 @@ mod tests {
         assert_eq!(
             stack_for_route("rfdetr.pth.engine").unwrap().key,
             "rfdetr-tensorrt"
+        );
+        assert_eq!(
+            stack_for_route("rfdetr.pth.coreml").unwrap().key,
+            "rfdetr-coreml"
         );
         assert!(stack_for_route("ultralytics.pt.onnx").is_none());
         assert!(stack_for_route("unknown.route").is_none());
@@ -162,7 +171,7 @@ mod tests {
 
         let stacks = list_stack_environments_for_runtime(runtime_dir.to_str().unwrap());
 
-        assert_eq!(stacks.len(), 2);
+        assert_eq!(stacks.len(), known_stacks().len());
         for ((stack, expected_stack), interpreter) in
             stacks.iter().zip(known_stacks()).zip(interpreters)
         {
