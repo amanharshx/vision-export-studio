@@ -43,6 +43,7 @@ pub fn run() {
             commands::deps::check_dependencies,
             commands::deps::install_dependencies,
             commands::environment::detect_environment,
+            commands::stack_environments::list_stack_environments,
             commands::export::start_export,
             commands::export::cancel_export,
             commands::export::open_export_folder,

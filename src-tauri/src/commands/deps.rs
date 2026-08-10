@@ -432,7 +432,7 @@ fn probe(python: &str, code: &str) -> Result<String, String> {
 }
 
 /// Return the selected interpreter's version (e.g. "3.9.6").
-fn probe_python_version(python: &str) -> Result<String, String> {
+pub(crate) fn probe_python_version(python: &str) -> Result<String, String> {
     probe(python, "import platform; print(platform.python_version())")
 }
 

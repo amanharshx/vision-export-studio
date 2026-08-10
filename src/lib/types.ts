@@ -78,6 +78,17 @@ export interface EnvironmentInfo {
   warnings: string[];
 }
 
+export type PythonVersion =
+  | { status: "available"; version: string }
+  | { status: "unavailable" };
+
+export interface StackEnvironment {
+  key: string;
+  display_name: string;
+  python_path: string;
+  python_version: PythonVersion;
+}
+
 export interface ExportOptions {
   imgsz: number;
   batch: number;

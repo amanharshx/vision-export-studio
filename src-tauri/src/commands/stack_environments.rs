@@ -1,18 +1,30 @@
 use std::path::{Path, PathBuf};
 
+use crate::commands::deps::probe_python_version;
+use crate::commands::setup::load_settings;
 use crate::commands::setup::venv_python_at;
 
+#[derive(Clone, Copy)]
 pub(crate) struct StackEnvironment {
     pub key: &'static str,
+    pub display_name: &'static str,
+    pub route_ids: &'static [&'static str],
 }
 
-pub(crate) fn stack_for_route(route_id: &str) -> Option<StackEnvironment> {
-    match route_id {
-        "rfdetr.pth.onnx" | "rfdetr.pth.engine" => Some(StackEnvironment {
-            key: "rfdetr-default",
-        }),
-        _ => None,
-    }
+const KNOWN_STACKS: &[StackEnvironment] = &[StackEnvironment {
+    key: "rfdetr-default",
+    display_name: "RF-DETR",
+    route_ids: &["rfdetr.pth.onnx", "rfdetr.pth.engine"],
+}];
+
+pub(crate) fn known_stacks() -> &'static [StackEnvironment] {
+    KNOWN_STACKS
+}
+
+pub(crate) fn stack_for_route(route_id: &str) -> Option<&'static StackEnvironment> {
+    known_stacks()
+        .iter()
+        .find(|stack| stack.route_ids.contains(&route_id))
 }
 
 pub(crate) fn stack_venv_dir(runtime_dir: &str, route_id: &str) -> Option<PathBuf> {
@@ -28,20 +40,121 @@ pub(crate) fn stack_python(runtime_dir: &str, route_id: &str) -> Option<String> 
     stack_venv_dir(runtime_dir, route_id).map(|path| venv_python_at(&path))
 }
 
+#[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum PythonVersion {
+    Available { version: String },
+    Unavailable,
+}
+
+#[derive(serde::Serialize)]
+pub struct StackEnvironmentInfo {
+    pub key: String,
+    pub display_name: String,
+    pub python_path: String,
+    pub python_version: PythonVersion,
+}
+
+pub(crate) fn list_stack_environments_for_runtime(runtime_dir: &str) -> Vec<StackEnvironmentInfo> {
+    known_stacks()
+        .iter()
+        .filter_map(|stack| {
+            let python_path = venv_python_at(
+                &Path::new(runtime_dir)
+                    .join("envs")
+                    .join(stack.key)
+                    .join(".venv"),
+            );
+            Path::new(&python_path)
+                .exists()
+                .then(|| StackEnvironmentInfo {
+                    key: stack.key.to_string(),
+                    display_name: stack.display_name.to_string(),
+                    python_version: probe_python_version(&python_path)
+                        .map(|version| PythonVersion::Available { version })
+                        .unwrap_or(PythonVersion::Unavailable),
+                    python_path,
+                })
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub async fn list_stack_environments(
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<StackEnvironmentInfo>, String> {
+    let settings = load_settings(app_handle)?;
+    Ok(list_stack_environments_for_runtime(&settings.runtime_dir))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    fn temp_runtime_dir() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "vision-export-studio-stack-test-{}",
+            uuid::Uuid::new_v4()
+        ))
+    }
 
     #[test]
-    fn rfdetr_routes_share_default_stack_and_other_routes_do_not() {
-        let onnx = stack_for_route("rfdetr.pth.onnx").unwrap();
-        assert_eq!(onnx.key, "rfdetr-default");
-        assert_eq!(
-            stack_for_route("rfdetr.pth.engine").unwrap().key,
-            "rfdetr-default"
-        );
+    fn known_stacks_and_routes_share_one_declaration() {
+        let stacks = known_stacks();
+        assert_eq!(stacks.len(), 1);
+
+        for stack in stacks {
+            assert!(!stack.key.is_empty());
+            assert!(!stack.display_name.is_empty());
+            assert!(!stack.route_ids.is_empty());
+            for route_id in stack.route_ids {
+                assert_eq!(stack_for_route(route_id).unwrap().key, stack.key);
+            }
+        }
+
+        for route_id in ["rfdetr.pth.onnx", "rfdetr.pth.engine"] {
+            assert!(stacks
+                .iter()
+                .any(|stack| stack.route_ids.contains(&route_id)));
+        }
         assert!(stack_for_route("ultralytics.pt.onnx").is_none());
         assert!(stack_for_route("unknown.route").is_none());
+    }
+
+    #[test]
+    fn listing_includes_only_existing_stack_interpreters_and_marks_failed_probe_unavailable() {
+        let runtime_dir = temp_runtime_dir();
+        let present_stack = known_stacks().first().unwrap();
+        assert!(list_stack_environments_for_runtime(runtime_dir.to_str().unwrap()).is_empty());
+
+        let interpreter = Path::new(&runtime_dir)
+            .join("envs")
+            .join(present_stack.key)
+            .join(".venv")
+            .join(if cfg!(windows) {
+                "Scripts/python.exe"
+            } else {
+                "bin/python"
+            });
+        fs::create_dir_all(interpreter.parent().unwrap()).unwrap();
+        fs::File::create(&interpreter).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&interpreter, fs::Permissions::from_mode(0o0)).unwrap();
+
+        let stacks = list_stack_environments_for_runtime(runtime_dir.to_str().unwrap());
+
+        assert_eq!(stacks.len(), 1);
+        assert_eq!(stacks[0].key, present_stack.key);
+        assert_eq!(stacks[0].display_name, present_stack.display_name);
+        assert_eq!(stacks[0].python_path, interpreter.to_string_lossy());
+        assert!(matches!(
+            stacks[0].python_version,
+            PythonVersion::Unavailable
+        ));
+        fs::remove_dir_all(runtime_dir).unwrap();
     }
 
     #[test]
