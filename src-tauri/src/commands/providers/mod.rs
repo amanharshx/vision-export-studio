@@ -17,6 +17,7 @@ pub struct ExportRequest {
     pub batch: u32,
     pub precision: String,
     pub calibration_data: Option<String>,
+    pub max_images: u32,
     pub dynamic: bool,
     pub simplify: bool,
     pub optimize: bool,

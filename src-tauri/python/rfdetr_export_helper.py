@@ -257,7 +257,7 @@ def resolve_model(args):
 def export_checkpoint(args):
     os.makedirs(args.output_dir, exist_ok=True)
     try:
-        if args.route_id not in ("rfdetr.pth.onnx", "rfdetr.pth.engine", "rfdetr.pth.coreml"):
+        if args.route_id not in ("rfdetr.pth.onnx", "rfdetr.pth.engine", "rfdetr.pth.coreml", "rfdetr.pth.tflite"):
             raise RuntimeError(f"unsupported RF-DETR route: {args.route_id}")
 
         model = resolve_model(args)
@@ -274,6 +274,13 @@ def export_checkpoint(args):
         elif args.route_id == "rfdetr.pth.coreml":
             kwargs["format"] = "coreml"
             kwargs["coreml_precision"] = "float16" if args.precision == "fp16" else "float32"
+        elif args.route_id == "rfdetr.pth.tflite":
+            kwargs["format"] = "tflite"
+            kwargs["quantization"] = args.precision
+            if args.precision == "int8":
+                if args.calibration_data:
+                    kwargs["calibration_data"] = args.calibration_data
+                kwargs["max_images"] = args.max_images
         if args.route_id == "rfdetr.pth.onnx" and args.opset is not None:
             kwargs["opset_version"] = args.opset
         model.export(**kwargs)
@@ -309,7 +316,9 @@ def parse_args():
     export_parser.add_argument("--opset", type=int)
     # TensorRT 11.x lacks RF-DETR's FP16 builder flag, so fresh unbounded
     # rfdetr[tensorrt] installs downgrade FP16 to FP32 and emit a warning.
-    export_parser.add_argument("--precision", choices=["fp16", "fp32"], default="fp32")
+    export_parser.add_argument("--precision", choices=["fp16", "fp32", "int8"], default="fp32")
+    export_parser.add_argument("--calibration-data", default="")
+    export_parser.add_argument("--max-images", type=int, default=100)
     return parser.parse_args()
 
 

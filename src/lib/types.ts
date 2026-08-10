@@ -94,6 +94,7 @@ export interface ExportOptions {
   batch: number;
   precision: PrecisionMode;
   calibrationData: string | null;
+  maxImages?: number;
   dynamic: boolean;
   simplify: boolean;
   optimize: boolean;

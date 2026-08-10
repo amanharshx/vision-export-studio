@@ -106,9 +106,27 @@ fn append_helper_args(cmd: &mut Command, request: &ExportRequest, helper: &Path)
     }
     if matches!(
         request.route_id.as_str(),
-        "rfdetr.pth.engine" | "rfdetr.pth.coreml"
+        "rfdetr.pth.engine" | "rfdetr.pth.coreml" | "rfdetr.pth.tflite"
     ) {
         cmd.arg("--precision").arg(&request.precision);
+    }
+    if request.route_id == "rfdetr.pth.tflite" && request.precision == "int8" {
+        if let Some(data) = request.calibration_data.as_deref() {
+            cmd.arg("--calibration-data").arg(data);
+        }
+        cmd.arg("--max-images").arg(request.max_images.to_string());
+    }
+}
+
+fn required_artifact_count(route_id: &str, precision: &str) -> usize {
+    if route_id == "rfdetr.pth.tflite" {
+        if precision == "int8" {
+            3
+        } else {
+            2
+        }
+    } else {
+        1
     }
 }
 
@@ -116,11 +134,11 @@ fn confirm_rfdetr_artifacts(route_id: &str, output_dir: &str) -> Result<bool, St
     let rule =
         rfdetr_artifact_rule(route_id).ok_or_else(|| format!("unknown route: {}", route_id))?;
     let output = Path::new(output_dir);
-    let exists = std::fs::read_dir(output)
+    let count = std::fs::read_dir(output)
         .map_err(|e| format!("failed to read output dir: {}", e))?
         .filter_map(|entry| entry.ok())
         .filter_map(|entry| entry.file_name().into_string().ok())
-        .any(|name| match &rule {
+        .filter(|name| match &rule {
             RfDetrArtifactRule::Named {
                 extension,
                 prefix,
@@ -129,8 +147,9 @@ fn confirm_rfdetr_artifacts(route_id: &str, output_dir: &str) -> Result<bool, St
                 .strip_suffix(extension)
                 .is_some_and(|stem| stem == *exact || stem.starts_with(*prefix)),
             RfDetrArtifactRule::Extension { extension } => name.ends_with(extension),
-        });
-    if exists {
+        })
+        .count();
+    if count >= required_artifact_count(route_id, "fp32") {
         Ok(true)
     } else {
         Err(format!(
@@ -275,16 +294,22 @@ pub fn confirm_artifacts_with_snapshot(
         }
     };
 
-    let changed = after.iter().any(
-        |post| match before.iter().find(|pre| pre.name == post.name) {
-            None => true,
-            Some(pre) => {
-                post.len != pre.len || post.modified != pre.modified || post.digest != pre.digest
-            }
-        },
-    );
+    let changed = after
+        .iter()
+        .filter(
+            |post| match before.iter().find(|pre| pre.name == post.name) {
+                None => true,
+                Some(pre) => {
+                    post.len != pre.len
+                        || post.modified != pre.modified
+                        || post.digest != pre.digest
+                }
+            },
+        )
+        .count();
 
-    if changed {
+    let required = required_artifact_count(&request.route_id, &request.precision);
+    if changed >= required {
         ArtifactStatus {
             artifact_moved: true,
             artifact_warning: None,
@@ -293,8 +318,8 @@ pub fn confirm_artifacts_with_snapshot(
         ArtifactStatus {
             artifact_moved: false,
             artifact_warning: Some(format!(
-                "RF-DETR export process exited successfully, but no new or updated artifact found in {}. Existing files may be stale.",
-                request.output_dir
+                "RF-DETR export process exited successfully, but only {} of {} required artifact(s) were new or updated in {}. Existing files may be stale.",
+                changed, required, request.output_dir
             )),
         }
     }
@@ -322,6 +347,7 @@ mod tests {
             batch: 1,
             precision: "fp32".to_string(),
             calibration_data: None,
+            max_images: 100,
             dynamic: false,
             simplify: false,
             optimize: false,
@@ -518,6 +544,54 @@ mod tests {
             "rewritten CoreML package should be accepted"
         );
         assert!(status.artifact_warning.is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tflite_snapshot_requires_changed_artifact_count_for_selected_quantization() {
+        let root =
+            std::env::temp_dir().join(format!("rfdetr-tflite-snapshot-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        for name in ["one.tflite", "two.tflite", "three.tflite"] {
+            std::fs::write(root.join(name), b"stale").expect("write stale artifact");
+        }
+        let before = snapshot_rfdetr_artifacts("rfdetr.pth.tflite", root.to_str().expect("path"))
+            .expect("snapshot");
+        std::fs::write(root.join("one.tflite"), b"fresh").expect("rewrite one artifact");
+
+        let fp32 = confirm_artifacts_with_snapshot(
+            &make_request("rfdetr.pth.tflite", root.to_str().expect("path")),
+            &before,
+        );
+        assert!(
+            !fp32.artifact_moved,
+            "one changed TFLite artifact must fail FP32/FP16 confirmation"
+        );
+
+        std::fs::write(root.join("two.tflite"), b"fresh").expect("rewrite second artifact");
+        let fp32 = confirm_artifacts_with_snapshot(
+            &make_request("rfdetr.pth.tflite", root.to_str().expect("path")),
+            &before,
+        );
+        assert!(
+            fp32.artifact_moved,
+            "two changed TFLite artifacts must pass FP32/FP16 confirmation"
+        );
+
+        let mut int8 = make_request("rfdetr.pth.tflite", root.to_str().expect("path"));
+        int8.precision = "int8".to_string();
+        let int8_status = confirm_artifacts_with_snapshot(&int8, &before);
+        assert!(
+            !int8_status.artifact_moved,
+            "two changed TFLite artifacts must fail INT8 confirmation"
+        );
+
+        std::fs::write(root.join("three.tflite"), b"fresh").expect("rewrite third artifact");
+        let int8_status = confirm_artifacts_with_snapshot(&int8, &before);
+        assert!(
+            int8_status.artifact_moved,
+            "three changed TFLite artifacts must pass INT8 confirmation"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

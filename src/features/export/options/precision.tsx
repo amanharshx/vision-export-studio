@@ -20,9 +20,11 @@ interface PrecisionOptionsProps {
   route: RouteSpec;
   options: ExportOptions;
   onOptionsChange: (options: ExportOptions) => void;
+  label?: string;
+  hideCalibration?: boolean;
 }
 
-export function PrecisionOptions({ route, options, onOptionsChange }: PrecisionOptionsProps) {
+export function PrecisionOptions({ route, options, onOptionsChange, label = "Precision", hideCalibration = false }: PrecisionOptionsProps) {
   const precisionItems = route.precisionModes.map((mode) => ({
     value: mode,
     label: PRECISION_LABELS[mode],
@@ -31,7 +33,7 @@ export function PrecisionOptions({ route, options, onOptionsChange }: PrecisionO
 
   return (
     <div className="space-y-3">
-      <OptionRow label="Precision" description="Numerical format for the exported model">
+      <OptionRow label={label} description="Numerical format for the exported model">
         {precisionItems.length > 1 ? (
           <Select
             value={options.precision}
@@ -63,7 +65,7 @@ export function PrecisionOptions({ route, options, onOptionsChange }: PrecisionO
         )}
       </OptionRow>
 
-      {calibrationRecommended && (
+      {calibrationRecommended && !hideCalibration && (
         <div className="space-y-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
           {options.calibrationData ? (
             <>

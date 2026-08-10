@@ -35,7 +35,12 @@ pub const ULTRALYTICS_ROUTES: &[&str] = &[
     "ultralytics.pt.pb",
 ];
 
-pub const RFDETR_ROUTES: &[&str] = &["rfdetr.pth.onnx", "rfdetr.pth.engine", "rfdetr.pth.coreml"];
+pub const RFDETR_ROUTES: &[&str] = &[
+    "rfdetr.pth.onnx",
+    "rfdetr.pth.engine",
+    "rfdetr.pth.coreml",
+    "rfdetr.pth.tflite",
+];
 
 pub fn validate_provider_route(provider_id: &str, route_id: &str) -> Result<ProviderId, String> {
     let provider = ProviderId::parse(provider_id)?;
@@ -182,6 +187,9 @@ pub fn rfdetr_artifact_rule(route_id: &str) -> Option<RfDetrArtifactRule> {
         "rfdetr.pth.coreml" => Some(RfDetrArtifactRule::Extension {
             extension: ".mlpackage",
         }),
+        "rfdetr.pth.tflite" => Some(RfDetrArtifactRule::Extension {
+            extension: ".tflite",
+        }),
         _ => None,
     }
 }
@@ -221,7 +229,7 @@ mod tests {
         assert!(validate_provider_route("ultralytics", "ultralytics.pt.onnx").is_ok());
         assert!(validate_provider_route("rfdetr", "rfdetr.pth.onnx").is_ok());
         assert!(validate_provider_route("rfdetr", "rfdetr.pth.coreml").is_ok());
-        assert!(validate_provider_route("rfdetr", "rfdetr.pth.tflite").is_err());
+        assert!(validate_provider_route("rfdetr", "rfdetr.pth.tflite").is_ok());
         assert!(validate_provider_route("rfdetr", "ultralytics.pt.onnx").is_err());
     }
 

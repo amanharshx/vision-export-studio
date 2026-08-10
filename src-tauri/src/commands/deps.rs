@@ -43,6 +43,24 @@ fn minimum_python_version(route_id: &str) -> Option<&'static str> {
     None
 }
 
+fn route_python_version_supported(route_id: &str, installed: &str) -> bool {
+    if stack_for_route(route_id)
+        .and_then(|stack| stack.python_requirement)
+        .is_some()
+    {
+        let Ok(installed) = Version::from_str(installed) else {
+            return false;
+        };
+        let min = Version::from_str("3.12").expect("valid TFLite minimum");
+        let max = Version::from_str("3.13").expect("valid TFLite maximum");
+        return installed >= min && installed < max;
+    }
+    match minimum_python_version(route_id) {
+        Some(required) => !version_below(installed, required),
+        None => true,
+    }
+}
+
 /// True when the installed version is below the required PEP 440 floor.
 /// Unparseable versions are treated as below the floor so they block export.
 fn version_below(installed: &str, required: &str) -> bool {
@@ -76,6 +94,27 @@ fn python_version_too_old_result(installed: &str) -> DepCheckResult {
         install_hint: "Install/select Python 3.10 or newer, then re-detect the environment and recreate the export runtime.".to_string(),
         install_package: None,
     }
+}
+
+fn route_python_version_result(route_id: &str, installed: &str) -> Option<DepCheckResult> {
+    if route_python_version_supported(route_id, installed) {
+        return None;
+    }
+    if route_id == "rfdetr.pth.tflite" {
+        return Some(DepCheckResult {
+            item: "Python 3.12".to_string(),
+            status: "version_too_old".to_string(),
+            reason: format!(
+                "Python {} is selected; TFLite requires Python 3.12.",
+                installed
+            ),
+            install_hint:
+                "Select Python 3.12, then recreate the RF-DETR TFLite export environment."
+                    .to_string(),
+            install_package: None,
+        });
+    }
+    minimum_python_version(route_id).map(|_| python_version_too_old_result(installed))
 }
 
 // ---------------------------------------------------------------------------
@@ -377,6 +416,14 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
             }],
             sys: &[],
         }),
+        "rfdetr.pth.tflite" => Some(RouteDeps {
+            pip: &[PipDep {
+                package_name: "rfdetr[tflite]",
+                install_hint: "pip install \"rfdetr[tflite]\"",
+                optional: false,
+            }],
+            sys: &[],
+        }),
         _ => None,
     }
 }
@@ -520,6 +567,14 @@ fn check_dependencies_for_runtime(
         });
     }
 
+    if let Ok(installed_python) = probe_python_version(python_path) {
+        if let Some(result) = route_python_version_result(route_id, &installed_python) {
+            return Ok(DepCheckResponse {
+                results: vec![result],
+            });
+        }
+    }
+
     let dependency_python = if stack_for_route(route_id).is_some() {
         let runtime_dir = stack_runtime_dir.expect("mapped route has a runtime directory");
         if let Some(results) = missing_stack_results_if_absent(runtime_dir, route_id) {
@@ -531,18 +586,6 @@ fn check_dependencies_for_runtime(
     };
 
     let mut results: Vec<DepCheckResult> = Vec::new();
-
-    // LiteRT Python floor: below 3.10 this is the only blocker and LiteRT package
-    // checks are skipped entirely to avoid predictable pip failures.
-    if let Some(required_python) = minimum_python_version(route_id) {
-        if let Ok(installed_python) = probe_python_version(&dependency_python) {
-            if version_below(&installed_python, required_python) {
-                return Ok(DepCheckResponse {
-                    results: vec![python_version_too_old_result(&installed_python)],
-                });
-            }
-        }
-    }
 
     // Check ultralytics only for Ultralytics routes.
     if route_id.starts_with("ultralytics.") {
@@ -575,6 +618,14 @@ fn check_dependencies_for_runtime(
             "import rfdetr; import coremltools; print(True)",
             "pip install \"rfdetr[coreml]\"",
             "rfdetr[coreml]",
+        ));
+    } else if route_id == "rfdetr.pth.tflite" {
+        results.push(check_python_probe_dep(
+            &dependency_python,
+            "rfdetr[tflite]",
+            "import rfdetr; import tensorflow; import onnx2tf; print(True)",
+            "pip install \"rfdetr[tflite]\"",
+            "rfdetr[tflite]",
         ));
     } else {
         for dep in deps.pip {
@@ -628,6 +679,13 @@ fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
             reason: "RF-DETR stack environment has not been created.".to_string(),
             install_hint: "pip install \"rfdetr[coreml]\"".to_string(),
             install_package: Some("rfdetr[coreml]".to_string()),
+        }]),
+        "rfdetr.pth.tflite" => Some(vec![DepCheckResult {
+            item: "rfdetr[tflite]".to_string(),
+            status: "missing_package".to_string(),
+            reason: "RF-DETR TFLite stack environment has not been created.".to_string(),
+            install_hint: "pip install \"rfdetr[tflite]\"".to_string(),
+            install_package: Some("rfdetr[tflite]".to_string()),
         }]),
         _ => None,
     }
@@ -831,6 +889,12 @@ pub async fn install_dependencies(
     let python_is_path = python_path.contains('/') || python_path.contains('\\');
     if python_is_path && !Path::new(&python_path).exists() {
         return Err(format!("python executable not found: {}", python_path));
+    }
+    if let Some(route_id) = route_id.as_deref() {
+        let installed_python = probe_python_version(&python_path)?;
+        if let Some(result) = route_python_version_result(route_id, &installed_python) {
+            return Err(result.reason);
+        }
     }
     if packages.is_empty() {
         return Err("packages must not be empty".to_string());
@@ -1093,8 +1157,10 @@ mod tests {
     }
 
     #[test]
-    fn rfdetr_tflite_route_is_unknown() {
-        assert!(route_deps("rfdetr.pth.tflite").is_none());
+    fn rfdetr_tflite_route_uses_isolated_extra() {
+        let deps = route_deps("rfdetr.pth.tflite").expect("route deps");
+        assert_eq!(deps.pip[0].package_name, "rfdetr[tflite]");
+        assert_eq!(deps.pip[0].install_hint, "pip install \"rfdetr[tflite]\"");
     }
 
     #[test]
@@ -1153,6 +1219,24 @@ mod tests {
         let rust_deps = route_deps("rfdetr.pth.coreml").expect("Rust CoreML route deps");
 
         assert_eq!(ts_package_name, "rfdetr[coreml]");
+        assert_eq!(ts_package_name, rust_deps.pip[0].package_name);
+    }
+
+    #[test]
+    fn rfdetr_tflite_route_package_matches_typescript_metadata() {
+        let ts_source = include_str!("../../../src/lib/providers/rfdetr.ts");
+        let tflite_route = ts_source
+            .split("id: \"rfdetr.pth.tflite\",")
+            .nth(1)
+            .expect("TFLite route in TypeScript metadata");
+        let ts_package_name = tflite_route
+            .split("packageName: \"")
+            .nth(1)
+            .and_then(|tail| tail.split('\"').next())
+            .expect("TFLite packageName in TypeScript metadata");
+        let rust_deps = route_deps("rfdetr.pth.tflite").expect("Rust TFLite route deps");
+
+        assert_eq!(ts_package_name, "rfdetr[tflite]");
         assert_eq!(ts_package_name, rust_deps.pip[0].package_name);
     }
 
@@ -1320,6 +1404,66 @@ mod tests {
             Some("8.4.83")
         );
         assert_eq!(minimum_ultralytics_version("rfdetr.pth.onnx"), None);
+    }
+
+    #[test]
+    fn tflite_requires_exactly_python_3_12() {
+        assert!(!route_python_version_supported(
+            "rfdetr.pth.tflite",
+            "3.11.9"
+        ));
+        assert!(route_python_version_supported(
+            "rfdetr.pth.tflite",
+            "3.12.12"
+        ));
+        assert!(!route_python_version_supported(
+            "rfdetr.pth.tflite",
+            "3.13.12"
+        ));
+        let result = route_python_version_result("rfdetr.pth.tflite", "3.13.12").unwrap();
+        assert_eq!(result.status, "version_too_old");
+        assert_eq!(result.install_package, None);
+        assert_eq!(
+            result.reason,
+            "Python 3.13.12 is selected; TFLite requires Python 3.12."
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tflite_dependency_check_blocks_3_11_and_3_13_before_creating_stack() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for version in ["3.11.9", "3.13.12"] {
+            let root =
+                std::env::temp_dir().join(format!("rfdetr-tflite-python-{}", Uuid::new_v4()));
+            std::fs::create_dir_all(&root).expect("create temp root");
+            let python = root.join("python");
+            std::fs::write(&python, format!("#!/bin/sh\necho {}\n", version))
+                .expect("write fake python");
+            std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755))
+                .expect("make fake python executable");
+            let runtime = root.join("runtime");
+
+            let response = check_dependencies_for_runtime(
+                "rfdetr.pth.tflite",
+                python.to_str().expect("python path"),
+                Some(runtime.to_str().expect("runtime path")),
+            )
+            .expect("dependency check response");
+
+            assert_eq!(response.results.len(), 1);
+            assert_eq!(response.results[0].status, "version_too_old");
+            assert_eq!(response.results[0].install_package, None);
+            assert!(response.results[0].reason.contains(version));
+            assert!(response.results[0].reason.contains("requires Python 3.12"));
+            assert!(
+                !stack_venv_dir(runtime.to_str().unwrap(), "rfdetr.pth.tflite")
+                    .unwrap()
+                    .exists()
+            );
+            std::fs::remove_dir_all(root).expect("remove temp root");
+        }
     }
 
     #[test]

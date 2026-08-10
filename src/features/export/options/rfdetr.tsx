@@ -1,4 +1,5 @@
 import { Input } from "@/components/ui/input";
+import { openCalibrationDirectoryPicker } from "@/lib/tauri/dialog";
 import { InputRow, type OptionsPanelProps } from "./_base";
 import { PrecisionOptions } from "./precision";
 
@@ -35,7 +36,40 @@ export function RfDetrOptions({ route, options, onOptionsChange, recommendedImgs
           className="h-8 w-20 text-xs"
         />
       </InputRow>
-      <PrecisionOptions route={route} options={options} onOptionsChange={onOptionsChange} />
+      <PrecisionOptions
+        route={route}
+        options={options}
+        onOptionsChange={onOptionsChange}
+        label={route.targetFormat === "tflite" ? "Quantization" : undefined}
+        hideCalibration={route.targetFormat === "tflite"}
+      />
+      {route.targetFormat === "tflite" && options.precision === "int8" && (
+        <div className="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+          <InputRow label="Calibration data" description="Directory of calibration images. Without it, RF-DETR uses random noise and accuracy degrades.">
+            <button
+              type="button"
+              className="text-xs font-medium text-zinc-600 underline underline-offset-2 transition-colors hover:text-zinc-900"
+              onClick={async () => {
+                const path = await openCalibrationDirectoryPicker();
+                if (path) onOptionsChange({ ...options, calibrationData: path });
+              }}
+            >
+              {options.calibrationData ? "Change calibration directory" : "Browse calibration directory"}
+            </button>
+          </InputRow>
+          {options.calibrationData && <p className="truncate font-mono text-xs text-zinc-700">{options.calibrationData}</p>}
+          <InputRow label="Max images" description="Maximum calibration images (upstream default: 100).">
+            <Input
+              type="number"
+              min={1}
+              step={1}
+              value={options.maxImages ?? 100}
+              onChange={(e) => onOptionsChange({ ...options, maxImages: Number(e.target.value) })}
+              className="h-8 w-20 text-xs"
+            />
+          </InputRow>
+        </div>
+      )}
       {route.targetFormat === "onnx" && (
         <InputRow label="Opset" description="ONNX opset version (11–20)">
           <Input

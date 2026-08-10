@@ -172,6 +172,7 @@ const defaultOptions: ExportOptions = {
   batch: 1,
   precision: "fp32",
   calibrationData: null,
+  maxImages: 100,
   dynamic: false,
   simplify: false,
   optimize: false,
@@ -194,6 +195,7 @@ function optionsForRoute(route: RouteSpec): ExportOptions {
     ...(routeDefaults[route.id] ?? {}),
     precision: route.defaultPrecision,
     calibrationData: null,
+    maxImages: 100,
   });
 }
 
@@ -939,6 +941,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         batch: options.batch,
         precision: options.precision,
         calibrationData: options.calibrationData,
+        maxImages: options.maxImages ?? 100,
         dynamic: options.dynamic,
         simplify: options.simplify,
         optimize: options.optimize,

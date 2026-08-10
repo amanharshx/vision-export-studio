@@ -61,26 +61,32 @@ class RfDetrExportHelperTests(unittest.TestCase):
             "token_grid": 32,
         })
 
-    def test_export_checkpoint_rejects_removed_tflite_route(self):
-        args = SimpleNamespace(
-            checkpoint="/tmp/model.pth",
-            output_dir="/tmp/out",
-            route_id="rfdetr.pth.tflite",
-            imgsz=640,
-            batch=1,
-            opset=None,
-            variant_mode="auto",
-            manual_class_symbol=None,
-        )
-        stderr = io.StringIO()
+    def test_export_checkpoint_uses_tflite_quantization_without_legacy_flags(self):
+        for quantization in ("fp32", "fp16", "int8"):
+            export = Mock()
+            args = SimpleNamespace(
+                checkpoint="/tmp/model.pth", output_dir="/tmp/out", route_id="rfdetr.pth.tflite",
+                imgsz=640, batch=1, opset=None, precision=quantization,
+                calibration_data="/tmp/calibration", max_images=42,
+                variant_mode="auto", manual_class_symbol=None,
+            )
 
-        with patch.object(helper, "resolve_model", return_value=SimpleNamespace()) as resolve_model:
-            with patch("sys.stderr", stderr):
-                result = helper.export_checkpoint(args)
+            with patch.object(helper, "resolve_model", return_value=SimpleNamespace(export=export)):
+                with patch.object(helper.os, "makedirs"):
+                    result = helper.export_checkpoint(args)
 
-        self.assertEqual(result, 1)
-        self.assertIn("unsupported RF-DETR route", stderr.getvalue())
-        resolve_model.assert_not_called()
+            self.assertEqual(result, 0)
+            kwargs = export.call_args.kwargs
+            self.assertEqual(kwargs["format"], "tflite")
+            self.assertEqual(kwargs["quantization"], quantization)
+            self.assertNotIn("fp16", kwargs)
+            self.assertNotIn("coreml_precision", kwargs)
+            if quantization == "int8":
+                self.assertEqual(kwargs["calibration_data"], "/tmp/calibration")
+                self.assertEqual(kwargs["max_images"], 42)
+            else:
+                self.assertNotIn("calibration_data", kwargs)
+                self.assertNotIn("max_images", kwargs)
 
     def test_export_checkpoint_uses_native_tensorrt_export(self):
         export = Mock()

@@ -75,6 +75,7 @@ pub async fn start_export(
     batch: u32,
     precision: String,
     calibration_data: Option<String>,
+    max_images: u32,
     dynamic: bool,
     simplify: bool,
     optimize: bool,
@@ -156,6 +157,7 @@ pub async fn start_export(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string),
+        max_images,
         dynamic,
         simplify,
         optimize,
