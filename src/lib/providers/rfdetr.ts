@@ -48,7 +48,7 @@ export const rfdetrRoutes: RouteSpec[] = [
     requiresGpu: true,
     oneWay: true,
     lossy: true,
-    notes: "Exports ONNX first, then compiles TensorRT engine for NVIDIA deployment hardware.",
+    notes: "Uses RF-DETR's native TensorRT export for NVIDIA deployment hardware.",
     unsupportedNote: "TensorRT requires an NVIDIA GPU. NVIDIA does not support macOS.",
   }),
 ];

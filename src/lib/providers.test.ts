@@ -52,6 +52,14 @@ describe("provider route registry", () => {
     expect(route?.pipDeps.map((dep) => dep.packageName)).toEqual(["rfdetr[onnx]"]);
   });
 
+  test("RF-DETR TensorRT uses native extra without trtexec", () => {
+    const route = routesForProvider("rfdetr").find((item) => item.id === "rfdetr.pth.engine");
+
+    expect(route?.pipDeps.map((dep) => dep.packageName)).toEqual(["rfdetr[tensorrt]"]);
+    expect(route?.sysDeps).toEqual([]);
+    expect(route?.intermediates).toEqual(["onnx"]);
+  });
+
   test("Ultralytics routes keep Ultralytics base dependency", () => {
     expect(providers.ultralytics.baseDeps.map((dep) => dep.packageName)).toContain("ultralytics");
   });
