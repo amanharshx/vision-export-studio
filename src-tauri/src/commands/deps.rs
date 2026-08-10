@@ -369,6 +369,14 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
             }],
             sys: &[],
         }),
+        "rfdetr.pth.coreml" => Some(RouteDeps {
+            pip: &[PipDep {
+                package_name: "rfdetr[coreml]",
+                install_hint: "pip install \"rfdetr[coreml]\"",
+                optional: false,
+            }],
+            sys: &[],
+        }),
         _ => None,
     }
 }
@@ -560,6 +568,14 @@ fn check_dependencies_for_runtime(
             "pip install \"rfdetr[tensorrt]\"",
             "rfdetr[tensorrt]",
         ));
+    } else if route_id == "rfdetr.pth.coreml" {
+        results.push(check_python_probe_dep(
+            &dependency_python,
+            "rfdetr[coreml]",
+            "import rfdetr; import coremltools; print(True)",
+            "pip install \"rfdetr[coreml]\"",
+            "rfdetr[coreml]",
+        ));
     } else {
         for dep in deps.pip {
             let result = check_pip_dep(
@@ -605,6 +621,13 @@ fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
             reason: "RF-DETR stack environment has not been created.".to_string(),
             install_hint: "pip install \"rfdetr[tensorrt]\"".to_string(),
             install_package: Some("rfdetr[tensorrt]".to_string()),
+        }]),
+        "rfdetr.pth.coreml" => Some(vec![DepCheckResult {
+            item: "rfdetr[coreml]".to_string(),
+            status: "missing_package".to_string(),
+            reason: "RF-DETR stack environment has not been created.".to_string(),
+            install_hint: "pip install \"rfdetr[coreml]\"".to_string(),
+            install_package: Some("rfdetr[coreml]".to_string()),
         }]),
         _ => None,
     }
@@ -1112,6 +1135,24 @@ mod tests {
             .expect("TensorRT packageName in TypeScript metadata");
         let rust_deps = route_deps("rfdetr.pth.engine").expect("Rust TensorRT route deps");
 
+        assert_eq!(ts_package_name, rust_deps.pip[0].package_name);
+    }
+
+    #[test]
+    fn rfdetr_coreml_route_package_matches_typescript_metadata() {
+        let ts_source = include_str!("../../../src/lib/providers/rfdetr.ts");
+        let coreml_route = ts_source
+            .split("id: \"rfdetr.pth.coreml\",")
+            .nth(1)
+            .expect("CoreML route in TypeScript metadata");
+        let ts_package_name = coreml_route
+            .split("packageName: \"")
+            .nth(1)
+            .and_then(|tail| tail.split('\"').next())
+            .expect("CoreML packageName in TypeScript metadata");
+        let rust_deps = route_deps("rfdetr.pth.coreml").expect("Rust CoreML route deps");
+
+        assert_eq!(ts_package_name, "rfdetr[coreml]");
         assert_eq!(ts_package_name, rust_deps.pip[0].package_name);
     }
 

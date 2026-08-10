@@ -51,4 +51,18 @@ export const rfdetrRoutes: RouteSpec[] = [
     notes: "Uses RF-DETR's native TensorRT export for NVIDIA deployment hardware.",
     unsupportedNote: "TensorRT requires an NVIDIA GPU. NVIDIA does not support macOS.",
   }),
+  rfdetrRoute({
+    id: "rfdetr.pth.coreml",
+    targetFormat: "coreml",
+    title: "CoreML",
+    displayPath: "checkpoint.pth -> model_fp32.mlpackage",
+    pipDeps: [{ packageName: "rfdetr[coreml]", installHint: 'pip install "rfdetr[coreml]"' }],
+    platformLock: "macos",
+    precisionModes: ["fp32", "fp16"],
+    defaultPrecision: "fp32",
+    oneWay: true,
+    lossy: true,
+    notes: "Experimental native CoreML export. Fixed shapes only; dynamic batch is unsupported.",
+    unsupportedNote: "CoreML export requires macOS.",
+  }),
 ];

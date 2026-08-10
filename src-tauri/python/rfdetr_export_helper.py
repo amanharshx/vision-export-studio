@@ -254,7 +254,7 @@ def resolve_model(args):
 def export_checkpoint(args):
     os.makedirs(args.output_dir, exist_ok=True)
     try:
-        if args.route_id not in ("rfdetr.pth.onnx", "rfdetr.pth.engine"):
+        if args.route_id not in ("rfdetr.pth.onnx", "rfdetr.pth.engine", "rfdetr.pth.coreml"):
             raise RuntimeError(f"unsupported RF-DETR route: {args.route_id}")
 
         model = resolve_model(args)
@@ -268,6 +268,9 @@ def export_checkpoint(args):
         if args.route_id == "rfdetr.pth.engine":
             kwargs["format"] = "tensorrt"
             kwargs["fp16"] = args.precision == "fp16"
+        elif args.route_id == "rfdetr.pth.coreml":
+            kwargs["format"] = "coreml"
+            kwargs["coreml_precision"] = "float16" if args.precision == "fp16" else "float32"
         if args.opset is not None:
             kwargs["opset_version"] = args.opset
         model.export(**kwargs)

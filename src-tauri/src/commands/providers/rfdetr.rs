@@ -27,6 +27,36 @@ fn sha256_file(path: &Path) -> Result<[u8; 32], String> {
     Ok(hasher.finalize().into())
 }
 
+fn sha256_directory(path: &Path) -> Result<[u8; 32], String> {
+    fn hash_entries(path: &Path, hasher: &mut Sha256) -> Result<(), String> {
+        let mut entries: Vec<_> = std::fs::read_dir(path)
+            .map_err(|e| format!("failed to read package directory for hashing: {}", e))?
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("failed to read package entry for hashing: {}", e))?;
+        entries.sort_by_key(|entry| entry.file_name());
+
+        for entry in entries {
+            let path = entry.path();
+            hasher.update(entry.file_name().as_encoded_bytes());
+            if path.is_dir() {
+                hasher.update(b"directory");
+                hash_entries(&path, hasher)?;
+            } else if path.is_file() {
+                hasher.update(b"file");
+                hasher.update(
+                    std::fs::read(&path)
+                        .map_err(|e| format!("failed to read package file for hashing: {}", e))?,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    let mut hasher = Sha256::new();
+    hash_entries(path, &mut hasher)?;
+    Ok(hasher.finalize().into())
+}
+
 pub fn build_command(
     request: &ExportRequest,
     app_handle: &tauri::AppHandle,
@@ -74,7 +104,10 @@ fn append_helper_args(cmd: &mut Command, request: &ExportRequest, helper: &Path)
     if let Some(value) = request.opset {
         cmd.arg("--opset").arg(value.to_string());
     }
-    if request.route_id == "rfdetr.pth.engine" {
+    if matches!(
+        request.route_id.as_str(),
+        "rfdetr.pth.engine" | "rfdetr.pth.coreml"
+    ) {
         cmd.arg("--precision").arg(&request.precision);
     }
 }
@@ -155,7 +188,13 @@ pub fn snapshot_rfdetr_artifacts(
     for entry in dir {
         let entry = entry.map_err(|e| format!("failed to read dir entry: {}", e))?;
         let path = entry.path();
-        if !path.is_file() {
+        let allows_directory = matches!(
+            rule,
+            RfDetrArtifactRule::Extension {
+                extension: ".mlpackage"
+            }
+        );
+        if !(path.is_file() || allows_directory && path.is_dir()) {
             continue;
         }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -179,7 +218,11 @@ pub fn snapshot_rfdetr_artifacts(
                 name: name.to_string(),
                 len: meta.len(),
                 modified: meta.modified().ok(),
-                digest: sha256_file(&path)?,
+                digest: if path.is_file() {
+                    sha256_file(&path)?
+                } else {
+                    sha256_directory(&path)?
+                },
             });
         }
     }
@@ -394,6 +437,87 @@ mod tests {
         std::fs::write(root.join("inference_model.engine"), b"engine").expect("write engine");
         let result = confirm_rfdetr_artifacts("rfdetr.pth.engine", root.to_str().expect("path"));
         assert!(result.is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn confirm_artifacts_accepts_coreml_package_directories() {
+        let root = std::env::temp_dir().join(format!("rfdetr-coreml-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("rfdetr-medium_fp32.mlpackage"))
+            .expect("create fp32 package");
+        std::fs::create_dir_all(root.join("rfdetr-small_fp16.mlpackage"))
+            .expect("create fp16 package");
+
+        assert_eq!(
+            confirm_rfdetr_artifacts("rfdetr.pth.coreml", root.to_str().expect("path")),
+            Ok(true)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn confirm_artifacts_rejects_empty_coreml_output_dir() {
+        let root =
+            std::env::temp_dir().join(format!("rfdetr-coreml-empty-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp dir");
+
+        assert!(
+            confirm_rfdetr_artifacts("rfdetr.pth.coreml", root.to_str().expect("path")).is_err()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn snapshot_captures_coreml_package_directory() {
+        let root =
+            std::env::temp_dir().join(format!("rfdetr-coreml-snap-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("rfdetr-small_fp16.mlpackage")).expect("create package");
+
+        let snap = snapshot_rfdetr_artifacts("rfdetr.pth.coreml", root.to_str().expect("path"))
+            .expect("snapshot");
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].name, "rfdetr-small_fp16.mlpackage");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn snapshot_ignores_onnx_and_tensorrt_directories() {
+        let root = std::env::temp_dir().join(format!("rfdetr-file-only-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("rfdetr-small.onnx")).expect("create onnx directory");
+        std::fs::create_dir_all(root.join("model.trt")).expect("create trt directory");
+
+        assert!(
+            snapshot_rfdetr_artifacts("rfdetr.pth.onnx", root.to_str().expect("path"))
+                .expect("onnx snapshot")
+                .is_empty()
+        );
+        assert!(
+            snapshot_rfdetr_artifacts("rfdetr.pth.engine", root.to_str().expect("path"))
+                .expect("tensorrt snapshot")
+                .is_empty()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn with_snapshot_accepts_same_name_coreml_package_rewrite() {
+        let root =
+            std::env::temp_dir().join(format!("rfdetr-coreml-rewrite-{}", uuid::Uuid::new_v4()));
+        let package = root.join("rfdetr-small_fp16.mlpackage");
+        std::fs::create_dir_all(&package).expect("create package");
+        std::fs::write(package.join("model.bin"), b"AAAA").expect("write first model");
+        let before = snapshot_rfdetr_artifacts("rfdetr.pth.coreml", root.to_str().expect("path"))
+            .expect("snapshot");
+
+        std::fs::write(package.join("model.bin"), b"BBBB").expect("rewrite model");
+        let request = make_request("rfdetr.pth.coreml", root.to_str().expect("path"));
+        let status = confirm_artifacts_with_snapshot(&request, &before);
+
+        assert!(
+            status.artifact_moved,
+            "rewritten CoreML package should be accepted"
+        );
+        assert!(status.artifact_warning.is_none());
         let _ = std::fs::remove_dir_all(root);
     }
 

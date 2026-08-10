@@ -106,9 +106,10 @@ Roboflow RF-DETR (`.pth`) target formats:
 | --- | :---: | --- |
 | `.pth -> onnx` | ✅ | Recommended RF-DETR target and primary path. |
 | `.pth -> engine` | ✅ | TensorRT via RF-DETR native export. NVIDIA GPU required. No macOS. |
+| `.pth -> coreml` | ✅ | Experimental native CoreML export. macOS only; fixed shapes only. |
 
 > [!NOTE]
-> RF-DETR support is intentionally focused on ONNX and TensorRT. TFLite export was evaluated and dropped because the ONNX → TFLite conversion failed consistently across macOS and Linux.
+> RF-DETR supports ONNX, TensorRT, and experimental native CoreML. CoreML uses fixed shapes because upstream does not support dynamic batching. TFLite export was evaluated and dropped because the ONNX → TFLite conversion failed consistently across macOS and Linux.
 
 ## Export Precision
 
@@ -155,7 +156,7 @@ Some targets are one-way deployment artifacts or platform-locked:
 - `imx` export is Linux-only and requires Java `>= 17`.
 - `axelera` export is Linux-only.
 - `litert`, `engine`, `mnn`, `rknn`, `imx`, `axelera`, `edgetpu`, and some `coreml` outputs should be treated as one-way deployment outputs.
-- **Roboflow RF-DETR (`.pth`)** exports only to `onnx` and `engine`. Its native `engine` (TensorRT) path is NVIDIA-only; output is locked to building GPU and TensorRT version.
+- **Roboflow RF-DETR (`.pth`)** exports to `onnx`, `engine`, and experimental `coreml`. Native `engine` (TensorRT) is NVIDIA-only; native `coreml` is macOS-only with fixed shapes.
 
 ---
 

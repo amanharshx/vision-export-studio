@@ -87,6 +87,24 @@ class RfDetrExportHelperTests(unittest.TestCase):
         self.assertEqual(export.call_args.kwargs["format"], "tensorrt")
         self.assertFalse(export.call_args.kwargs["fp16"])
 
+    def test_export_checkpoint_uses_coreml_precision_without_fp16_flag(self):
+        for precision, expected in (("fp32", "float32"), ("fp16", "float16")):
+            export = Mock()
+            args = SimpleNamespace(
+                checkpoint="/tmp/model.pth", output_dir="/tmp/out", route_id="rfdetr.pth.coreml",
+                imgsz=640, batch=1, opset=None, precision=precision,
+                variant_mode="auto", manual_class_symbol=None,
+            )
+
+            with patch.object(helper, "resolve_model", return_value=SimpleNamespace(export=export)):
+                with patch.object(helper.os, "makedirs"):
+                    result = helper.export_checkpoint(args)
+
+            self.assertEqual(result, 0)
+            self.assertEqual(export.call_args.kwargs["format"], "coreml")
+            self.assertEqual(export.call_args.kwargs["coreml_precision"], expected)
+            self.assertNotIn("fp16", export.call_args.kwargs)
+
     def test_parse_args_defaults_tensorrt_precision_to_fp32(self):
         with patch("sys.argv", [
             "rfdetr_export_helper.py", "export", "--checkpoint", "/tmp/model.pth",
