@@ -1524,7 +1524,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
             </button>
           </div>
 
-          <div className="space-y-5 px-5 py-5">
+          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
             {/* Status cards */}
             <div className="space-y-3">
               <p className="text-[11px] font-medium uppercase tracking-wider text-zinc-400">
