@@ -52,6 +52,12 @@ pub fn build_command(
         )
         .map_err(|e| format!("failed to resolve RF-DETR helper resource: {}", e))?;
     let mut cmd = Command::new(&request.python_path);
+    append_helper_args(&mut cmd, request, &helper);
+    Ok(cmd)
+}
+
+fn append_helper_args(cmd: &mut Command, request: &ExportRequest, helper: &Path) {
+    let variant_mode = request.rfdetr_variant_mode.as_deref().unwrap_or("auto");
     cmd.arg(helper);
     cmd.arg("export");
     cmd.arg("--checkpoint").arg(&request.source_path);
@@ -68,7 +74,9 @@ pub fn build_command(
     if let Some(value) = request.opset {
         cmd.arg("--opset").arg(value.to_string());
     }
-    Ok(cmd)
+    if request.route_id == "rfdetr.pth.engine" {
+        cmd.arg("--precision").arg(&request.precision);
+    }
 }
 
 fn confirm_rfdetr_artifacts(route_id: &str, output_dir: &str) -> Result<bool, String> {
@@ -257,6 +265,7 @@ mod tests {
     use super::confirm_rfdetr_artifacts;
     use super::snapshot_rfdetr_artifacts;
     use super::ArtifactFingerprint;
+    use std::process::Command;
 
     fn make_request(route_id: &str, output_dir: &str) -> ExportRequest {
         ExportRequest {
@@ -282,6 +291,29 @@ mod tests {
             rfdetr_trust_confirmed: true,
             rfdetr_variant_mode: None,
             rfdetr_manual_class_symbol: None,
+        }
+    }
+
+    #[test]
+    fn helper_args_forward_tensorrt_precision() {
+        for (precision, expected) in [("fp16", "fp16"), ("fp32", "fp32")] {
+            let mut request = make_request("rfdetr.pth.engine", "/tmp/output");
+            request.precision = precision.to_string();
+            let mut command = Command::new("python");
+
+            super::append_helper_args(
+                &mut command,
+                &request,
+                std::path::Path::new("/tmp/rfdetr_export_helper.py"),
+            );
+
+            let args: Vec<String> = command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().to_string())
+                .collect();
+            assert!(args
+                .windows(2)
+                .any(|pair| pair == ["--precision", expected]));
         }
     }
 

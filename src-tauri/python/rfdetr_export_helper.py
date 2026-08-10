@@ -267,6 +267,7 @@ def export_checkpoint(args):
         }
         if args.route_id == "rfdetr.pth.engine":
             kwargs["format"] = "tensorrt"
+            kwargs["fp16"] = args.precision == "fp16"
         if args.opset is not None:
             kwargs["opset_version"] = args.opset
         model.export(**kwargs)
@@ -300,6 +301,7 @@ def parse_args():
     export_parser.add_argument("--imgsz", type=int, required=True)
     export_parser.add_argument("--batch", type=int, required=True)
     export_parser.add_argument("--opset", type=int)
+    export_parser.add_argument("--precision", choices=["fp16", "fp32"], default="fp16")
     return parser.parse_args()
 
 

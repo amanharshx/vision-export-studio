@@ -46,6 +46,8 @@ export const rfdetrRoutes: RouteSpec[] = [
     platformLock: "linux_windows",
     intermediates: ["onnx"],
     requiresGpu: true,
+    precisionModes: ["fp16", "fp32"],
+    defaultPrecision: "fp16",
     oneWay: true,
     lossy: true,
     notes: "Uses RF-DETR's native TensorRT export for NVIDIA deployment hardware.",
