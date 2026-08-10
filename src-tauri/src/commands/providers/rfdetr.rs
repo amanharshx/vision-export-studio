@@ -72,28 +72,32 @@ pub fn build_command(
 }
 
 fn confirm_rfdetr_artifacts(route_id: &str, output_dir: &str) -> Result<bool, String> {
-    let RfDetrArtifactRule::Named {
-        extension,
-        prefix,
-        exact,
-    } = rfdetr_artifact_rule(route_id).ok_or_else(|| format!("unknown route: {}", route_id))?;
+    let rule =
+        rfdetr_artifact_rule(route_id).ok_or_else(|| format!("unknown route: {}", route_id))?;
     let output = Path::new(output_dir);
     let exists = std::fs::read_dir(output)
         .map_err(|e| format!("failed to read output dir: {}", e))?
         .filter_map(|entry| entry.ok())
-        .filter_map(|entry| {
-            let name = entry.file_name();
-            let name = name.to_str()?;
-            let stem = name.strip_suffix(extension)?;
-            Some(stem.to_owned())
-        })
-        .any(|ref stem| stem == exact || stem.starts_with(prefix));
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .any(|name| match &rule {
+            RfDetrArtifactRule::Named {
+                extension,
+                prefix,
+                exact,
+            } => name
+                .strip_suffix(extension)
+                .is_some_and(|stem| stem == *exact || stem.starts_with(*prefix)),
+            RfDetrArtifactRule::Extension { extension } => name.ends_with(extension),
+        });
     if exists {
         Ok(true)
     } else {
         Err(format!(
             "no matching {} artifact found in output directory",
-            extension
+            match &rule {
+                RfDetrArtifactRule::Named { extension, .. }
+                | RfDetrArtifactRule::Extension { extension } => *extension,
+            }
         ))
     }
 }
@@ -130,11 +134,8 @@ pub fn snapshot_rfdetr_artifacts(
     route_id: &str,
     output_dir: &str,
 ) -> Result<Vec<ArtifactFingerprint>, String> {
-    let RfDetrArtifactRule::Named {
-        extension,
-        prefix,
-        exact,
-    } = rfdetr_artifact_rule(route_id).ok_or_else(|| format!("unknown route: {}", route_id))?;
+    let rule =
+        rfdetr_artifact_rule(route_id).ok_or_else(|| format!("unknown route: {}", route_id))?;
     let output = Path::new(output_dir);
     let mut fingerprints = Vec::new();
 
@@ -151,10 +152,15 @@ pub fn snapshot_rfdetr_artifacts(
         }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-        let matches = if let Some(stem) = name.strip_suffix(extension) {
-            stem == exact || stem.starts_with(prefix)
-        } else {
-            false
+        let matches = match &rule {
+            RfDetrArtifactRule::Named {
+                extension,
+                prefix,
+                exact,
+            } => name
+                .strip_suffix(extension)
+                .is_some_and(|stem| stem == *exact || stem.starts_with(*prefix)),
+            RfDetrArtifactRule::Extension { extension } => name.ends_with(extension),
         };
 
         if matches {
@@ -310,20 +316,20 @@ mod tests {
     }
 
     #[test]
-    fn confirm_artifacts_accepts_variant_named_engine_file() {
-        let root = std::env::temp_dir().join(format!("rfdetr-engine-{}", uuid::Uuid::new_v4()));
+    fn confirm_artifacts_accepts_inference_model_fp16_trt() {
+        let root = std::env::temp_dir().join(format!("rfdetr-trt-fp16-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("create temp dir");
-        std::fs::write(root.join("rfdetr-small.engine"), b"engine").expect("write engine");
+        std::fs::write(root.join("inference_model_fp16.trt"), b"trt").expect("write trt");
         let result = confirm_rfdetr_artifacts("rfdetr.pth.engine", root.to_str().expect("path"));
         assert_eq!(result, Ok(true));
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn confirm_artifacts_accepts_inference_model_engine() {
-        let root = std::env::temp_dir().join(format!("rfdetr-inf-engine-{}", uuid::Uuid::new_v4()));
+    fn confirm_artifacts_accepts_inference_model_fp32_trt() {
+        let root = std::env::temp_dir().join(format!("rfdetr-trt-fp32-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("create temp dir");
-        std::fs::write(root.join("inference_model.engine"), b"engine").expect("write engine");
+        std::fs::write(root.join("inference_model_fp32.trt"), b"trt").expect("write trt");
         let result = confirm_rfdetr_artifacts("rfdetr.pth.engine", root.to_str().expect("path"));
         assert_eq!(result, Ok(true));
         let _ = std::fs::remove_dir_all(root);
@@ -340,10 +346,20 @@ mod tests {
     }
 
     #[test]
-    fn confirm_artifacts_rejects_unrelated_engine_file() {
-        let root = std::env::temp_dir().join(format!("rfdetr-foo-engine-{}", uuid::Uuid::new_v4()));
+    fn confirm_artifacts_accepts_custom_trt_file() {
+        let root = std::env::temp_dir().join(format!("rfdetr-custom-trt-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("create temp dir");
-        std::fs::write(root.join("foo.engine"), b"engine").expect("write engine");
+        std::fs::write(root.join("custom-export.trt"), b"trt").expect("write trt");
+        let result = confirm_rfdetr_artifacts("rfdetr.pth.engine", root.to_str().expect("path"));
+        assert_eq!(result, Ok(true));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn confirm_artifacts_rejects_engine_file() {
+        let root = std::env::temp_dir().join(format!("rfdetr-engine-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        std::fs::write(root.join("inference_model.engine"), b"engine").expect("write engine");
         let result = confirm_rfdetr_artifacts("rfdetr.pth.engine", root.to_str().expect("path"));
         assert!(result.is_err());
         let _ = std::fs::remove_dir_all(root);
@@ -376,14 +392,14 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_captures_engine_files() {
-        let root = std::env::temp_dir().join(format!("rfdetr-eng-snap-{}", uuid::Uuid::new_v4()));
+    fn snapshot_captures_trt_files() {
+        let root = std::env::temp_dir().join(format!("rfdetr-trt-snap-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("create temp dir");
-        std::fs::write(root.join("rfdetr-large.engine"), b"engine").expect("write engine");
+        std::fs::write(root.join("inference_model_fp16.trt"), b"trt").expect("write trt");
         let snap = snapshot_rfdetr_artifacts("rfdetr.pth.engine", root.to_str().expect("path"))
             .expect("snapshot");
         assert_eq!(snap.len(), 1);
-        assert_eq!(snap[0].name, "rfdetr-large.engine");
+        assert_eq!(snap[0].name, "inference_model_fp16.trt");
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -442,52 +458,47 @@ mod tests {
     }
 
     #[test]
-    fn with_snapshot_accepts_new_engine_file() {
-        let root = std::env::temp_dir().join(format!("rfdetr-new-eng-{}", uuid::Uuid::new_v4()));
+    fn with_snapshot_accepts_new_trt_file() {
+        let root = std::env::temp_dir().join(format!("rfdetr-new-trt-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("create temp dir");
         let before: Vec<ArtifactFingerprint> = vec![];
-        std::fs::write(root.join("rfdetr-small.engine"), b"engine").expect("write engine");
+        std::fs::write(root.join("inference_model_fp16.trt"), b"trt").expect("write trt");
         let req = make_request("rfdetr.pth.engine", root.to_str().expect("path"));
         let status = confirm_artifacts_with_snapshot(&req, &before);
-        assert!(status.artifact_moved, "new engine file should be accepted");
+        assert!(status.artifact_moved, "new trt file should be accepted");
         assert!(status.artifact_warning.is_none());
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn with_snapshot_rejects_stale_engine_file() {
-        let root = std::env::temp_dir().join(format!("rfdetr-stale-eng-{}", uuid::Uuid::new_v4()));
+    fn with_snapshot_rejects_stale_trt_file() {
+        let root = std::env::temp_dir().join(format!("rfdetr-stale-trt-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("create temp dir");
-        std::fs::write(root.join("rfdetr-small.engine"), b"engine").expect("write engine");
+        std::fs::write(root.join("inference_model_fp16.trt"), b"trt").expect("write trt");
 
         let before = snapshot_rfdetr_artifacts("rfdetr.pth.engine", root.to_str().expect("path"))
             .expect("snapshot");
         let req = make_request("rfdetr.pth.engine", root.to_str().expect("path"));
         let status = confirm_artifacts_with_snapshot(&req, &before);
-        assert!(
-            !status.artifact_moved,
-            "stale engine file should be rejected"
-        );
+        assert!(!status.artifact_moved, "stale trt file should be rejected");
         assert!(status.artifact_warning.is_some());
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn with_snapshot_accepts_updated_engine_file() {
-        let root = std::env::temp_dir().join(format!("rfdetr-upd-eng-{}", uuid::Uuid::new_v4()));
+    fn with_snapshot_accepts_updated_trt_file() {
+        let root = std::env::temp_dir().join(format!("rfdetr-upd-trt-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("create temp dir");
-        std::fs::write(root.join("rfdetr-small.engine"), b"v1-engine").expect("write v1");
+        std::fs::write(root.join("inference_model_fp16.trt"), b"v1-trt").expect("write v1");
 
         let before = snapshot_rfdetr_artifacts("rfdetr.pth.engine", root.to_str().expect("path"))
             .expect("snapshot");
-        std::fs::write(root.join("rfdetr-small.engine"), b"v2-engine-exported").expect("write v2");
+        std::fs::write(root.join("inference_model_fp16.trt"), b"v2-trt-exported")
+            .expect("write v2");
 
         let req = make_request("rfdetr.pth.engine", root.to_str().expect("path"));
         let status = confirm_artifacts_with_snapshot(&req, &before);
-        assert!(
-            status.artifact_moved,
-            "updated engine file should be accepted"
-        );
+        assert!(status.artifact_moved, "updated trt file should be accepted");
         assert!(status.artifact_warning.is_none());
         let _ = std::fs::remove_dir_all(root);
     }
@@ -516,20 +527,20 @@ mod tests {
     }
 
     #[test]
-    fn with_snapshot_accepts_same_size_engine_rewrite() {
-        let root = std::env::temp_dir().join(format!("rfdetr-samesz-eng-{}", uuid::Uuid::new_v4()));
+    fn with_snapshot_accepts_same_size_trt_rewrite() {
+        let root = std::env::temp_dir().join(format!("rfdetr-samesz-trt-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("create temp dir");
-        std::fs::write(root.join("rfdetr-small.engine"), b"AAAA").expect("write v1");
+        std::fs::write(root.join("inference_model_fp16.trt"), b"AAAA").expect("write v1");
 
         let before = snapshot_rfdetr_artifacts("rfdetr.pth.engine", root.to_str().expect("path"))
             .expect("snapshot");
-        std::fs::write(root.join("rfdetr-small.engine"), b"BBBB").expect("write v2");
+        std::fs::write(root.join("inference_model_fp16.trt"), b"BBBB").expect("write v2");
 
         let req = make_request("rfdetr.pth.engine", root.to_str().expect("path"));
         let status = confirm_artifacts_with_snapshot(&req, &before);
         assert!(
             status.artifact_moved,
-            "same-size engine rewrite should be detected via digest"
+            "same-size trt rewrite should be detected via digest"
         );
         assert!(status.artifact_warning.is_none());
         let _ = std::fs::remove_dir_all(root);

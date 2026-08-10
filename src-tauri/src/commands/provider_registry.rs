@@ -162,6 +162,9 @@ pub enum RfDetrArtifactRule {
         prefix: &'static str,
         exact: &'static str,
     },
+    Extension {
+        extension: &'static str,
+    },
 }
 
 pub fn rfdetr_artifact_rule(route_id: &str) -> Option<RfDetrArtifactRule> {
@@ -171,11 +174,7 @@ pub fn rfdetr_artifact_rule(route_id: &str) -> Option<RfDetrArtifactRule> {
             prefix: "rfdetr-",
             exact: "inference_model",
         }),
-        "rfdetr.pth.engine" => Some(RfDetrArtifactRule::Named {
-            extension: ".engine",
-            prefix: "rfdetr-",
-            exact: "inference_model",
-        }),
+        "rfdetr.pth.engine" => Some(RfDetrArtifactRule::Extension { extension: ".trt" }),
         _ => None,
     }
 }
@@ -275,10 +274,10 @@ mod tests {
     }
 
     #[test]
-    fn rfdetr_engine_expects_named_rule() {
+    fn rfdetr_engine_expects_extension_rule() {
         assert!(matches!(
             rfdetr_artifact_rule("rfdetr.pth.engine"),
-            Some(RfDetrArtifactRule::Named { .. })
+            Some(RfDetrArtifactRule::Extension { .. })
         ));
     }
 

@@ -4,7 +4,7 @@ import pathlib
 import types
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 MODULE_PATH = pathlib.Path(__file__).with_name("rfdetr_export_helper.py")
@@ -64,6 +64,31 @@ class RfDetrExportHelperTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertIn("unsupported RF-DETR route", stderr.getvalue())
         resolve_model.assert_not_called()
+
+    def test_export_checkpoint_uses_native_tensorrt_export(self):
+        export = Mock()
+        args = SimpleNamespace(
+            checkpoint="/tmp/model.pth",
+            output_dir="/tmp/out",
+            route_id="rfdetr.pth.engine",
+            imgsz=640,
+            batch=1,
+            opset=None,
+            variant_mode="auto",
+            manual_class_symbol=None,
+        )
+
+        with patch.object(helper, "resolve_model", return_value=SimpleNamespace(export=export)):
+            with patch.object(helper.os, "makedirs"):
+                result = helper.export_checkpoint(args)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(export.call_args.kwargs["format"], "tensorrt")
+
+    def test_helper_source_has_no_trtexec_reference(self):
+        source = MODULE_PATH.read_text()
+
+        self.assertNotIn("trtexec", source)
 
 
 if __name__ == "__main__":
