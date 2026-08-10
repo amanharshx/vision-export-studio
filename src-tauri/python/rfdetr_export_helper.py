@@ -301,7 +301,9 @@ def parse_args():
     export_parser.add_argument("--imgsz", type=int, required=True)
     export_parser.add_argument("--batch", type=int, required=True)
     export_parser.add_argument("--opset", type=int)
-    export_parser.add_argument("--precision", choices=["fp16", "fp32"], default="fp16")
+    # TensorRT 11.x lacks RF-DETR's FP16 builder flag, so fresh unbounded
+    # rfdetr[tensorrt] installs downgrade FP16 to FP32 and emit a warning.
+    export_parser.add_argument("--precision", choices=["fp16", "fp32"], default="fp32")
     return parser.parse_args()
 
 

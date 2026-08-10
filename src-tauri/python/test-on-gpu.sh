@@ -20,7 +20,7 @@
 #   - rfdetr_export_helper.py must sit in the SAME directory as this script.
 #
 # NOTES
-#   - A produced `inference_model_fp16.trt` or `inference_model_fp32.trt` is GPU-family-specific; this validates the pipeline,
+#   - A produced `.trt` artifact is GPU-family-specific; this validates the pipeline,
 #     not artifact portability.
 # ---------------------------------------------------------------------------
 set -uo pipefail
@@ -64,10 +64,14 @@ echo "--- key versions ---"
 
 run_route(){
   local route="$1" sub="$2" out="$OUT_BASE/$2"
+  local precision_args=()
+  if [ "$route" = "rfdetr.pth.engine" ]; then
+    precision_args=(--precision fp32)
+  fi
   rm -rf "$out"; mkdir -p "$out"
   line "ROUTE $route (imgsz=$IMGSZ)"
   "$PY" "$HELPER" export --checkpoint "$CKPT" --route-id "$route" \
-        --output-dir "$out" --variant-mode auto --imgsz "$IMGSZ" --batch 1
+        --output-dir "$out" --variant-mode auto --imgsz "$IMGSZ" --batch 1 "${precision_args[@]}"
   local rc=$?
   echo "RESULT: $route -> EXIT $rc $( [ $rc -eq 0 ] && echo '(ok)' || echo '(FAILED)')"
   echo "--- artifacts in $out ---"

@@ -59,8 +59,8 @@ describe("provider route registry", () => {
     expect(route?.pipDeps.map((dep) => dep.packageName)).toEqual(["rfdetr[tensorrt]"]);
     expect(route?.sysDeps).toEqual([]);
     expect(route?.intermediates).toEqual(["onnx"]);
-    expect(route?.precisionModes).toEqual(["fp16", "fp32"]);
-    expect(route?.defaultPrecision).toBe("fp16");
+    expect(route?.precisionModes).toEqual(["fp32"]);
+    expect(route?.defaultPrecision).toBe("fp32");
     expect(onnxRoute?.precisionModes).toEqual(["fp32"]);
     expect(onnxRoute?.defaultPrecision).toBe("fp32");
   });

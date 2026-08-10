@@ -13,6 +13,6 @@ test("RF-DETR GPU smoke script uses native TensorRT prerequisites", () => {
   expect(script).not.toContain("inference_model.engine");
   expect(script).toContain('rfdetr[onnx,tensorrt]>=1.7.1');
   expect(script).toContain("command -v nvidia-smi >/dev/null 2>&1 && \"$PY\" -c 'import tensorrt'");
-  expect(script).toContain('inference_model_fp16.trt');
-  expect(script).toContain('inference_model_fp32.trt');
+  expect(script).toContain('`.trt`');
+  expect(script).toContain('--precision fp32');
 });

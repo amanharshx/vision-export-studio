@@ -66,35 +66,32 @@ class RfDetrExportHelperTests(unittest.TestCase):
         resolve_model.assert_not_called()
 
     def test_export_checkpoint_uses_native_tensorrt_export(self):
-        for precision, expected_fp16 in (("fp16", True), ("fp32", False)):
-            with self.subTest(precision=precision):
-                export = Mock()
-                args = SimpleNamespace(
-                    checkpoint="/tmp/model.pth",
-                    output_dir="/tmp/out",
-                    route_id="rfdetr.pth.engine",
-                    imgsz=640,
-                    batch=1,
-                    opset=None,
-                    precision=precision,
-                    variant_mode="auto",
-                    manual_class_symbol=None,
-                )
+        export = Mock()
+        args = SimpleNamespace(
+            checkpoint="/tmp/model.pth",
+            output_dir="/tmp/out",
+            route_id="rfdetr.pth.engine",
+            imgsz=640,
+            batch=1,
+            opset=None,
+            precision="fp32",
+            variant_mode="auto",
+            manual_class_symbol=None,
+        )
 
-                with patch.object(helper, "resolve_model", return_value=SimpleNamespace(export=export)):
-                    with patch.object(helper.os, "makedirs"):
-                        result = helper.export_checkpoint(args)
+        with patch.object(helper, "resolve_model", return_value=SimpleNamespace(export=export)):
+            with patch.object(helper.os, "makedirs"):
+                result = helper.export_checkpoint(args)
 
-                self.assertEqual(result, 0)
-                self.assertEqual(export.call_args.kwargs["format"], "tensorrt")
-                self.assertEqual(export.call_args.kwargs["fp16"], expected_fp16)
+        self.assertEqual(result, 0)
+        self.assertEqual(export.call_args.kwargs["format"], "tensorrt")
+        self.assertFalse(export.call_args.kwargs["fp16"])
 
-    def test_parse_args_reads_tensorrt_precision(self):
+    def test_parse_args_defaults_tensorrt_precision_to_fp32(self):
         with patch("sys.argv", [
             "rfdetr_export_helper.py", "export", "--checkpoint", "/tmp/model.pth",
             "--route-id", "rfdetr.pth.engine", "--output-dir", "/tmp/out",
             "--variant-mode", "auto", "--imgsz", "640", "--batch", "1",
-            "--precision", "fp32",
         ]):
             args = helper.parse_args()
 
