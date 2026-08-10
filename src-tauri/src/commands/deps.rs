@@ -556,7 +556,7 @@ fn check_dependencies_for_runtime(
         results.push(check_python_probe_dep(
             &dependency_python,
             "rfdetr[tensorrt]",
-            "import importlib.util; ok = importlib.util.find_spec('rfdetr') is not None and importlib.util.find_spec('tensorrt') is not None; print(ok)",
+            "import rfdetr; import tensorrt; print(True)",
             "pip install \"rfdetr[tensorrt]\"",
             "rfdetr[tensorrt]",
         ));
@@ -1081,6 +1081,21 @@ mod tests {
         assert_eq!(deps.pip[0].package_name, "rfdetr[tensorrt]");
         assert_eq!(deps.pip[0].install_hint, "pip install \"rfdetr[tensorrt]\"");
         assert!(deps.sys.is_empty());
+    }
+
+    #[test]
+    fn rfdetr_tensorrt_readiness_probe_imports_native_modules() {
+        let source = include_str!("deps.rs");
+        let engine_probe = source
+            .split("} else if route_id == \"rfdetr.pth.engine\" {")
+            .nth(1)
+            .expect("TensorRT probe branch")
+            .split("} else {")
+            .next()
+            .expect("end of TensorRT probe branch");
+
+        assert!(engine_probe.contains("import rfdetr; import tensorrt; print(True)"));
+        assert!(!engine_probe.contains("find_spec('tensorrt')"));
     }
 
     #[test]
