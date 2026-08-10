@@ -105,7 +105,7 @@ Roboflow RF-DETR (`.pth`) target formats:
 | Format | Status | Notes |
 | --- | :---: | --- |
 | `.pth -> onnx` | ✅ | Recommended RF-DETR target and primary path. |
-| `.pth -> engine` | ✅ | TensorRT. NVIDIA GPU and `trtexec` required. No macOS. |
+| `.pth -> engine` | ✅ | TensorRT via RF-DETR native export. NVIDIA GPU required. No macOS. |
 
 > [!NOTE]
 > RF-DETR support is intentionally focused on ONNX and TensorRT. TFLite export was evaluated and dropped because the ONNX → TFLite conversion failed consistently across macOS and Linux.
@@ -155,7 +155,7 @@ Some targets are one-way deployment artifacts or platform-locked:
 - `imx` export is Linux-only and requires Java `>= 17`.
 - `axelera` export is Linux-only.
 - `litert`, `engine`, `mnn`, `rknn`, `imx`, `axelera`, `edgetpu`, and some `coreml` outputs should be treated as one-way deployment outputs.
-- **Roboflow RF-DETR (`.pth`)** exports only to `onnx` and `engine`. Its `engine` (TensorRT) path is NVIDIA-only and requires `trtexec`, identical to the Ultralytics `engine` caveat.
+- **Roboflow RF-DETR (`.pth`)** exports only to `onnx` and `engine`. Its native `engine` (TensorRT) path is NVIDIA-only; output is locked to building GPU and TensorRT version.
 
 ---
 

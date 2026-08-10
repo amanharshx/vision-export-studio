@@ -363,14 +363,11 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
         }),
         "rfdetr.pth.engine" => Some(RouteDeps {
             pip: &[PipDep {
-                package_name: "rfdetr",
-                install_hint: "pip install \"rfdetr[onnx]\"",
+                package_name: "rfdetr[tensorrt]",
+                install_hint: "pip install \"rfdetr[tensorrt]\"",
                 optional: false,
             }],
-            sys: &[SysDep {
-                binary_name: "trtexec",
-                install_hint: "Install NVIDIA TensorRT and ensure trtexec is on PATH.",
-            }],
+            sys: &[],
         }),
         _ => None,
     }
@@ -547,13 +544,21 @@ fn check_dependencies_for_runtime(
     }
 
     // Check route pip deps — RF-DETR routes use probe-based checks for extras.
-    if route_id == "rfdetr.pth.onnx" || route_id == "rfdetr.pth.engine" {
+    if route_id == "rfdetr.pth.onnx" {
         results.push(check_python_probe_dep(
             &dependency_python,
             "rfdetr[onnx]",
             "import importlib.util; ok = importlib.util.find_spec('rfdetr') is not None and importlib.util.find_spec('onnx') is not None; print(ok)",
             "pip install \"rfdetr[onnx]\"",
             "rfdetr[onnx]",
+        ));
+    } else if route_id == "rfdetr.pth.engine" {
+        results.push(check_python_probe_dep(
+            &dependency_python,
+            "rfdetr[tensorrt]",
+            "import rfdetr; import tensorrt; print(True)",
+            "pip install \"rfdetr[tensorrt]\"",
+            "rfdetr[tensorrt]",
         ));
     } else {
         for dep in deps.pip {
@@ -587,12 +592,19 @@ fn stack_paths_from_settings(
 
 fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
     match route_id {
-        "rfdetr.pth.onnx" | "rfdetr.pth.engine" => Some(vec![DepCheckResult {
+        "rfdetr.pth.onnx" => Some(vec![DepCheckResult {
             item: "rfdetr[onnx]".to_string(),
             status: "missing_package".to_string(),
             reason: "RF-DETR stack environment has not been created.".to_string(),
             install_hint: "pip install \"rfdetr[onnx]\"".to_string(),
             install_package: Some("rfdetr[onnx]".to_string()),
+        }]),
+        "rfdetr.pth.engine" => Some(vec![DepCheckResult {
+            item: "rfdetr[tensorrt]".to_string(),
+            status: "missing_package".to_string(),
+            reason: "RF-DETR stack environment has not been created.".to_string(),
+            install_hint: "pip install \"rfdetr[tensorrt]\"".to_string(),
+            install_package: Some("rfdetr[tensorrt]".to_string()),
         }]),
         _ => None,
     }
@@ -1063,9 +1075,44 @@ mod tests {
     }
 
     #[test]
-    fn rfdetr_engine_route_requires_trtexec() {
+    fn rfdetr_engine_route_uses_native_tensorrt_extra_without_system_binary() {
         let deps = route_deps("rfdetr.pth.engine").expect("route deps");
-        assert_eq!(deps.sys[0].binary_name, "trtexec");
+        assert_eq!(deps.pip.len(), 1);
+        assert_eq!(deps.pip[0].package_name, "rfdetr[tensorrt]");
+        assert_eq!(deps.pip[0].install_hint, "pip install \"rfdetr[tensorrt]\"");
+        assert!(deps.sys.is_empty());
+    }
+
+    #[test]
+    fn rfdetr_tensorrt_readiness_probe_imports_native_modules() {
+        let source = include_str!("deps.rs");
+        let engine_probe = source
+            .split("} else if route_id == \"rfdetr.pth.engine\" {")
+            .nth(1)
+            .expect("TensorRT probe branch")
+            .split("} else {")
+            .next()
+            .expect("end of TensorRT probe branch");
+
+        assert!(engine_probe.contains("import rfdetr; import tensorrt; print(True)"));
+        assert!(!engine_probe.contains("find_spec('tensorrt')"));
+    }
+
+    #[test]
+    fn rfdetr_engine_route_package_matches_typescript_metadata() {
+        let ts_source = include_str!("../../../src/lib/providers/rfdetr.ts");
+        let engine_route = ts_source
+            .split("id: \"rfdetr.pth.engine\",")
+            .nth(1)
+            .expect("TensorRT route in TypeScript metadata");
+        let ts_package_name = engine_route
+            .split("packageName: \"")
+            .nth(1)
+            .and_then(|tail| tail.split('\"').next())
+            .expect("TensorRT packageName in TypeScript metadata");
+        let rust_deps = route_deps("rfdetr.pth.engine").expect("Rust TensorRT route deps");
+
+        assert_eq!(ts_package_name, rust_deps.pip[0].package_name);
     }
 
     #[test]
@@ -1085,6 +1132,24 @@ mod tests {
         assert_eq!(results[0].status, "missing_package");
         assert_eq!(results[0].install_package.as_deref(), Some("rfdetr[onnx]"));
         assert!(!stack_venv_dir(&runtime, "rfdetr.pth.onnx")
+            .unwrap()
+            .exists());
+    }
+
+    #[test]
+    fn absent_rfdetr_tensorrt_stack_returns_tensorrt_extra() {
+        let runtime = std::env::temp_dir().join(format!("rfdetr-stack-{}", Uuid::new_v4()));
+        let runtime = runtime.to_string_lossy();
+        let results = missing_stack_results_if_absent(&runtime, "rfdetr.pth.engine")
+            .expect("RF-DETR TensorRT stack results");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, "missing_package");
+        assert_eq!(
+            results[0].install_package.as_deref(),
+            Some("rfdetr[tensorrt]")
+        );
+        assert!(!stack_venv_dir(&runtime, "rfdetr.pth.engine")
             .unwrap()
             .exists());
     }

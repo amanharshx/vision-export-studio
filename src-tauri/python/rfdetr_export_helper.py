@@ -2,9 +2,7 @@
 import argparse
 import json
 import os
-import subprocess
 import sys
-from argparse import Namespace
 
 DETECTION_CLASSES = {
     "RFDETRNano",
@@ -253,41 +251,6 @@ def resolve_model(args):
     return load_model_for_inspect(args.checkpoint)
 
 
-def resolve_exported_onnx(output_dir, exported):
-    """Locate the ONNX file produced by ``model.export(format="onnx")``.
-
-    rf-detr's output filename is version-dependent: 1.6.x writes
-    ``inference_model.onnx`` while 1.7.x writes ``rfdetr-<variant>.onnx``
-    (PR #910). Older ``export()`` returns ``None``; newer returns the ``Path``.
-    Resolve in this order so TensorRT conversion finds the right file on any
-    version, and never picks the GridSample-patched intermediate
-    (``*_gs_patched.onnx``) used by the TFLite path.
-    """
-    # 1) Trust the return value when it is a real .onnx path.
-    if exported:
-        candidate = str(exported)
-        if candidate.endswith(".onnx") and os.path.isfile(candidate):
-            return candidate
-
-    # 2) Canonical 1.6.x name.
-    legacy = os.path.join(output_dir, "inference_model.onnx")
-    if os.path.isfile(legacy):
-        return legacy
-
-    # 3) Any .onnx in the dir, preferring non-_gs_patched files.
-    import glob
-
-    onnx_files = sorted(glob.glob(os.path.join(output_dir, "*.onnx")))
-    preferred = [f for f in onnx_files if "_gs_patched" not in os.path.basename(f)]
-    pool = preferred or onnx_files
-    if pool:
-        return pool[0]
-
-    raise RuntimeError(
-        f"could not locate an exported ONNX file for TensorRT conversion in {output_dir}"
-    )
-
-
 def export_checkpoint(args):
     os.makedirs(args.output_dir, exist_ok=True)
     try:
@@ -296,25 +259,18 @@ def export_checkpoint(args):
 
         model = resolve_model(args)
         shape = (args.imgsz, args.imgsz)
-        exported = None
         kwargs = {
             "format": "onnx",
             "output_dir": args.output_dir,
             "shape": shape,
             "batch_size": args.batch,
         }
+        if args.route_id == "rfdetr.pth.engine":
+            kwargs["format"] = "tensorrt"
+            kwargs["fp16"] = args.precision == "fp16"
         if args.opset is not None:
             kwargs["opset_version"] = args.opset
-        exported = model.export(**kwargs)
-
-        if args.route_id == "rfdetr.pth.engine":
-            try:
-                from rfdetr.export._tensorrt import trtexec
-            except Exception as exc:
-                raise RuntimeError(f"RF-DETR TensorRT wrapper unavailable: {exc}") from exc
-            onnx_path = resolve_exported_onnx(args.output_dir, exported)
-            print(f"[rfdetr-export] TensorRT input ONNX: {onnx_path}", file=sys.stderr, flush=True)
-            trtexec(onnx_path, Namespace(verbose=True, profile=False, dry_run=False))
+        model.export(**kwargs)
 
         return 0
     except Exception as exc:
@@ -345,6 +301,9 @@ def parse_args():
     export_parser.add_argument("--imgsz", type=int, required=True)
     export_parser.add_argument("--batch", type=int, required=True)
     export_parser.add_argument("--opset", type=int)
+    # TensorRT 11.x lacks RF-DETR's FP16 builder flag, so fresh unbounded
+    # rfdetr[tensorrt] installs downgrade FP16 to FP32 and emit a warning.
+    export_parser.add_argument("--precision", choices=["fp16", "fp32"], default="fp32")
     return parser.parse_args()
 
 

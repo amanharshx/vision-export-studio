@@ -4,9 +4,9 @@
 # rented NVIDIA Linux box, using the app's own export helper.
 #
 # WHAT IT DOES
-#   1. Prints environment (OS, python, trtexec, GPU).
-#   2. Creates an isolated Python 3.12 venv and installs rfdetr[onnx].
-#   3. Runs the helper's inspect + ONNX + TensorRT(engine) routes
+#   1. Prints environment (OS, Python, TensorRT Python package, GPU).
+#   2. Creates an isolated Python 3.12 venv and installs rfdetr[onnx,tensorrt].
+#   3. Runs the helper's inspect + ONNX + TensorRT routes
 #      against your checkpoint and reports EXIT codes + produced artifacts.
 #
 # USAGE (on the GPU box)
@@ -16,13 +16,11 @@
 #
 # REQUIREMENTS ON THE BOX
 #   - Python 3.12 on PATH as `python3.12` (or export PYTHON=/path/to/python3.12)
-#   - For the TensorRT route: NVIDIA GPU + TensorRT with `trtexec` on PATH.
-#     Easiest: run inside an NVIDIA TensorRT container
-#     (e.g. nvcr.io/nvidia/tensorrt:<tag>) which already ships trtexec.
+#   - For the TensorRT route: NVIDIA GPU + `rfdetr[tensorrt]`.
 #   - rfdetr_export_helper.py must sit in the SAME directory as this script.
 #
 # NOTES
-#   - A produced .engine is GPU-family-specific; this validates the pipeline,
+#   - A produced `.trt` artifact is GPU-family-specific; this validates the pipeline,
 #     not artifact portability.
 # ---------------------------------------------------------------------------
 set -uo pipefail
@@ -47,7 +45,6 @@ command -v "$PYTHON" >/dev/null 2>&1 || { echo "ERROR: '$PYTHON' not found. Inst
 line "ENVIRONMENT"
 uname -a
 "$PYTHON" --version
-echo "trtexec : $(command -v trtexec || echo 'NOT FOUND -> TensorRT route will be SKIPPED')"
 if command -v nvidia-smi >/dev/null 2>&1; then nvidia-smi -L; else echo "nvidia-smi: NOT FOUND (no NVIDIA GPU?)"; fi
 
 # --- venv + deps ---
@@ -57,18 +54,24 @@ rm -rf "$VENV"
 "$VENV/bin/pip" install --upgrade pip setuptools wheel -q
 PY="$VENV/bin/python"
 
-line "INSTALL rfdetr[onnx]>=1.7.1 (required)"
-"$VENV/bin/pip" install "rfdetr[onnx]>=1.7.1" -q || { echo "FATAL: rfdetr[onnx] install failed"; exit 1; }
+line "INSTALL rfdetr[onnx,tensorrt]>=1.7.1 (required)"
+"$VENV/bin/pip" install "rfdetr[onnx,tensorrt]>=1.7.1" -q || { echo "FATAL: rfdetr[onnx,tensorrt] install failed"; exit 1; }
+
+echo "tensorrt : $("$PY" -c 'import tensorrt; print(tensorrt.__version__)' 2>&1)"
 
 echo "--- key versions ---"
-"$VENV/bin/pip" freeze | grep -iE '^(rfdetr|torch|torchvision|onnx|numpy|protobuf)([=<>@ ]|$)' || true
+"$VENV/bin/pip" freeze | grep -iE '^(rfdetr|tensorrt|torch|torchvision|onnx|numpy|protobuf)([=<>@ ]|$)' || true
 
 run_route(){
   local route="$1" sub="$2" out="$OUT_BASE/$2"
+  local precision_args=()
+  if [ "$route" = "rfdetr.pth.engine" ]; then
+    precision_args=(--precision fp32)
+  fi
   rm -rf "$out"; mkdir -p "$out"
   line "ROUTE $route (imgsz=$IMGSZ)"
   "$PY" "$HELPER" export --checkpoint "$CKPT" --route-id "$route" \
-        --output-dir "$out" --variant-mode auto --imgsz "$IMGSZ" --batch 1
+        --output-dir "$out" --variant-mode auto --imgsz "$IMGSZ" --batch 1 "${precision_args[@]}"
   local rc=$?
   echo "RESULT: $route -> EXIT $rc $( [ $rc -eq 0 ] && echo '(ok)' || echo '(FAILED)')"
   echo "--- artifacts in $out ---"
@@ -82,11 +85,11 @@ line "INSPECT (expect class + recommended_imgsz)"
 # --- ONNX (baseline) ---
 run_route "rfdetr.pth.onnx" onnx
 
-# --- TensorRT engine ---
-if command -v trtexec >/dev/null 2>&1; then
+# --- TensorRT ---
+if command -v nvidia-smi >/dev/null 2>&1 && "$PY" -c 'import tensorrt' >/dev/null 2>&1; then
   run_route "rfdetr.pth.engine" engine
 else
-  line "ROUTE rfdetr.pth.engine -> SKIPPED (no trtexec on PATH)"
+  line "ROUTE rfdetr.pth.engine -> SKIPPED (requires NVIDIA GPU + tensorrt Python package)"
 fi
 
 line "DONE — copy this entire output (report.txt) back"
