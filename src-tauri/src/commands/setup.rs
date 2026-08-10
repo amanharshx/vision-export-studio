@@ -126,17 +126,29 @@ pub(crate) fn default_runtime_dir(app_handle: &tauri::AppHandle) -> Result<Strin
 }
 
 pub(crate) fn venv_python(runtime_dir: &str) -> String {
-    venv_python_in(runtime_dir, ".venv")
+    venv_python_at(&Path::new(runtime_dir).join(".venv"))
 }
 
 fn venv_python_in(runtime_dir: &str, venv_name: &str) -> String {
+    venv_python_at(&Path::new(runtime_dir).join(venv_name))
+}
+
+pub(crate) fn venv_python_at(venv_dir: &Path) -> String {
     #[cfg(windows)]
     {
-        format!("{}/{}/Scripts/python.exe", runtime_dir, venv_name)
+        venv_dir
+            .join("Scripts")
+            .join("python.exe")
+            .to_string_lossy()
+            .into_owned()
     }
     #[cfg(not(windows))]
     {
-        format!("{}/{}/bin/python", runtime_dir, venv_name)
+        venv_dir
+            .join("bin")
+            .join("python")
+            .to_string_lossy()
+            .into_owned()
     }
 }
 
@@ -223,7 +235,7 @@ fn validate_runtime_dir(runtime_dir: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn build_venv_command(python: &str, venv_path: &Path) -> Command {
+pub(crate) fn build_venv_command(python: &str, venv_path: &Path) -> Command {
     let mut command = Command::new(python);
     command.arg("-m");
     command.arg("venv");
