@@ -254,12 +254,29 @@ def resolve_model(args):
     return load_model_for_inspect(args.checkpoint)
 
 
+def preload_tensorflow_before_rfdetr():
+    """Avoid macOS ONNX/TensorFlow import-order deadlock (RF-DETR #1322/#1323)."""
+    try:
+        __import__("tensorflow")
+    except ModuleNotFoundError as exc:
+        if exc.name != "tensorflow":
+            raise
+
+
+def prepend_active_venv_scripts_to_path():
+    scripts_dir = os.path.dirname(sys.executable)
+    current_path = os.environ.get("PATH", "")
+    os.environ["PATH"] = scripts_dir if not current_path else scripts_dir + os.pathsep + current_path
+
+
 def export_checkpoint(args):
     os.makedirs(args.output_dir, exist_ok=True)
     try:
         if args.route_id not in ("rfdetr.pth.onnx", "rfdetr.pth.engine", "rfdetr.pth.coreml", "rfdetr.pth.tflite"):
             raise RuntimeError(f"unsupported RF-DETR route: {args.route_id}")
 
+        if args.route_id == "rfdetr.pth.tflite":
+            preload_tensorflow_before_rfdetr()
         model = resolve_model(args)
         shape = (args.imgsz, args.imgsz)
         kwargs = {
@@ -283,6 +300,8 @@ def export_checkpoint(args):
                 kwargs["max_images"] = args.max_images
         if args.route_id == "rfdetr.pth.onnx" and args.opset is not None:
             kwargs["opset_version"] = args.opset
+        if args.route_id == "rfdetr.pth.tflite":
+            prepend_active_venv_scripts_to_path()
         model.export(**kwargs)
 
         return 0
