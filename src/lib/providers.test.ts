@@ -30,6 +30,7 @@ describe("provider route registry", () => {
       "rfdetr.pth.engine",
       "rfdetr.pth.coreml",
       "rfdetr.pth.tflite",
+      "rfdetr.pth.executorch",
     ]);
   });
 
@@ -94,6 +95,22 @@ describe("provider route registry", () => {
     expect(route?.notes).toContain("always emits FP32 and FP16");
     expect(route?.notes).toContain("dynamic-range weight-quantized");
     expect(route?.notes).toContain("requires no calibration data");
+  });
+
+  test("RF-DETR ExecuTorch fixes XNNPACK semantics and dependency floors", () => {
+    const route = routesForProvider("rfdetr").find((item) => item.id === "rfdetr.pth.executorch");
+
+    expect(route?.targetFormat).toBe("executorch");
+    expect(route?.title).toBe("ExecuTorch (XNNPACK)");
+    expect(route?.pipDeps.map((dep) => dep.packageName)).toEqual([
+      "rfdetr[executorch]>=1.9.0",
+      "torch>=2.13",
+    ]);
+    expect(route?.platformLock).toBe("macos_arm64_linux_windows_x86_64");
+    expect(route?.precisionModes).toEqual(["fp32"]);
+    expect(route?.supportsDynamic).toBe(false);
+    expect(route?.oneWay).toBe(true);
+    expect(route?.experimental).toBe(true);
   });
 
   test("Ultralytics routes keep Ultralytics base dependency", () => {

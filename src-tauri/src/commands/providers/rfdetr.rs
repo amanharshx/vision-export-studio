@@ -615,6 +615,48 @@ mod tests {
     }
 
     #[test]
+    fn executorch_snapshot_accepts_released_and_backend_named_pte_artifacts() {
+        let root = std::env::temp_dir().join(format!("rfdetr-pte-snap-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        std::fs::write(root.join("rfdetr-small.pte"), b"released")
+            .expect("write released artifact");
+        std::fs::write(root.join("rfdetr-small_xnnpack.pte"), b"develop")
+            .expect("write backend artifact");
+        std::fs::write(root.join("rfdetr-small.onnx"), b"wrong").expect("write unrelated artifact");
+
+        let snapshot =
+            snapshot_rfdetr_artifacts("rfdetr.pth.executorch", root.to_str().expect("path"))
+                .expect("snapshot");
+
+        assert_eq!(snapshot.len(), 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn executorch_rewritten_pte_is_confirmed_by_fingerprint_change() {
+        let root =
+            std::env::temp_dir().join(format!("rfdetr-pte-rewrite-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let artifact = root.join("rfdetr-small.pte");
+        std::fs::write(&artifact, b"AAAA").expect("write initial artifact");
+        let before =
+            snapshot_rfdetr_artifacts("rfdetr.pth.executorch", root.to_str().expect("path"))
+                .expect("snapshot");
+        std::fs::write(&artifact, b"BBBB").expect("rewrite artifact");
+
+        let status = confirm_artifacts_with_snapshot(
+            &make_request("rfdetr.pth.executorch", root.to_str().expect("path")),
+            &before,
+        );
+
+        assert!(
+            status.artifact_moved,
+            "same-size PTE rewrite must be accepted by digest"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn snapshot_captures_trt_files() {
         let root = std::env::temp_dir().join(format!("rfdetr-trt-snap-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("create temp dir");

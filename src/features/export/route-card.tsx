@@ -28,17 +28,19 @@ export function categoryBg(category: string) {
 interface RouteRowProps {
   route: RouteSpec;
   platform: AppPlatform;
+  platformResolved: boolean;
   onSelect: () => void;
   disabled?: boolean;
   disabledReason?: string;
 }
 
-export function RouteRow({ route, platform, onSelect, disabled = false, disabledReason }: RouteRowProps) {
+export function RouteRow({ route, platform, platformResolved, onSelect, disabled = false, disabledReason }: RouteRowProps) {
   const format = formats[route.targetFormat];
   const formatIcon = formatIconMap[format.id];
   const Icon = formatIcon ?? categoryIcon(format.category);
   const bg = formatIcon ? "bg-white text-zinc-800" : categoryBg(format.category);
-  const compatible = isCompatible(route.platformLock, platform.os, platform.arch);
+  const compatible = !platformResolved || platform.arch === "unknown"
+    || isCompatible(route.platformLock, platform.os, platform.arch);
 
   return (
     <button

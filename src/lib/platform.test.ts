@@ -46,6 +46,16 @@ describe("isCompatible", () => {
     expect(isCompatible("linux_x86_64", "linux", "unknown")).toBe(false);
     expect(isCompatible("linux_x86_64", "windows")).toBe(false);
   });
+
+  test("RF-DETR ExecuTorch lock mirrors supported and excluded host pairs", () => {
+    const lock = "macos_arm64_linux_windows_x86_64";
+    expect(isCompatible(lock, "macos", "aarch64")).toBe(true);
+    expect(isCompatible(lock, "linux", "x86_64")).toBe(true);
+    expect(isCompatible(lock, "windows", "x86_64")).toBe(true);
+    expect(isCompatible(lock, "macos", "x86_64")).toBe(false);
+    expect(isCompatible(lock, "linux", "aarch64")).toBe(false);
+    expect(isCompatible(lock, "windows", "aarch64")).toBe(false);
+  });
 });
 
 describe("platformTags", () => {
@@ -63,6 +73,14 @@ describe("platformTags", () => {
 
   test("macos_linux_x86_64 tags macOS and Linux x86-64", () => {
     expect(platformTags("macos_linux_x86_64")).toEqual(["macOS", "Linux x86-64"]);
+  });
+
+  test("RF-DETR ExecuTorch tags every supported host", () => {
+    expect(platformTags("macos_arm64_linux_windows_x86_64")).toEqual([
+      "macOS ARM64",
+      "Linux x86-64",
+      "Windows x86-64",
+    ]);
   });
 });
 

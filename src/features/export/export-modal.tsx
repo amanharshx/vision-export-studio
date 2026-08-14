@@ -34,6 +34,7 @@ interface ExportModalProps {
   provider: ProviderSpec;
   route: RouteSpec;
   platform: AppPlatform;
+  platformResolved: boolean;
   sourcePath: string;
   exportStatus: ExportStatus;
   logLines: string[];
@@ -159,6 +160,7 @@ export function ExportModal({
   provider,
   route,
   platform,
+  platformResolved,
   sourcePath,
   exportStatus,
   logLines,
@@ -186,7 +188,8 @@ export function ExportModal({
   const Icon = formatIcon ?? categoryIcon(format.category);
   const bg = formatIcon ? "bg-white text-zinc-800" : categoryBg(format.category);
   const tags = platformTags(route.platformLock);
-  const unsupportedReason = !isCompatible(route.platformLock, platform.os, platform.arch)
+  const platformCompatibilityKnown = platformResolved && platform.arch !== "unknown";
+  const unsupportedReason = platformCompatibilityKnown && !isCompatible(route.platformLock, platform.os, platform.arch)
     ? (route.unsupportedNote ?? incompatibleReason(route.platformLock, platform.os, platform.arch))
     : null;
   const isPendingConsent = installPhase === "pending_consent";

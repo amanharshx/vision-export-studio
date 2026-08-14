@@ -272,7 +272,13 @@ def prepend_active_venv_scripts_to_path():
 def export_checkpoint(args):
     os.makedirs(args.output_dir, exist_ok=True)
     try:
-        if args.route_id not in ("rfdetr.pth.onnx", "rfdetr.pth.engine", "rfdetr.pth.coreml", "rfdetr.pth.tflite"):
+        if args.route_id not in (
+            "rfdetr.pth.onnx",
+            "rfdetr.pth.engine",
+            "rfdetr.pth.coreml",
+            "rfdetr.pth.tflite",
+            "rfdetr.pth.executorch",
+        ):
             raise RuntimeError(f"unsupported RF-DETR route: {args.route_id}")
 
         if args.route_id == "rfdetr.pth.tflite":
@@ -294,6 +300,9 @@ def export_checkpoint(args):
         elif args.route_id == "rfdetr.pth.tflite":
             kwargs["format"] = "tflite"
             kwargs["quantization"] = args.precision
+        elif args.route_id == "rfdetr.pth.executorch":
+            kwargs["format"] = "executorch"
+            kwargs["backend"] = "xnnpack"
         if args.route_id == "rfdetr.pth.onnx" and args.opset is not None:
             kwargs["opset_version"] = args.opset
         if args.route_id == "rfdetr.pth.tflite":

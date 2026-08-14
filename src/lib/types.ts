@@ -28,7 +28,7 @@ export interface ProviderSpec {
 
 export type FormatCategory = "source" | "intermediate" | "runtime" | "vendor";
 
-export type PlatformLock = "any" | "linux" | "linux_x86_64" | "linux_windows" | "macos" | "macos_linux" | "macos_linux_x86_64" | "windows";
+export type PlatformLock = "any" | "linux" | "linux_x86_64" | "linux_windows" | "macos" | "macos_arm64_linux_windows_x86_64" | "macos_linux" | "macos_linux_x86_64" | "windows";
 
 export type PrecisionMode = "fp32" | "fp16" | "int8" | "w8a16" | "w8a32";
 

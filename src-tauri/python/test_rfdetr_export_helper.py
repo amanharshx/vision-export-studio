@@ -182,6 +182,27 @@ class RfDetrExportHelperTests(unittest.TestCase):
             self.assertNotIn("fp16", export.call_args.kwargs)
             self.assertNotIn("opset_version", export.call_args.kwargs)
 
+    def test_export_checkpoint_fixes_executorch_xnnpack_backend(self):
+        export = Mock()
+        args = SimpleNamespace(
+            checkpoint="/tmp/model.pth", output_dir="/tmp/out", route_id="rfdetr.pth.executorch",
+            imgsz=640, batch=2, opset=17, precision="fp16",
+            variant_mode="auto", manual_class_symbol=None,
+        )
+
+        with patch.object(helper, "resolve_model", return_value=SimpleNamespace(export=export)):
+            with patch.object(helper.os, "makedirs"):
+                result = helper.export_checkpoint(args)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(export.call_args.kwargs, {
+            "format": "executorch",
+            "backend": "xnnpack",
+            "output_dir": "/tmp/out",
+            "shape": (640, 640),
+            "batch_size": 2,
+        })
+
     def test_parse_args_defaults_tensorrt_precision_to_fp32(self):
         with patch("sys.argv", [
             "rfdetr_export_helper.py", "export", "--checkpoint", "/tmp/model.pth",

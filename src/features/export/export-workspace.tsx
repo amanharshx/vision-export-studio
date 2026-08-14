@@ -322,7 +322,17 @@ export function getIncompatibleExportMessage(
   route: RouteSpec,
   os: AppOS,
   arch = "unknown",
+  platformResolved = true,
 ): string | null {
+  if (!platformResolved) return null;
+  if (
+    arch === UNKNOWN_ARCH
+    && (
+      route.platformLock === "linux_x86_64"
+      || route.platformLock === "macos_linux_x86_64"
+      || route.platformLock === "macos_arm64_linux_windows_x86_64"
+    )
+  ) return null;
   if (isCompatible(route.platformLock, os, arch)) return null;
   return (
     route.unsupportedNote ??
@@ -491,6 +501,7 @@ interface ExportWorkspaceProps {
 
 export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorkspaceProps) {
   const [appPlatform, setAppPlatform] = useState<AppPlatform>({ os: getOS(), arch: UNKNOWN_ARCH });
+  const [platformResolved, setPlatformResolved] = useState(false);
   const [view, setView] = useState<WorkspaceView>("drop");
   const [infoOpen, setInfoOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -616,9 +627,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
 
   // Load settings + detect environment on mount
   useEffect(() => {
-    void getAppTelemetryContext().then(setAppPlatform).catch(() => {
-      // Keep conservative fallback: browser OS plus unknown architecture.
-    });
+    void getAppTelemetryContext()
+      .then(setAppPlatform)
+      .catch(() => {
+        // Keep browser OS plus unknown architecture; Rust validates before work starts.
+      })
+      .finally(() => setPlatformResolved(true));
 
     loadSettings()
       .then((settings) => {
@@ -988,6 +1002,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       selectedRoute,
       appPlatform.os,
       appPlatform.arch,
+      platformResolved,
     );
     if (incompatibleMessage) {
       setInstallPhase("idle");
@@ -1041,6 +1056,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       selectedRoute,
       appPlatform.os,
       appPlatform.arch,
+      platformResolved,
     );
     if (incompatibleMessage) {
       setInstallPhase("idle");
@@ -1893,6 +1909,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
             <RouteGrid
               routes={currentRoutes}
               platform={appPlatform}
+              platformResolved={platformResolved}
               onSelectRoute={handleActivateRoute}
               disabled={routeGridDisabled}
               disabledReason={routeGridDisabledReason}
@@ -1913,6 +1930,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         provider={selectedProvider}
         route={selectedRoute}
         platform={appPlatform}
+        platformResolved={platformResolved}
         sourcePath={sourcePath}
         exportStatus={exportStatus}
         logLines={logLines}

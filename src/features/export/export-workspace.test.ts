@@ -6,6 +6,7 @@ import { Dialog } from "@/components/ui/dialog";
 import {
   getInstallStartFailureOutcome,
   getInstallableMissingPackages,
+  getIncompatibleExportMessage,
   getManagedRuntimeRebuildFailureMessage,
   getManagedRuntimeUpgradeNudge,
   ManagedRuntimeUpgradeDialogBody,
@@ -14,6 +15,7 @@ import {
   refreshStackEnvironments,
 } from "./export-workspace";
 import type { DepCheckResult, ExportStatus, InstallPhase, StackEnvironment } from "@/lib/types";
+import { findRoute } from "@/lib/providers";
 
 describe("getInstallableMissingPackages", () => {
   test("returns explicit install_package values", () => {
@@ -84,6 +86,22 @@ describe("getInstallableMissingPackages", () => {
     };
 
     expect(getInstallableMissingPackages([unknownUltralytics])).toEqual([]);
+  });
+
+  test("keeps an unsatisfied torch floor in install consent list", () => {
+    expect(getInstallableMissingPackages([{
+      item: "torch>=2.13",
+      status: "version_too_old",
+      reason: "Torch 2.12.1 is installed; 2.13 or newer is required.",
+      install_hint: 'pip install "torch>=2.13"',
+      install_package: "torch>=2.13",
+    }])).toEqual(["torch>=2.13"]);
+  });
+
+  test("does not client-block unresolved or unknown architecture", () => {
+    const route = findRoute("rfdetr.pth.executorch")!;
+    expect(getIncompatibleExportMessage(route, "macos", "unknown", false)).toBeNull();
+    expect(getIncompatibleExportMessage(route, "macos", "unknown", true)).toBeNull();
   });
 });
 

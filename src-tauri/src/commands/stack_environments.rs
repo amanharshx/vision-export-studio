@@ -16,7 +16,7 @@ const KNOWN_STACKS: &[StackEnvironment] = &[
     StackEnvironment {
         key: "rfdetr-default",
         display_name: "RF-DETR",
-        route_ids: &["rfdetr.pth.onnx"],
+        route_ids: &["rfdetr.pth.onnx", "rfdetr.pth.executorch"],
         python_requirement: None,
     },
     StackEnvironment {
@@ -139,6 +139,10 @@ mod tests {
 
         assert_eq!(
             stack_for_route("rfdetr.pth.onnx").unwrap().key,
+            "rfdetr-default"
+        );
+        assert_eq!(
+            stack_for_route("rfdetr.pth.executorch").unwrap().key,
             "rfdetr-default"
         );
         assert_eq!(
