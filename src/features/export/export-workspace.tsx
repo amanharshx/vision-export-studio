@@ -5,7 +5,7 @@ import { checkDependencies, installDependencies } from "@/lib/tauri/deps";
 import { cancelExport, openExportFolder, startExport } from "@/lib/tauri/export";
 import { defaultRouteForProvider, findRoute, hasAllowedSourceExtension, providers, providerList, routesForProvider } from "@/lib/providers";
 import { inspectRfDetrCheckpoint } from "@/lib/tauri/rfdetr";
-import { type AppOS, type AppPlatform, getOS, incompatibleReason, isCompatible, UNKNOWN_ARCH } from "@/lib/platform";
+import { architectureMatters, type AppOS, type AppPlatform, getOS, incompatibleReason, isCompatible, UNKNOWN_ARCH } from "@/lib/platform";
 import { getAppTelemetryContext } from "@/lib/tauri/app";
 import { createListenerGroup, type ListenerGroup } from "@/lib/tauri/listener-group";
 import type {
@@ -325,14 +325,7 @@ export function getIncompatibleExportMessage(
   platformResolved = true,
 ): string | null {
   if (!platformResolved) return null;
-  if (
-    arch === UNKNOWN_ARCH
-    && (
-      route.platformLock === "linux_x86_64"
-      || route.platformLock === "macos_linux_x86_64"
-      || route.platformLock === "macos_arm64_linux_windows_x86_64"
-    )
-  ) return null;
+  if (arch === UNKNOWN_ARCH && architectureMatters(route.platformLock, os)) return null;
   if (isCompatible(route.platformLock, os, arch)) return null;
   return (
     route.unsupportedNote ??

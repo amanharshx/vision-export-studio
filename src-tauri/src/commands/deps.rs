@@ -508,7 +508,7 @@ pub(crate) fn probe_python_version(python: &str) -> Result<String, String> {
 /// Python snippet that prints a distribution version without importing the
 /// package. Falls back to the module's `__version__` when metadata is absent.
 /// Assumes the distribution name matches the importable name, which holds for
-/// the only caller (`ultralytics`).
+/// current callers (`ultralytics`, `rfdetr`, and `torch`).
 pub(crate) fn version_probe_code(importable: &str) -> String {
     format!(
         "import importlib.metadata as _m\n\

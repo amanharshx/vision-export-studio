@@ -102,6 +102,15 @@ describe("getInstallableMissingPackages", () => {
     const route = findRoute("rfdetr.pth.executorch")!;
     expect(getIncompatibleExportMessage(route, "macos", "unknown", false)).toBeNull();
     expect(getIncompatibleExportMessage(route, "macos", "unknown", true)).toBeNull();
+    expect(getIncompatibleExportMessage(route, "windows", "unknown", true)).toBeNull();
+  });
+
+  test("keeps OS-only blocks when resolved architecture is unavailable", () => {
+    const coremlRoute = findRoute("rfdetr.pth.coreml")!;
+    const edgeTpuRoute = findRoute("ultralytics.pt.edgetpu")!;
+
+    expect(getIncompatibleExportMessage(coremlRoute, "windows", "unknown", true)).not.toBeNull();
+    expect(getIncompatibleExportMessage(edgeTpuRoute, "macos", "unknown", true)).not.toBeNull();
   });
 });
 

@@ -173,28 +173,36 @@ pub fn current_host_context() -> HostContext<'static> {
     }
 }
 
+fn arch_compatible(lock: PlatformLock, os: &str, arch: &str) -> bool {
+    match lock {
+        PlatformLock::Any => true,
+        PlatformLock::Macos => os == "macos",
+        PlatformLock::Linux => os == "linux",
+        PlatformLock::LinuxX86_64 => os == "linux" && arch == "x86_64",
+        PlatformLock::LinuxWindows => os == "linux" || os == "windows",
+        PlatformLock::MacosLinux => os == "macos" || os == "linux",
+        PlatformLock::MacosLinuxX86_64 => os == "macos" || (os == "linux" && arch == "x86_64"),
+        PlatformLock::MacosArm64LinuxWindowsX86_64 => {
+            (os == "macos" && arch == "aarch64")
+                || ((os == "linux" || os == "windows") && arch == "x86_64")
+        }
+    }
+}
+
+fn architecture_matters(lock: PlatformLock, os: &str) -> bool {
+    arch_compatible(lock, os, "x86_64") != arch_compatible(lock, os, "aarch64")
+}
+
 pub fn validate_route_platform(route_id: &str, host: HostContext<'_>) -> Result<(), String> {
     let lock = route_platform_lock(route_id);
-    let compatible = match lock {
-        PlatformLock::Any => true,
-        PlatformLock::Macos => host.os == "macos",
-        PlatformLock::Linux => host.os == "linux",
-        PlatformLock::LinuxX86_64 => host.os == "linux" && host.arch == "x86_64",
-        PlatformLock::LinuxWindows => host.os == "linux" || host.os == "windows",
-        PlatformLock::MacosLinux => host.os == "macos" || host.os == "linux",
-        PlatformLock::MacosLinuxX86_64 => {
-            host.os == "macos" || (host.os == "linux" && host.arch == "x86_64")
-        }
-        PlatformLock::MacosArm64LinuxWindowsX86_64 => {
-            (host.os == "macos"
-                && host.arch == "aarch64"
-                && match host.macos_major {
-                    Some(major) => major >= 14,
-                    None => true,
-                })
-                || ((host.os == "linux" || host.os == "windows") && host.arch == "x86_64")
-        }
-    };
+    let version_compatible = !matches!(lock, PlatformLock::MacosArm64LinuxWindowsX86_64)
+        || host.os != "macos"
+        || host.arch != "aarch64"
+        || match host.macos_major {
+            Some(major) => major >= 14,
+            None => true,
+        };
+    let compatible = arch_compatible(lock, host.os, host.arch) && version_compatible;
 
     if compatible {
         return Ok(());
@@ -211,11 +219,7 @@ pub fn validate_route_platform(route_id: &str, host: HostContext<'_>) -> Result<
         ));
     }
 
-    let current = if matches!(
-        lock,
-        PlatformLock::LinuxX86_64 | PlatformLock::MacosLinuxX86_64
-    ) && host.os == "linux"
-    {
+    let current = if architecture_matters(lock, host.os) {
         format!("{} {}", os_label(host.os), arch_label(host.arch))
     } else {
         os_label(host.os).to_string()
@@ -424,6 +428,23 @@ mod tests {
         )
         .is_ok());
         assert!(validate_route_platform("rfdetr.pth.executorch", host("macos", "aarch64")).is_ok());
+    }
+
+    #[test]
+    fn rfdetr_executorch_intel_macos_errors_name_architecture_even_on_macos_13() {
+        for macos_major in [None, Some(13)] {
+            let error = validate_route_platform(
+                "rfdetr.pth.executorch",
+                HostContext {
+                    os: "macos",
+                    arch: "x86_64",
+                    macos_major,
+                },
+            )
+            .expect_err("Intel macOS must be rejected");
+
+            assert!(error.contains("macOS x86-64"));
+        }
     }
 
     #[test]

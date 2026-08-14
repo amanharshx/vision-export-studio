@@ -1,6 +1,6 @@
 // @ts-expect-error Bun provides this module at test runtime.
 import { describe, expect, test } from "bun:test";
-import { incompatibleReason, isCompatible, platformTags } from "@/lib/platform";
+import { architectureMatters, incompatibleReason, isCompatible, platformTags } from "@/lib/platform";
 
 describe("isCompatible", () => {
   test("any is compatible everywhere", () => {
@@ -81,6 +81,16 @@ describe("platformTags", () => {
       "Linux x86-64",
       "Windows x86-64",
     ]);
+  });
+});
+
+describe("architectureMatters", () => {
+  test("derives sensitivity only for current OS", () => {
+    expect(architectureMatters("linux_x86_64", "linux")).toBe(true);
+    expect(architectureMatters("linux_x86_64", "macos")).toBe(false);
+    expect(architectureMatters("macos_linux_x86_64", "windows")).toBe(false);
+    expect(architectureMatters("macos_arm64_linux_windows_x86_64", "macos")).toBe(true);
+    expect(architectureMatters("macos_arm64_linux_windows_x86_64", "windows")).toBe(true);
   });
 });
 

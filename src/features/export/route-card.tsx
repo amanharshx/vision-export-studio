@@ -1,6 +1,6 @@
 import { formatIconMap } from "@/components/format-icons";
 import { formats } from "@/lib/routes";
-import { isCompatible, type AppPlatform } from "@/lib/platform";
+import { architectureMatters, isCompatible, type AppPlatform, UNKNOWN_ARCH } from "@/lib/platform";
 import type { RouteSpec } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { ChevronRight, Cpu, Layers, Zap } from "lucide-react";
@@ -39,7 +39,8 @@ export function RouteRow({ route, platform, platformResolved, onSelect, disabled
   const formatIcon = formatIconMap[format.id];
   const Icon = formatIcon ?? categoryIcon(format.category);
   const bg = formatIcon ? "bg-white text-zinc-800" : categoryBg(format.category);
-  const compatible = !platformResolved || platform.arch === "unknown"
+  const compatible = !platformResolved
+    || (platform.arch === UNKNOWN_ARCH && architectureMatters(route.platformLock, platform.os))
     || isCompatible(route.platformLock, platform.os, platform.arch);
 
   return (

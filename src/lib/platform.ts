@@ -47,6 +47,10 @@ export function isCompatible(lock: PlatformLock, os: AppOS, arch: AppArch = UNKN
   }
 }
 
+export function architectureMatters(lock: PlatformLock, os: AppOS): boolean {
+  return isCompatible(lock, os, "x86_64") !== isCompatible(lock, os, "aarch64");
+}
+
 export const OS_LABEL: Record<AppOS, string> = {
   macos: "macOS",
   windows: "Windows",

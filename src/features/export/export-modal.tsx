@@ -25,7 +25,7 @@ import { DependencyPanel } from "./dependency-panel";
 import { ExportLog } from "./export-log";
 import { OptionsPanel } from "./options-panel";
 import { formatIconMap } from "@/components/format-icons";
-import { incompatibleReason, isCompatible, platformTags } from "@/lib/platform";
+import { architectureMatters, incompatibleReason, isCompatible, platformTags, UNKNOWN_ARCH } from "@/lib/platform";
 import { categoryBg, categoryIcon } from "./route-card";
 
 interface ExportModalProps {
@@ -188,7 +188,8 @@ export function ExportModal({
   const Icon = formatIcon ?? categoryIcon(format.category);
   const bg = formatIcon ? "bg-white text-zinc-800" : categoryBg(format.category);
   const tags = platformTags(route.platformLock);
-  const platformCompatibilityKnown = platformResolved && platform.arch !== "unknown";
+  const platformCompatibilityKnown = platformResolved
+    && !(platform.arch === UNKNOWN_ARCH && architectureMatters(route.platformLock, platform.os));
   const unsupportedReason = platformCompatibilityKnown && !isCompatible(route.platformLock, platform.os, platform.arch)
     ? (route.unsupportedNote ?? incompatibleReason(route.platformLock, platform.os, platform.arch))
     : null;
