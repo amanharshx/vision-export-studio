@@ -79,6 +79,21 @@ describe("PrecisionOptions", () => {
     expect(markup).not.toContain("Opset");
   });
 
+  test("RF-DETR TFLite labels selector Quantization and renders no calibration or max-images controls", () => {
+    const route = routesForProvider("rfdetr").find((item) => item.id === "rfdetr.pth.tflite");
+    expect(route).toBeDefined();
+
+    for (const precision of ["fp32", "int8"] as const) {
+      const markup = renderToStaticMarkup(
+        createElement(RfDetrOptions, { route: route!, options: { ...baseOptions, precision }, onOptionsChange: () => {} }),
+      );
+      expect(markup).toContain("Quantization");
+      expect(markup).not.toContain("Browse calibration directory");
+      expect(markup).not.toContain("Max images");
+      expect(markup).not.toContain(CALIBRATION_FALLBACK_WARNING);
+    }
+  });
+
   test("FP32 hides calibration picker", () => {
     const onnx = routeById("ultralytics.pt.onnx");
     const markup = renderPrecision(onnx, { ...baseOptions, precision: "fp32" });

@@ -39,7 +39,7 @@ Desktop studio for exporting Ultralytics YOLO `.pt` and Roboflow RF-DETR `.pth` 
 
 ---
 
-[**Vision Export Studio**](https://github.com/amanharshx/vision-export-studio) is a desktop app that exports computer-vision model weights into deployment-ready formats. It supports two model families: [Ultralytics](https://www.ultralytics.com/) YOLO `.pt` weights with full target coverage (ONNX, TensorRT, CoreML, LiteRT, and more), and [Roboflow](https://roboflow.com/) RF-DETR `.pth` checkpoints with a focused set of targets (ONNX and TensorRT). Select your model, pick a target, and generate the export locally - model files stay on your machine.
+[**Vision Export Studio**](https://github.com/amanharshx/vision-export-studio) is a desktop app that exports computer-vision model weights into deployment-ready formats. It supports two model families: [Ultralytics](https://www.ultralytics.com/) YOLO `.pt` weights with full target coverage (ONNX, TensorRT, CoreML, LiteRT, and more), and [Roboflow](https://roboflow.com/) RF-DETR `.pth` checkpoints with focused ONNX, TensorRT, CoreML, and experimental TFLite targets. Select your model, pick a target, and generate the export locally - model files stay on your machine.
 
 ## Features
 
@@ -49,7 +49,7 @@ Desktop studio for exporting Ultralytics YOLO `.pt` and Roboflow RF-DETR `.pth` 
 - **Optional output directory** - choose where exported artifacts are written, or use the default next to the source model
 - **Automatic route installs** - route-specific Python dependencies install when needed for most export paths
 - **Dependency status checks** - each route reports missing Python packages or system binaries before you export, with install hints
-- **Two model families** - Ultralytics YOLO (`.pt`) with full target coverage, and Roboflow RF-DETR (`.pth`) for ONNX and TensorRT
+- **Two model families** - Ultralytics YOLO (`.pt`) with full target coverage, and Roboflow RF-DETR (`.pth`) for ONNX, TensorRT, CoreML, and TFLite
 - **Multiple export targets** - ONNX, TensorRT, CoreML, OpenVINO, LiteRT, Paddle, NCNN, RKNN, and more
 - **Configurable export options** - tune target-specific settings such as image size, batch size, precision (FP32/FP16/INT8/W8A16/W8A32), dynamic axes, ONNX opset, TensorRT workspace, and RKNN target chip
 - **RF-DETR checkpoint inspection** - after trusted-checkpoint confirmation, auto-detects model family (detection vs segmentation), size, and recommended native image size from the `.pth` checkpoint
@@ -68,7 +68,7 @@ source format -> supported route -> target format
 Current source support is intentionally narrow:
 
 - Ultralytics-compatible `.pt` weights (full target coverage)
-- Roboflow RF-DETR `.pth` checkpoints (ONNX and TensorRT only)
+- Roboflow RF-DETR `.pth` checkpoints (ONNX, TensorRT, CoreML, and experimental TFLite)
 - Generic PyTorch checkpoints not supported
 - Reverse conversion not supported
 
@@ -77,7 +77,7 @@ Current source formats:
 | Format | Provider | Status | Notes |
 | --- | --- | :---: | --- |
 | `.pt` | Ultralytics YOLO | ✅ | Ultralytics-compatible weights only. |
-| `.pth` | Roboflow RF-DETR | ✅ | RF-DETR checkpoints. Exports to ONNX and TensorRT only. |
+| `.pth` | Roboflow RF-DETR | ✅ | RF-DETR checkpoints. Exports to ONNX, TensorRT, CoreML, and experimental TFLite. |
 
 Ultralytics YOLO (`.pt`) target formats:
 
@@ -107,9 +107,10 @@ Roboflow RF-DETR (`.pth`) target formats:
 | `.pth -> onnx` | ✅ | Recommended RF-DETR target and primary path. |
 | `.pth -> engine` | ✅ | TensorRT via RF-DETR native export. NVIDIA GPU required. No macOS. |
 | `.pth -> coreml` | ✅ | Experimental native CoreML export. macOS only; fixed shapes only. |
+| `.pth -> tflite` | ⚠️ | Experimental ONNX → TensorFlow → TFLite route. Requires exactly Python 3.12; always emits FP32 and FP16 artifacts, and INT8 adds a third. |
 
 > [!NOTE]
-> RF-DETR supports ONNX, TensorRT, and experimental native CoreML. CoreML uses fixed shapes because upstream does not support dynamic batching. TFLite export was evaluated and dropped because the ONNX → TFLite conversion failed consistently across macOS and Linux.
+> RF-DETR supports ONNX, TensorRT, experimental native CoreML, and experimental TFLite. CoreML uses fixed shapes because upstream does not support dynamic batching. TFLite requires Python 3.12 exactly; `onnx2tf` output layouts can vary. It always emits FP32 and FP16 `.tflite` artifacts; INT8 adds a third via dynamic-range weight quantization and requires no calibration.
 
 ## Export Precision
 
@@ -156,7 +157,7 @@ Some targets are one-way deployment artifacts or platform-locked:
 - `imx` export is Linux-only and requires Java `>= 17`.
 - `axelera` export is Linux-only.
 - `litert`, `engine`, `mnn`, `rknn`, `imx`, `axelera`, `edgetpu`, and some `coreml` outputs should be treated as one-way deployment outputs.
-- **Roboflow RF-DETR (`.pth`)** exports to `onnx`, `engine`, and experimental `coreml`. Native `engine` (TensorRT) is NVIDIA-only; native `coreml` is macOS-only with fixed shapes.
+- **Roboflow RF-DETR (`.pth`)** exports to `onnx`, `engine`, experimental `coreml`, and experimental `tflite`. Native `engine` (TensorRT) is NVIDIA-only; native `coreml` is macOS-only with fixed shapes. `tflite` requires Python 3.12 exactly and can emit multiple artifacts.
 
 ---
 

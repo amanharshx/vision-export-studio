@@ -15,6 +15,64 @@ SPEC.loader.exec_module(helper)
 
 
 class RfDetrExportHelperTests(unittest.TestCase):
+    def test_tflite_preloads_tensorflow_before_resolving_model(self):
+        events = []
+        args = SimpleNamespace(
+            checkpoint="/tmp/model.pth", output_dir="/tmp/out", route_id="rfdetr.pth.tflite",
+            imgsz=640, batch=1, opset=None, precision="fp32",
+            variant_mode="auto", manual_class_symbol=None,
+        )
+
+        real_import = __import__
+
+        def record_import(name, *args, **kwargs):
+            if name == "tensorflow":
+                events.append("tensorflow")
+                return Mock()
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=record_import):
+            with patch.object(
+                helper,
+                "resolve_model",
+                side_effect=lambda args: events.append("resolve_model") or SimpleNamespace(export=Mock()),
+            ):
+                with patch.object(helper.os, "makedirs"):
+                    result = helper.export_checkpoint(args)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(events[:2], ["tensorflow", "resolve_model"])
+
+    def test_non_tflite_exports_do_not_preload_tensorflow(self):
+        for route_id in ("rfdetr.pth.onnx", "rfdetr.pth.engine", "rfdetr.pth.coreml"):
+            args = SimpleNamespace(
+                checkpoint="/tmp/model.pth", output_dir="/tmp/out", route_id=route_id,
+                imgsz=640, batch=1, opset=None, precision="fp32",
+                variant_mode="auto", manual_class_symbol=None,
+            )
+
+            with patch.object(helper, "preload_tensorflow_before_rfdetr") as preload:
+                with patch.object(helper, "resolve_model", return_value=SimpleNamespace(export=Mock())):
+                    with patch.object(helper.os, "makedirs"):
+                        result = helper.export_checkpoint(args)
+
+            self.assertEqual(result, 0)
+            preload.assert_not_called()
+
+    def test_tflite_preload_ignores_missing_top_level_tensorflow(self):
+        with patch("builtins.__import__", side_effect=ModuleNotFoundError(name="tensorflow")):
+            helper.preload_tensorflow_before_rfdetr()
+
+    def test_export_prepends_active_venv_scripts_to_path(self):
+        with patch.object(helper.sys, "executable", "/tmp/rfdetr-tflite/.venv/bin/python"):
+            with patch.dict(helper.os.environ, {"PATH": "/usr/bin"}, clear=True):
+                helper.prepend_active_venv_scripts_to_path()
+
+                self.assertEqual(
+                    helper.os.environ["PATH"],
+                    "/tmp/rfdetr-tflite/.venv/bin:/usr/bin",
+                )
+
     def test_resolve_model_class_symbol_prefers_checkpoint_model_name(self):
         checkpoint = {"model_name": "RFDETRSmall"}
 
@@ -61,26 +119,27 @@ class RfDetrExportHelperTests(unittest.TestCase):
             "token_grid": 32,
         })
 
-    def test_export_checkpoint_rejects_removed_tflite_route(self):
-        args = SimpleNamespace(
-            checkpoint="/tmp/model.pth",
-            output_dir="/tmp/out",
-            route_id="rfdetr.pth.tflite",
-            imgsz=640,
-            batch=1,
-            opset=None,
-            variant_mode="auto",
-            manual_class_symbol=None,
-        )
-        stderr = io.StringIO()
+    def test_export_checkpoint_uses_tflite_quantization_without_legacy_flags(self):
+        for quantization in ("fp32", "int8"):
+            export = Mock()
+            args = SimpleNamespace(
+                checkpoint="/tmp/model.pth", output_dir="/tmp/out", route_id="rfdetr.pth.tflite",
+                imgsz=640, batch=1, opset=None, precision=quantization,
+                variant_mode="auto", manual_class_symbol=None,
+            )
 
-        with patch.object(helper, "resolve_model", return_value=SimpleNamespace()) as resolve_model:
-            with patch("sys.stderr", stderr):
-                result = helper.export_checkpoint(args)
+            with patch.object(helper, "resolve_model", return_value=SimpleNamespace(export=export)):
+                with patch.object(helper.os, "makedirs"):
+                    result = helper.export_checkpoint(args)
 
-        self.assertEqual(result, 1)
-        self.assertIn("unsupported RF-DETR route", stderr.getvalue())
-        resolve_model.assert_not_called()
+            self.assertEqual(result, 0)
+            kwargs = export.call_args.kwargs
+            self.assertEqual(kwargs["format"], "tflite")
+            self.assertEqual(kwargs["quantization"], quantization)
+            self.assertNotIn("fp16", kwargs)
+            self.assertNotIn("coreml_precision", kwargs)
+            self.assertNotIn("calibration_data", kwargs)
+            self.assertNotIn("max_images", kwargs)
 
     def test_export_checkpoint_uses_native_tensorrt_export(self):
         export = Mock()

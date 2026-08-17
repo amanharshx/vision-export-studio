@@ -9,6 +9,7 @@ pub(crate) struct StackEnvironment {
     pub key: &'static str,
     pub display_name: &'static str,
     pub route_ids: &'static [&'static str],
+    pub python_requirement: Option<&'static str>,
 }
 
 const KNOWN_STACKS: &[StackEnvironment] = &[
@@ -16,16 +17,25 @@ const KNOWN_STACKS: &[StackEnvironment] = &[
         key: "rfdetr-default",
         display_name: "RF-DETR",
         route_ids: &["rfdetr.pth.onnx"],
+        python_requirement: None,
     },
     StackEnvironment {
         key: "rfdetr-tensorrt",
         display_name: "RF-DETR TensorRT",
         route_ids: &["rfdetr.pth.engine"],
+        python_requirement: None,
     },
     StackEnvironment {
         key: "rfdetr-coreml",
         display_name: "RF-DETR CoreML",
         route_ids: &["rfdetr.pth.coreml"],
+        python_requirement: None,
+    },
+    StackEnvironment {
+        key: "rfdetr-tflite",
+        display_name: "RF-DETR TFLite",
+        route_ids: &["rfdetr.pth.tflite"],
+        python_requirement: Some(">=3.12, <3.13"),
     },
 ];
 
@@ -116,7 +126,7 @@ mod tests {
     #[test]
     fn known_stacks_map_rfdetr_routes_to_separate_environments() {
         let stacks = known_stacks();
-        assert_eq!(stacks.len(), 3);
+        assert_eq!(stacks.len(), 4);
 
         for stack in stacks {
             assert!(!stack.key.is_empty());
@@ -138,6 +148,10 @@ mod tests {
         assert_eq!(
             stack_for_route("rfdetr.pth.coreml").unwrap().key,
             "rfdetr-coreml"
+        );
+        assert_eq!(
+            stack_for_route("rfdetr.pth.tflite").unwrap().key,
+            "rfdetr-tflite"
         );
         assert!(stack_for_route("ultralytics.pt.onnx").is_none());
         assert!(stack_for_route("unknown.route").is_none());

@@ -29,6 +29,7 @@ describe("provider route registry", () => {
       "rfdetr.pth.onnx",
       "rfdetr.pth.engine",
       "rfdetr.pth.coreml",
+      "rfdetr.pth.tflite",
     ]);
   });
 
@@ -79,11 +80,27 @@ describe("provider route registry", () => {
     expect(route?.oneWay).toBe(true);
   });
 
+  test("RF-DETR TFLite declares experimental multi-artifact quantization", () => {
+    const route = routesForProvider("rfdetr").find((item) => item.id === "rfdetr.pth.tflite");
+
+    expect(route?.pipDeps.map((dep) => dep.packageName)).toEqual(["rfdetr[tflite]"]);
+    expect(route?.platformLock).toBe("any");
+    expect(route?.intermediates).toEqual(["onnx"]);
+    expect(route?.precisionModes).toEqual(["fp32", "int8"]);
+    expect(route?.defaultPrecision).toBe("fp32");
+    expect(route?.calibrationRecommendedFor).toEqual([]);
+    expect(route?.oneWay).toBe(true);
+    expect(route?.lossy).toBe(true);
+    expect(route?.notes).toContain("always emits FP32 and FP16");
+    expect(route?.notes).toContain("dynamic-range weight-quantized");
+    expect(route?.notes).toContain("requires no calibration data");
+  });
+
   test("Ultralytics routes keep Ultralytics base dependency", () => {
     expect(providers.ultralytics.baseDeps.map((dep) => dep.packageName)).toContain("ultralytics");
   });
 
-  test("RF-DETR rendered route list does not show TFLite UI", () => {
+  test("RF-DETR rendered route list shows TFLite UI", () => {
     const markup = renderToStaticMarkup(
       createElement(
         Fragment,
@@ -96,7 +113,7 @@ describe("provider route registry", () => {
 
     expect(markup).toContain("ONNX");
     expect(markup).toContain("TensorRT via ONNX");
-    expect(markup).not.toContain("TFLite");
+    expect(markup).toContain("TFLite");
   });
 
   test("LiteRT route exposes LiteRT metadata and drops TFLite/TF.js routes", () => {

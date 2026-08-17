@@ -35,7 +35,12 @@ export function RfDetrOptions({ route, options, onOptionsChange, recommendedImgs
           className="h-8 w-20 text-xs"
         />
       </InputRow>
-      <PrecisionOptions route={route} options={options} onOptionsChange={onOptionsChange} />
+      <PrecisionOptions
+        route={route}
+        options={options}
+        onOptionsChange={onOptionsChange}
+        label={route.targetFormat === "tflite" ? "Quantization" : undefined}
+      />
       {route.targetFormat === "onnx" && (
         <InputRow label="Opset" description="ONNX opset version (11–20)">
           <Input
