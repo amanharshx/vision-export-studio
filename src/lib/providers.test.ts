@@ -86,12 +86,14 @@ describe("provider route registry", () => {
     expect(route?.pipDeps.map((dep) => dep.packageName)).toEqual(["rfdetr[tflite]"]);
     expect(route?.platformLock).toBe("any");
     expect(route?.intermediates).toEqual(["onnx"]);
-    expect(route?.precisionModes).toEqual(["fp32", "fp16", "int8"]);
+    expect(route?.precisionModes).toEqual(["fp32", "int8"]);
     expect(route?.defaultPrecision).toBe("fp32");
-    expect(route?.calibrationRecommendedFor).toEqual(["int8"]);
+    expect(route?.calibrationRecommendedFor).toEqual([]);
     expect(route?.oneWay).toBe(true);
     expect(route?.lossy).toBe(true);
-    expect(route?.notes).toContain("always produces FP32 and FP16");
+    expect(route?.notes).toContain("always emits FP32 and FP16");
+    expect(route?.notes).toContain("dynamic-range weight-quantized");
+    expect(route?.notes).toContain("requires no calibration data");
   });
 
   test("Ultralytics routes keep Ultralytics base dependency", () => {

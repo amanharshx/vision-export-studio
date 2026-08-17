@@ -21,10 +21,9 @@ interface PrecisionOptionsProps {
   options: ExportOptions;
   onOptionsChange: (options: ExportOptions) => void;
   label?: string;
-  hideCalibration?: boolean;
 }
 
-export function PrecisionOptions({ route, options, onOptionsChange, label = "Precision", hideCalibration = false }: PrecisionOptionsProps) {
+export function PrecisionOptions({ route, options, onOptionsChange, label = "Precision" }: PrecisionOptionsProps) {
   const precisionItems = route.precisionModes.map((mode) => ({
     value: mode,
     label: PRECISION_LABELS[mode],
@@ -65,7 +64,7 @@ export function PrecisionOptions({ route, options, onOptionsChange, label = "Pre
         )}
       </OptionRow>
 
-      {calibrationRecommended && !hideCalibration && (
+      {calibrationRecommended && (
         <div className="space-y-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
           {options.calibrationData ? (
             <>

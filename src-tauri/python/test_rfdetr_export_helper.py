@@ -19,7 +19,7 @@ class RfDetrExportHelperTests(unittest.TestCase):
         events = []
         args = SimpleNamespace(
             checkpoint="/tmp/model.pth", output_dir="/tmp/out", route_id="rfdetr.pth.tflite",
-            imgsz=640, batch=1, opset=None, precision="fp32", calibration_data="", max_images=100,
+            imgsz=640, batch=1, opset=None, precision="fp32",
             variant_mode="auto", manual_class_symbol=None,
         )
 
@@ -120,12 +120,11 @@ class RfDetrExportHelperTests(unittest.TestCase):
         })
 
     def test_export_checkpoint_uses_tflite_quantization_without_legacy_flags(self):
-        for quantization in ("fp32", "fp16", "int8"):
+        for quantization in ("fp32", "int8"):
             export = Mock()
             args = SimpleNamespace(
                 checkpoint="/tmp/model.pth", output_dir="/tmp/out", route_id="rfdetr.pth.tflite",
                 imgsz=640, batch=1, opset=None, precision=quantization,
-                calibration_data="/tmp/calibration", max_images=42,
                 variant_mode="auto", manual_class_symbol=None,
             )
 
@@ -139,12 +138,8 @@ class RfDetrExportHelperTests(unittest.TestCase):
             self.assertEqual(kwargs["quantization"], quantization)
             self.assertNotIn("fp16", kwargs)
             self.assertNotIn("coreml_precision", kwargs)
-            if quantization == "int8":
-                self.assertEqual(kwargs["calibration_data"], "/tmp/calibration")
-                self.assertEqual(kwargs["max_images"], 42)
-            else:
-                self.assertNotIn("calibration_data", kwargs)
-                self.assertNotIn("max_images", kwargs)
+            self.assertNotIn("calibration_data", kwargs)
+            self.assertNotIn("max_images", kwargs)
 
     def test_export_checkpoint_uses_native_tensorrt_export(self):
         export = Mock()

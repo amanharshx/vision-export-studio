@@ -110,7 +110,7 @@ Roboflow RF-DETR (`.pth`) target formats:
 | `.pth -> tflite` | ⚠️ | Experimental ONNX → TensorFlow → TFLite route. Requires exactly Python 3.12; always emits FP32 and FP16 artifacts, and INT8 adds a third. |
 
 > [!NOTE]
-> RF-DETR supports ONNX, TensorRT, experimental native CoreML, and experimental TFLite. CoreML uses fixed shapes because upstream does not support dynamic batching. TFLite requires Python 3.12 exactly; `onnx2tf` output layouts can vary. It always emits FP32 and FP16 `.tflite` artifacts; INT8 adds a third and needs a calibration-image directory for reliable accuracy.
+> RF-DETR supports ONNX, TensorRT, experimental native CoreML, and experimental TFLite. CoreML uses fixed shapes because upstream does not support dynamic batching. TFLite requires Python 3.12 exactly; `onnx2tf` output layouts can vary. It always emits FP32 and FP16 `.tflite` artifacts; INT8 adds a third via dynamic-range weight quantization and requires no calibration.
 
 ## Export Precision
 

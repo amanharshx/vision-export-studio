@@ -294,10 +294,6 @@ def export_checkpoint(args):
         elif args.route_id == "rfdetr.pth.tflite":
             kwargs["format"] = "tflite"
             kwargs["quantization"] = args.precision
-            if args.precision == "int8":
-                if args.calibration_data:
-                    kwargs["calibration_data"] = args.calibration_data
-                kwargs["max_images"] = args.max_images
         if args.route_id == "rfdetr.pth.onnx" and args.opset is not None:
             kwargs["opset_version"] = args.opset
         if args.route_id == "rfdetr.pth.tflite":
@@ -336,8 +332,6 @@ def parse_args():
     # TensorRT 11.x lacks RF-DETR's FP16 builder flag, so fresh unbounded
     # rfdetr[tensorrt] installs downgrade FP16 to FP32 and emit a warning.
     export_parser.add_argument("--precision", choices=["fp16", "fp32", "int8"], default="fp32")
-    export_parser.add_argument("--calibration-data", default="")
-    export_parser.add_argument("--max-images", type=int, default=100)
     return parser.parse_args()
 
 

@@ -110,12 +110,6 @@ fn append_helper_args(cmd: &mut Command, request: &ExportRequest, helper: &Path)
     ) {
         cmd.arg("--precision").arg(&request.precision);
     }
-    if request.route_id == "rfdetr.pth.tflite" && request.precision == "int8" {
-        if let Some(data) = request.calibration_data.as_deref() {
-            cmd.arg("--calibration-data").arg(data);
-        }
-        cmd.arg("--max-images").arg(request.max_images.to_string());
-    }
 }
 
 fn required_artifact_count(route_id: &str, precision: &str) -> usize {
@@ -347,7 +341,6 @@ mod tests {
             batch: 1,
             precision: "fp32".to_string(),
             calibration_data: None,
-            max_images: 100,
             dynamic: false,
             simplify: false,
             optimize: false,
@@ -565,7 +558,7 @@ mod tests {
         );
         assert!(
             !fp32.artifact_moved,
-            "one changed TFLite artifact must fail FP32/FP16 confirmation"
+            "one changed TFLite artifact must fail standard TFLite export confirmation"
         );
 
         std::fs::write(root.join("two.tflite"), b"fresh").expect("rewrite second artifact");
@@ -575,7 +568,7 @@ mod tests {
         );
         assert!(
             fp32.artifact_moved,
-            "two changed TFLite artifacts must pass FP32/FP16 confirmation"
+            "two changed TFLite artifacts must pass standard TFLite export confirmation"
         );
 
         let mut int8 = make_request("rfdetr.pth.tflite", root.to_str().expect("path"));
