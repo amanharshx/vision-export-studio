@@ -20,11 +20,6 @@ export async function openCalibrationDataPicker(): Promise<string | null> {
   return typeof result === "string" ? result : null;
 }
 
-export async function openCalibrationDirectoryPicker(): Promise<string | null> {
-  const result = await open({ multiple: false, directory: true });
-  return typeof result === "string" ? result : null;
-}
-
 export async function openPythonExecutablePicker(): Promise<string | null> {
   const result = await open({
     multiple: false,
