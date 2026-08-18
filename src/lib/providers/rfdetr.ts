@@ -83,7 +83,8 @@ export const rfdetrRoutes: RouteSpec[] = [
   rfdetrRoute({
     id: "rfdetr.pth.executorch",
     targetFormat: "executorch",
-    title: "ExecuTorch (XNNPACK)",
+    title: "ExecuTorch",
+    backend: "xnnpack",
     displayPath: "checkpoint.pth -> rfdetr-small.pte",
     pipDeps: [
       { packageName: "rfdetr[executorch]>=1.9.0", installHint: 'pip install "rfdetr[executorch]>=1.9.0"' },

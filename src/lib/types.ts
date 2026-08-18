@@ -50,6 +50,7 @@ export interface RouteSpec {
   sourceFormat: SourceFormat;
   targetFormat: string;
   title: string;
+  backend?: string;
   displayPath: string;
   pipDeps: Array<{ packageName: string; installHint: string; optional?: boolean }>;
   sysDeps: Array<{ binaryName: string; installHint: string; optional?: boolean }>;
@@ -170,7 +171,7 @@ export interface ExportCancelledPayload {
  *   "ready"           — dependency found
  *   "missing_package" — pip package absent (hard required)
  *   "missing_binary"  — system binary absent on PATH
- *   "platform_unsupported" — route is locked to a different OS or architecture
+ *   "platform_unsupported" — route is locked to a different OS, architecture, or required OS version
  *   "warning"         — optional dep absent; export will still work
  *   "unknown"         — probe could not run (python crashed / spawn failed)
  *   "version_too_old" — installed package or interpreter is below the route floor.

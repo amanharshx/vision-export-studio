@@ -101,7 +101,8 @@ describe("provider route registry", () => {
     const route = routesForProvider("rfdetr").find((item) => item.id === "rfdetr.pth.executorch");
 
     expect(route?.targetFormat).toBe("executorch");
-    expect(route?.title).toBe("ExecuTorch (XNNPACK)");
+    expect(route?.title).toBe("ExecuTorch");
+    expect(route?.backend).toBe("xnnpack");
     expect(route?.pipDeps.map((dep) => dep.packageName)).toEqual([
       "rfdetr[executorch]>=1.9.0",
       "torch>=2.13",
