@@ -77,7 +77,7 @@ describe("platformTags", () => {
 
   test("RF-DETR ExecuTorch tags every supported host", () => {
     expect(platformTags("macos_arm64_linux_windows_x86_64")).toEqual([
-      "macOS ARM64",
+      "macOS ARM64 14+",
       "Linux x86-64",
       "Windows x86-64",
     ]);

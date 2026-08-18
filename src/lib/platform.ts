@@ -23,7 +23,8 @@ export function platformTags(lock: PlatformLock): string[] {
     case "linux_x86_64": return ["Linux x86-64"];
     case "linux_windows": return ["Linux", "Windows"];
     case "macos": return ["macOS"];
-    case "macos_arm64_linux_windows_x86_64": return ["macOS ARM64", "Linux x86-64", "Windows x86-64"];
+    // Display only; Rust HostContext enforces macOS 14+.
+    case "macos_arm64_linux_windows_x86_64": return ["macOS ARM64 14+", "Linux x86-64", "Windows x86-64"];
     case "macos_linux": return ["macOS", "Linux"];
     case "macos_linux_x86_64": return ["macOS", "Linux x86-64"];
     case "windows": return ["Windows"];

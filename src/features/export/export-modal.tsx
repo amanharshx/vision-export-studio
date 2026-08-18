@@ -251,8 +251,8 @@ export function ExportModal({
                 <Icon className="h-6 w-6" />
               </div>
             )}
-            <div>
-              <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
                 <DialogTitle className="text-lg">
                   Export to {route.title}
                 </DialogTitle>

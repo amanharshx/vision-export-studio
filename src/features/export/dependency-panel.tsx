@@ -195,13 +195,13 @@ export function DependencyPanel({
             className="flex items-center justify-between gap-3 rounded-md border border-zinc-900/10 bg-zinc-50 px-3 py-2 text-sm"
           >
             <span className="flex min-w-0 flex-col">
-              <span className="flex items-center gap-2 font-medium text-zinc-900">
+              <span className="flex min-w-0 flex-1 items-center gap-2 font-medium text-zinc-900">
                 {depCheckLoading ? (
                   <Loader2 className="size-4 shrink-0 animate-spin text-zinc-300" aria-hidden="true" />
                 ) : (
                   depIcon(result, displayHint)
                 )}
-                {dep.name}
+                <span className="truncate" title={dep.name}>{dep.name}</span>
               </span>
               {reason && <span className="ml-6 text-xs text-zinc-500">{reason}</span>}
             </span>

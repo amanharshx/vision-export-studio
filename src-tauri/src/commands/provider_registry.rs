@@ -116,7 +116,7 @@ fn platform_tags(lock: PlatformLock) -> &'static str {
         PlatformLock::MacosLinux => "macOS and Linux",
         PlatformLock::MacosLinuxX86_64 => "macOS and Linux x86-64",
         PlatformLock::MacosArm64LinuxWindowsX86_64 => {
-            "macOS ARM64, Linux x86-64, and Windows x86-64"
+            "macOS ARM64 14+, Linux x86-64, and Windows x86-64"
         }
     }
 }
@@ -444,6 +444,8 @@ mod tests {
             .expect_err("Intel macOS must be rejected");
 
             assert!(error.contains("macOS x86-64"));
+            assert!(error
+                .contains("Available on macOS ARM64 14+, Linux x86-64, and Windows x86-64 only."));
         }
     }
 
