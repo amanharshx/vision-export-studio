@@ -8,7 +8,7 @@ use tauri::Emitter;
 use uuid::Uuid;
 
 use crate::commands::provider_registry::{
-    validate_current_route_platform, validate_route_platform,
+    current_host_context, validate_route_platform, HostContext,
 };
 use crate::commands::runtime_operations::{
     emit_after_operation_released, RuntimeOperation, RuntimeOperationCoordinator,
@@ -23,6 +23,8 @@ use crate::commands::stack_environments::{stack_for_route, stack_python, stack_v
 const MIN_ULTRALYTICS_VERSION: &str = "8.4.80";
 const MIN_LITERT_ULTRALYTICS_VERSION: &str = "8.4.83";
 const MIN_LITERT_PYTHON_VERSION: &str = "3.10";
+const MIN_RFDETR_EXECUTORCH_VERSION: &str = "1.9.0";
+const MIN_RFDETR_EXECUTORCH_TORCH_VERSION: &str = "2.13";
 
 /// Minimum Ultralytics version required by a route. None for non-Ultralytics routes.
 fn minimum_ultralytics_version(route_id: &str) -> Option<&'static str> {
@@ -424,13 +426,28 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
             }],
             sys: &[],
         }),
+        "rfdetr.pth.executorch" => Some(RouteDeps {
+            pip: &[
+                PipDep {
+                    package_name: "rfdetr[executorch]>=1.9.0",
+                    install_hint: "pip install \"rfdetr[executorch]>=1.9.0\"",
+                    optional: false,
+                },
+                PipDep {
+                    package_name: "torch>=2.13",
+                    install_hint: "pip install \"torch>=2.13\"",
+                    optional: false,
+                },
+            ],
+            sys: &[],
+        }),
         _ => None,
     }
 }
 
-fn validate_install_route_platform(route_id: &str, os: &str, arch: &str) -> Result<(), String> {
+fn validate_install_route_platform(route_id: &str, host: HostContext<'_>) -> Result<(), String> {
     route_deps(route_id).ok_or_else(|| format!("unknown route_id: {}", route_id))?;
-    validate_route_platform(route_id, os, arch)
+    validate_route_platform(route_id, host)
 }
 
 // ---------------------------------------------------------------------------
@@ -491,7 +508,7 @@ pub(crate) fn probe_python_version(python: &str) -> Result<String, String> {
 /// Python snippet that prints a distribution version without importing the
 /// package. Falls back to the module's `__version__` when metadata is absent.
 /// Assumes the distribution name matches the importable name, which holds for
-/// the only caller (`ultralytics`).
+/// current callers (`ultralytics`, `rfdetr`, and `torch`).
 pub(crate) fn version_probe_code(importable: &str) -> String {
     format!(
         "import importlib.metadata as _m\n\
@@ -561,7 +578,7 @@ fn check_dependencies_for_runtime(
         }
     }
 
-    if let Err(reason) = validate_current_route_platform(route_id) {
+    if let Err(reason) = validate_route_platform(route_id, current_host_context()) {
         return Ok(DepCheckResponse {
             results: vec![platform_unsupported_result(reason)],
         });
@@ -627,6 +644,23 @@ fn check_dependencies_for_runtime(
             "pip install \"rfdetr[tflite]\"",
             "rfdetr[tflite]",
         ));
+    } else if route_id == "rfdetr.pth.executorch" {
+        results.push(check_versioned_python_probe_dep(
+            &dependency_python,
+            "rfdetr[executorch]>=1.9.0",
+            "rfdetr",
+            MIN_RFDETR_EXECUTORCH_VERSION,
+            "import rfdetr; import executorch.exir; print(True)",
+            "pip install \"rfdetr[executorch]>=1.9.0\"",
+        ));
+        results.push(check_versioned_python_probe_dep(
+            &dependency_python,
+            "torch>=2.13",
+            "torch",
+            MIN_RFDETR_EXECUTORCH_TORCH_VERSION,
+            "import torch; print(True)",
+            "pip install \"torch>=2.13\"",
+        ));
     } else {
         for dep in deps.pip {
             let result = check_pip_dep(
@@ -687,6 +721,22 @@ fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
             install_hint: "pip install \"rfdetr[tflite]\"".to_string(),
             install_package: Some("rfdetr[tflite]".to_string()),
         }]),
+        "rfdetr.pth.executorch" => Some(vec![
+            DepCheckResult {
+                item: "rfdetr[executorch]>=1.9.0".to_string(),
+                status: "missing_package".to_string(),
+                reason: "RF-DETR stack environment has not been created.".to_string(),
+                install_hint: "pip install \"rfdetr[executorch]>=1.9.0\"".to_string(),
+                install_package: Some("rfdetr[executorch]>=1.9.0".to_string()),
+            },
+            DepCheckResult {
+                item: "torch>=2.13".to_string(),
+                status: "missing_package".to_string(),
+                reason: "RF-DETR stack environment has not been created.".to_string(),
+                install_hint: "pip install \"torch>=2.13\"".to_string(),
+                install_package: Some("torch>=2.13".to_string()),
+            },
+        ]),
         _ => None,
     }
 }
@@ -813,6 +863,56 @@ fn check_python_probe_dep(
     }
 }
 
+fn check_versioned_python_probe_dep(
+    python: &str,
+    item: &str,
+    distribution: &str,
+    required: &str,
+    code: &str,
+    install_hint: &str,
+) -> DepCheckResult {
+    let presence = check_python_probe_dep(python, item, code, install_hint, item);
+    versioned_dep_result(
+        presence,
+        probe_installed_version(python, distribution),
+        distribution,
+        required,
+    )
+}
+
+fn versioned_dep_result(
+    presence: DepCheckResult,
+    installed: Result<String, String>,
+    distribution: &str,
+    required: &str,
+) -> DepCheckResult {
+    if presence.status != "ready" {
+        return presence;
+    }
+    let item = presence.item.clone();
+    let install_hint = presence.install_hint.clone();
+    match installed {
+        Ok(installed) if !version_below(&installed, required) => presence,
+        Ok(installed) => DepCheckResult {
+            item: item.to_string(),
+            status: "version_too_old".to_string(),
+            reason: format!(
+                "{} {} is installed; {} or newer is required.",
+                distribution, installed, required
+            ),
+            install_hint: install_hint.to_string(),
+            install_package: Some(item.to_string()),
+        },
+        Err(_) => DepCheckResult {
+            item: item.to_string(),
+            status: "version_too_old".to_string(),
+            reason: format!("{} version could not be determined.", distribution),
+            install_hint: install_hint.to_string(),
+            install_package: Some(item.to_string()),
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // install_dependencies — payload types
 // ---------------------------------------------------------------------------
@@ -881,7 +981,7 @@ pub async fn install_dependencies(
     // OS/architecture. The route-agnostic base runtime install (route_id = None,
     // e.g. `ultralytics`) is installable on every platform and is not gated.
     if let Some(route_id) = route_id.as_deref() {
-        validate_install_route_platform(route_id, std::env::consts::OS, std::env::consts::ARCH)?;
+        validate_install_route_platform(route_id, current_host_context())?;
     }
     if python_path.is_empty() {
         return Err("python_path must not be empty".to_string());
@@ -1085,6 +1185,14 @@ fn check_sys_dep(python: &str, binary_name: &str, install_hint: &str) -> DepChec
 mod tests {
     use super::*;
 
+    fn host(os: &'static str, arch: &'static str) -> HostContext<'static> {
+        HostContext {
+            os,
+            arch,
+            macos_major: None,
+        }
+    }
+
     #[test]
     fn paddlepaddle_distribution_maps_to_paddle_import() {
         assert_eq!(importable_name("paddlepaddle"), "paddle");
@@ -1127,19 +1235,25 @@ mod tests {
     #[test]
     fn litert_dependency_install_gates_export_host() {
         assert!(
-            validate_install_route_platform("ultralytics.pt.litert", "macos", "x86_64").is_ok()
+            validate_install_route_platform("ultralytics.pt.litert", host("macos", "x86_64"))
+                .is_ok()
         );
         assert!(
-            validate_install_route_platform("ultralytics.pt.litert", "macos", "aarch64").is_ok()
+            validate_install_route_platform("ultralytics.pt.litert", host("macos", "aarch64"))
+                .is_ok()
         );
         assert!(
-            validate_install_route_platform("ultralytics.pt.litert", "linux", "x86_64").is_ok()
+            validate_install_route_platform("ultralytics.pt.litert", host("linux", "x86_64"))
+                .is_ok()
         );
+        assert!(validate_install_route_platform(
+            "ultralytics.pt.litert",
+            host("windows", "x86_64")
+        )
+        .is_err());
         assert!(
-            validate_install_route_platform("ultralytics.pt.litert", "windows", "x86_64").is_err()
-        );
-        assert!(
-            validate_install_route_platform("ultralytics.pt.litert", "linux", "aarch64").is_err()
+            validate_install_route_platform("ultralytics.pt.litert", host("linux", "aarch64"))
+                .is_err()
         );
     }
 
@@ -1280,6 +1394,23 @@ mod tests {
     }
 
     #[test]
+    fn absent_rfdetr_executorch_stack_returns_two_exact_install_rows() {
+        let runtime = std::env::temp_dir().join(format!("rfdetr-stack-{}", Uuid::new_v4()));
+        let runtime = runtime.to_string_lossy();
+        let results = missing_stack_results_if_absent(&runtime, "rfdetr.pth.executorch")
+            .expect("RF-DETR ExecuTorch stack results");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].item, "rfdetr[executorch]>=1.9.0");
+        assert_eq!(
+            results[0].install_package.as_deref(),
+            Some("rfdetr[executorch]>=1.9.0")
+        );
+        assert_eq!(results[1].item, "torch>=2.13");
+        assert_eq!(results[1].install_package.as_deref(), Some("torch>=2.13"));
+    }
+
+    #[test]
     fn existing_rfdetr_stack_ignores_missing_base_python() {
         let runtime = std::env::temp_dir().join(format!("rfdetr-stack-{}", Uuid::new_v4()));
         let runtime = runtime.to_string_lossy().into_owned();
@@ -1373,23 +1504,27 @@ mod tests {
 
     #[test]
     fn dependency_install_rejects_edge_tpu_on_arm_linux() {
-        assert!(
-            validate_install_route_platform("ultralytics.pt.edgetpu", "linux", "aarch64").is_err()
-        );
+        assert!(validate_install_route_platform(
+            "ultralytics.pt.edgetpu",
+            host("linux", "aarch64")
+        )
+        .is_err());
     }
 
     #[test]
     fn dependency_install_rejects_unknown_route() {
-        assert!(validate_install_route_platform("unknown.route", "linux", "x86_64").is_err());
+        assert!(validate_install_route_platform("unknown.route", host("linux", "x86_64")).is_err());
     }
 
     #[test]
     fn dependency_install_allows_supported_route_platform() {
         assert!(
-            validate_install_route_platform("ultralytics.pt.edgetpu", "linux", "x86_64").is_ok()
+            validate_install_route_platform("ultralytics.pt.edgetpu", host("linux", "x86_64"))
+                .is_ok()
         );
         assert!(
-            validate_install_route_platform("ultralytics.pt.paddle", "macos", "aarch64").is_ok()
+            validate_install_route_platform("ultralytics.pt.paddle", host("macos", "aarch64"))
+                .is_ok()
         );
     }
 
@@ -1497,6 +1632,40 @@ mod tests {
         assert!(result.reason.contains("8.4.79"));
         assert!(result.reason.contains("8.4.80"));
         assert!(result.install_hint.contains("ultralytics>=8.4.80"));
+    }
+
+    #[test]
+    fn injected_rfdetr_and_torch_versions_below_executorch_floors_are_installable() {
+        let ready = |item: &str| DepCheckResult {
+            item: item.to_string(),
+            status: "ready".to_string(),
+            reason: String::new(),
+            install_hint: format!("pip install \"{}\" ", item).trim().to_string(),
+            install_package: None,
+        };
+
+        let rfdetr = versioned_dep_result(
+            ready("rfdetr[executorch]>=1.9.0"),
+            Ok("1.8.9".to_string()),
+            "rfdetr",
+            MIN_RFDETR_EXECUTORCH_VERSION,
+        );
+        let torch = versioned_dep_result(
+            ready("torch>=2.13"),
+            Ok("2.12.1".to_string()),
+            "torch",
+            MIN_RFDETR_EXECUTORCH_TORCH_VERSION,
+        );
+
+        assert_eq!(rfdetr.status, "version_too_old");
+        assert_eq!(rfdetr.item, "rfdetr[executorch]>=1.9.0");
+        assert_eq!(
+            rfdetr.install_package.as_deref(),
+            Some("rfdetr[executorch]>=1.9.0")
+        );
+        assert_eq!(torch.status, "version_too_old");
+        assert_eq!(torch.item, "torch>=2.13");
+        assert_eq!(torch.install_package.as_deref(), Some("torch>=2.13"));
     }
 
     #[test]

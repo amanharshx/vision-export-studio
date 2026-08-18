@@ -1,4 +1,8 @@
 use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::process::Command;
+#[cfg(target_os = "macos")]
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderId {
@@ -40,6 +44,7 @@ pub const RFDETR_ROUTES: &[&str] = &[
     "rfdetr.pth.engine",
     "rfdetr.pth.coreml",
     "rfdetr.pth.tflite",
+    "rfdetr.pth.executorch",
 ];
 
 pub fn validate_provider_route(provider_id: &str, route_id: &str) -> Result<ProviderId, String> {
@@ -83,12 +88,14 @@ enum PlatformLock {
     LinuxWindows,
     MacosLinux,
     MacosLinuxX86_64,
+    MacosArm64LinuxWindowsX86_64,
 }
 
 fn route_platform_lock(route_id: &str) -> PlatformLock {
     match route_id {
         "ultralytics.pt.engine" | "rfdetr.pth.engine" => PlatformLock::LinuxWindows,
         "rfdetr.pth.coreml" => PlatformLock::Macos,
+        "rfdetr.pth.executorch" => PlatformLock::MacosArm64LinuxWindowsX86_64,
         "ultralytics.pt.coreml" => PlatformLock::MacosLinux,
         "ultralytics.pt.litert" => PlatformLock::MacosLinuxX86_64,
         "ultralytics.pt.edgetpu" => PlatformLock::LinuxX86_64,
@@ -108,6 +115,9 @@ fn platform_tags(lock: PlatformLock) -> &'static str {
         PlatformLock::LinuxWindows => "Linux and Windows",
         PlatformLock::MacosLinux => "macOS and Linux",
         PlatformLock::MacosLinuxX86_64 => "macOS and Linux x86-64",
+        PlatformLock::MacosArm64LinuxWindowsX86_64 => {
+            "macOS ARM64 14+, Linux x86-64, and Windows x86-64"
+        }
     }
 }
 
@@ -129,9 +139,42 @@ fn arch_label(arch: &str) -> &str {
     }
 }
 
-pub fn validate_route_platform(route_id: &str, os: &str, arch: &str) -> Result<(), String> {
-    let lock = route_platform_lock(route_id);
-    let compatible = match lock {
+#[derive(Debug, Clone, Copy)]
+pub struct HostContext<'a> {
+    pub os: &'a str,
+    pub arch: &'a str,
+    pub macos_major: Option<u32>,
+}
+
+#[cfg(target_os = "macos")]
+fn current_macos_major() -> Option<u32> {
+    static MACOS_MAJOR: OnceLock<Option<u32>> = OnceLock::new();
+    *MACOS_MAJOR.get_or_init(|| {
+        Command::new("/usr/bin/sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .and_then(|version| version.trim().split('.').next()?.parse().ok())
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn current_macos_major() -> Option<u32> {
+    None
+}
+
+pub fn current_host_context() -> HostContext<'static> {
+    HostContext {
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        macos_major: current_macos_major(),
+    }
+}
+
+fn arch_compatible(lock: PlatformLock, os: &str, arch: &str) -> bool {
+    match lock {
         PlatformLock::Any => true,
         PlatformLock::Macos => os == "macos",
         PlatformLock::Linux => os == "linux",
@@ -139,30 +182,53 @@ pub fn validate_route_platform(route_id: &str, os: &str, arch: &str) -> Result<(
         PlatformLock::LinuxWindows => os == "linux" || os == "windows",
         PlatformLock::MacosLinux => os == "macos" || os == "linux",
         PlatformLock::MacosLinuxX86_64 => os == "macos" || (os == "linux" && arch == "x86_64"),
-    };
+        PlatformLock::MacosArm64LinuxWindowsX86_64 => {
+            (os == "macos" && arch == "aarch64")
+                || ((os == "linux" || os == "windows") && arch == "x86_64")
+        }
+    }
+}
+
+fn architecture_matters(lock: PlatformLock, os: &str) -> bool {
+    arch_compatible(lock, os, "x86_64") != arch_compatible(lock, os, "aarch64")
+}
+
+pub fn validate_route_platform(route_id: &str, host: HostContext<'_>) -> Result<(), String> {
+    let lock = route_platform_lock(route_id);
+    let version_compatible = !matches!(lock, PlatformLock::MacosArm64LinuxWindowsX86_64)
+        || host.os != "macos"
+        || host.arch != "aarch64"
+        || match host.macos_major {
+            Some(major) => major >= 14,
+            None => true,
+        };
+    let compatible = arch_compatible(lock, host.os, host.arch) && version_compatible;
 
     if compatible {
         return Ok(());
     }
 
-    let current = if matches!(
-        lock,
-        PlatformLock::LinuxX86_64 | PlatformLock::MacosLinuxX86_64
-    ) && os == "linux"
+    if matches!(lock, PlatformLock::MacosArm64LinuxWindowsX86_64)
+        && host.os == "macos"
+        && host.arch == "aarch64"
+        && host.macos_major.is_some_and(|major| major < 14)
     {
-        format!("{} {}", os_label(os), arch_label(arch))
+        return Err(format!(
+            "This format is not supported on macOS {}. RF-DETR ExecuTorch requires macOS 14 or newer.",
+            host.macos_major.expect("checked above")
+        ));
+    }
+
+    let current = if architecture_matters(lock, host.os) {
+        format!("{} {}", os_label(host.os), arch_label(host.arch))
     } else {
-        os_label(os).to_string()
+        os_label(host.os).to_string()
     };
     Err(format!(
         "This format is not supported on {}. Available on {} only.",
         current,
         platform_tags(lock)
     ))
-}
-
-pub fn validate_current_route_platform(route_id: &str) -> Result<(), String> {
-    validate_route_platform(route_id, std::env::consts::OS, std::env::consts::ARCH)
 }
 
 pub enum RfDetrArtifactRule {
@@ -190,6 +256,7 @@ pub fn rfdetr_artifact_rule(route_id: &str) -> Option<RfDetrArtifactRule> {
         "rfdetr.pth.tflite" => Some(RfDetrArtifactRule::Extension {
             extension: ".tflite",
         }),
+        "rfdetr.pth.executorch" => Some(RfDetrArtifactRule::Extension { extension: ".pte" }),
         _ => None,
     }
 }
@@ -224,6 +291,14 @@ pub fn validate_rfdetr_manual_class(class_symbol: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn host(os: &'static str, arch: &'static str) -> HostContext<'static> {
+        HostContext {
+            os,
+            arch,
+            macos_major: None,
+        }
+    }
+
     #[test]
     fn validates_provider_route_match() {
         assert!(validate_provider_route("ultralytics", "ultralytics.pt.onnx").is_ok());
@@ -257,16 +332,20 @@ mod tests {
 
     #[test]
     fn litert_export_host_allows_macos_and_linux_x86_64() {
-        assert!(validate_route_platform("ultralytics.pt.litert", "macos", "x86_64").is_ok());
-        assert!(validate_route_platform("ultralytics.pt.litert", "macos", "aarch64").is_ok());
-        assert!(validate_route_platform("ultralytics.pt.litert", "linux", "x86_64").is_ok());
-        assert!(validate_route_platform("ultralytics.pt.litert", "windows", "x86_64").is_err());
-        assert!(validate_route_platform("ultralytics.pt.litert", "linux", "aarch64").is_err());
+        assert!(validate_route_platform("ultralytics.pt.litert", host("macos", "x86_64")).is_ok());
+        assert!(validate_route_platform("ultralytics.pt.litert", host("macos", "aarch64")).is_ok());
+        assert!(validate_route_platform("ultralytics.pt.litert", host("linux", "x86_64")).is_ok());
+        assert!(
+            validate_route_platform("ultralytics.pt.litert", host("windows", "x86_64")).is_err()
+        );
+        assert!(
+            validate_route_platform("ultralytics.pt.litert", host("linux", "aarch64")).is_err()
+        );
     }
 
     #[test]
     fn litert_rejection_names_linux_arm64_and_required_hosts() {
-        let error = validate_route_platform("ultralytics.pt.litert", "linux", "aarch64")
+        let error = validate_route_platform("ultralytics.pt.litert", host("linux", "aarch64"))
             .expect_err("Linux ARM64 must be rejected");
 
         assert!(error.contains("Linux ARM64"));
@@ -299,13 +378,82 @@ mod tests {
 
     #[test]
     fn rfdetr_coreml_is_macos_only_with_mlpackage_artifacts() {
-        assert!(validate_route_platform("rfdetr.pth.coreml", "macos", "aarch64").is_ok());
-        assert!(validate_route_platform("rfdetr.pth.coreml", "linux", "x86_64").is_err());
+        assert!(validate_route_platform("rfdetr.pth.coreml", host("macos", "aarch64")).is_ok());
+        assert!(validate_route_platform("rfdetr.pth.coreml", host("linux", "x86_64")).is_err());
         assert!(matches!(
             rfdetr_artifact_rule("rfdetr.pth.coreml"),
             Some(RfDetrArtifactRule::Extension {
                 extension: ".mlpackage"
             })
+        ));
+    }
+
+    #[test]
+    fn rfdetr_executorch_platform_lock_mirrors_frontend_host_pairs() {
+        for (os, arch) in [
+            ("macos", "aarch64"),
+            ("linux", "x86_64"),
+            ("windows", "x86_64"),
+        ] {
+            assert!(validate_route_platform("rfdetr.pth.executorch", host(os, arch)).is_ok());
+        }
+        for (os, arch) in [
+            ("macos", "x86_64"),
+            ("linux", "aarch64"),
+            ("windows", "aarch64"),
+        ] {
+            assert!(validate_route_platform("rfdetr.pth.executorch", host(os, arch)).is_err());
+        }
+    }
+
+    #[test]
+    fn rfdetr_executorch_requires_macos_14_but_fails_open_without_version() {
+        let error = validate_route_platform(
+            "rfdetr.pth.executorch",
+            HostContext {
+                os: "macos",
+                arch: "aarch64",
+                macos_major: Some(13),
+            },
+        )
+        .expect_err("macOS 13 must be rejected");
+        assert!(error.contains("macOS 14 or newer"));
+        assert!(validate_route_platform(
+            "rfdetr.pth.executorch",
+            HostContext {
+                os: "macos",
+                arch: "aarch64",
+                macos_major: Some(14)
+            },
+        )
+        .is_ok());
+        assert!(validate_route_platform("rfdetr.pth.executorch", host("macos", "aarch64")).is_ok());
+    }
+
+    #[test]
+    fn rfdetr_executorch_intel_macos_errors_name_architecture_even_on_macos_13() {
+        for macos_major in [None, Some(13)] {
+            let error = validate_route_platform(
+                "rfdetr.pth.executorch",
+                HostContext {
+                    os: "macos",
+                    arch: "x86_64",
+                    macos_major,
+                },
+            )
+            .expect_err("Intel macOS must be rejected");
+
+            assert!(error.contains("macOS x86-64"));
+            assert!(error
+                .contains("Available on macOS ARM64 14+, Linux x86-64, and Windows x86-64 only."));
+        }
+    }
+
+    #[test]
+    fn rfdetr_executorch_artifacts_accept_pte_by_extension() {
+        assert!(matches!(
+            rfdetr_artifact_rule("rfdetr.pth.executorch"),
+            Some(RfDetrArtifactRule::Extension { extension: ".pte" })
         ));
     }
 
@@ -317,21 +465,27 @@ mod tests {
 
     #[test]
     fn edge_tpu_requires_linux_x86_64() {
-        assert!(validate_route_platform("ultralytics.pt.edgetpu", "linux", "x86_64").is_ok());
-        assert!(validate_route_platform("ultralytics.pt.edgetpu", "linux", "aarch64").is_err());
-        assert!(validate_route_platform("ultralytics.pt.edgetpu", "windows", "x86_64").is_err());
-        assert!(validate_route_platform("ultralytics.pt.edgetpu", "macos", "aarch64").is_err());
+        assert!(validate_route_platform("ultralytics.pt.edgetpu", host("linux", "x86_64")).is_ok());
+        assert!(
+            validate_route_platform("ultralytics.pt.edgetpu", host("linux", "aarch64")).is_err()
+        );
+        assert!(
+            validate_route_platform("ultralytics.pt.edgetpu", host("windows", "x86_64")).is_err()
+        );
+        assert!(
+            validate_route_platform("ultralytics.pt.edgetpu", host("macos", "aarch64")).is_err()
+        );
     }
 
     #[test]
     fn linux_only_routes_allow_arm_linux() {
-        assert!(validate_route_platform("ultralytics.pt.rknn", "linux", "aarch64").is_ok());
-        assert!(validate_route_platform("ultralytics.pt.rknn", "windows", "x86_64").is_err());
+        assert!(validate_route_platform("ultralytics.pt.rknn", host("linux", "aarch64")).is_ok());
+        assert!(validate_route_platform("ultralytics.pt.rknn", host("windows", "x86_64")).is_err());
     }
 
     #[test]
     fn platform_error_names_current_and_required_platforms() {
-        let error = validate_route_platform("ultralytics.pt.edgetpu", "linux", "aarch64")
+        let error = validate_route_platform("ultralytics.pt.edgetpu", host("linux", "aarch64"))
             .expect_err("ARM Linux must be rejected");
 
         assert!(error.contains("Linux ARM64"));

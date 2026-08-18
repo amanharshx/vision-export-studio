@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { PendingInstallConsent, PrimaryExportActionLabel } from "./export-modal";
+import { getHostSupportStatus, PendingInstallConsent, PrimaryExportActionLabel } from "./export-modal";
 import type { DepCheckResult } from "@/lib/types";
 
 const outdatedUltralytics: DepCheckResult = {
@@ -27,6 +27,32 @@ const missingOnnx: DepCheckResult = {
   install_hint: "pip install onnx",
   install_package: "onnx",
 };
+
+const platformUnsupported: DepCheckResult = {
+  item: "platform",
+  status: "platform_unsupported",
+  reason: "This format is not supported on macOS 13. RF-DETR ExecuTorch requires macOS 14 or newer.",
+  install_hint: "This format is not supported on macOS 13. RF-DETR ExecuTorch requires macOS 14 or newer.",
+};
+
+describe("getHostSupportStatus", () => {
+  test("hides status while dependency check is loading", () => {
+    expect(getHostSupportStatus(undefined, true, null)).toBeNull();
+  });
+
+  test("hides status when dependency check errors or is absent", () => {
+    expect(getHostSupportStatus(undefined, false, "probe failed")).toBeNull();
+    expect(getHostSupportStatus(undefined, false, null)).toBeNull();
+  });
+
+  test("shows Unsupported for Rust platform rejection", () => {
+    expect(getHostSupportStatus([platformUnsupported], false, null)).toBe("unsupported");
+  });
+
+  test("shows Host supported after completed preflight without platform rejection", () => {
+    expect(getHostSupportStatus([missingOnnx], false, null)).toBe("supported");
+  });
+});
 
 describe("PendingInstallConsent", () => {
   test("version_too_old with install_package switches to update copy", () => {

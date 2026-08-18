@@ -7,7 +7,8 @@ use tauri::Emitter;
 use uuid::Uuid;
 
 use crate::commands::provider_registry::{
-    validate_current_route_platform, validate_provider_route, validate_source_extension, ProviderId,
+    current_host_context, validate_provider_route, validate_route_platform,
+    validate_source_extension, ProviderId,
 };
 use crate::commands::providers::{self, ExportRequest};
 use crate::commands::runtime_operations::{
@@ -101,7 +102,7 @@ pub async fn start_export(
 
     let provider = validate_provider_route(&provider_id, &route_id)?;
     validate_source_extension(provider, &source_path)?;
-    validate_current_route_platform(&route_id)?;
+    validate_route_platform(&route_id, current_host_context())?;
     let export_python = if provider == ProviderId::RfDetr {
         let settings = load_settings(app_handle.clone())?;
         resolve_export_python(&route_id, &python_path, &settings.runtime_dir)?

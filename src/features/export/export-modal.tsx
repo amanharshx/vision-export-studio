@@ -25,7 +25,7 @@ import { DependencyPanel } from "./dependency-panel";
 import { ExportLog } from "./export-log";
 import { OptionsPanel } from "./options-panel";
 import { formatIconMap } from "@/components/format-icons";
-import { incompatibleReason, isCompatible, platformTags } from "@/lib/platform";
+import { architectureMatters, incompatibleReason, isCompatible, UNKNOWN_ARCH } from "@/lib/platform";
 import { categoryBg, categoryIcon } from "./route-card";
 
 interface ExportModalProps {
@@ -34,6 +34,7 @@ interface ExportModalProps {
   provider: ProviderSpec;
   route: RouteSpec;
   platform: AppPlatform;
+  platformResolved: boolean;
   sourcePath: string;
   exportStatus: ExportStatus;
   logLines: string[];
@@ -89,6 +90,17 @@ export function involvesPackageUpdate(depResults: DepCheckResult[] | undefined):
   return (depResults ?? []).some(
     (result) => result.status === "version_too_old" && Boolean(result.install_package),
   );
+}
+
+export function getHostSupportStatus(
+  depResults: DepCheckResult[] | undefined,
+  depCheckLoading: boolean | undefined,
+  depCheckError: string | null | undefined,
+): "supported" | "unsupported" | null {
+  if (depCheckLoading || depCheckError || !depResults) return null;
+  return depResults.some((result) => result.status === "platform_unsupported")
+    ? "unsupported"
+    : "supported";
 }
 
 export function PendingInstallConsent({
@@ -159,6 +171,7 @@ export function ExportModal({
   provider,
   route,
   platform,
+  platformResolved,
   sourcePath,
   exportStatus,
   logLines,
@@ -185,10 +198,16 @@ export function ExportModal({
   const formatIcon = formatIconMap[format.id];
   const Icon = formatIcon ?? categoryIcon(format.category);
   const bg = formatIcon ? "bg-white text-zinc-800" : categoryBg(format.category);
-  const tags = platformTags(route.platformLock);
-  const unsupportedReason = !isCompatible(route.platformLock, platform.os, platform.arch)
-    ? (route.unsupportedNote ?? incompatibleReason(route.platformLock, platform.os, platform.arch))
+  const platformCompatibilityKnown = platformResolved
+    && !(platform.arch === UNKNOWN_ARCH && architectureMatters(route.platformLock, platform.os));
+  const currentPlatformCompatible = platformCompatibilityKnown
+    ? isCompatible(route.platformLock, platform.os, platform.arch)
     : null;
+  const hostSupportStatus = getHostSupportStatus(depResults, depCheckLoading, depCheckError);
+  const platformUnsupportedResult = depResults?.find((result) => result.status === "platform_unsupported");
+  const unsupportedReason = platformUnsupportedResult?.reason ?? (currentPlatformCompatible === false
+    ? (route.unsupportedNote ?? incompatibleReason(route.platformLock, platform.os, platform.arch))
+    : null);
   const isPendingConsent = installPhase === "pending_consent";
   const isInstalling = installPhase === "installing";
   const involvesUpdate = involvesPackageUpdate(depResults);
@@ -247,19 +266,25 @@ export function ExportModal({
                 <Icon className="h-6 w-6" />
               </div>
             )}
-            <div>
-              <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
                 <DialogTitle className="text-lg">
                   Export to {route.title}
                 </DialogTitle>
-                {tags.map((t) => (
-                  <Badge key={t} variant="outline" className="rounded text-xs">
-                    {t}
+                {hostSupportStatus && (
+                  <Badge
+                    variant={hostSupportStatus === "supported" ? "outline" : "destructive"}
+                    className={cn(
+                      "h-6 rounded px-2.5 text-xs font-semibold",
+                      hostSupportStatus === "supported" && "border-emerald-200 bg-emerald-50 text-emerald-700",
+                    )}
+                  >
+                    {hostSupportStatus === "supported" ? "Host supported" : "Unsupported"}
                   </Badge>
-                ))}
+                )}
               </div>
               <p className="font-mono text-xs text-zinc-400">
-                format={route.targetFormat}
+                format={route.targetFormat}{route.backend ? ` · backend=${route.backend}` : ""}
               </p>
             </div>
           </div>

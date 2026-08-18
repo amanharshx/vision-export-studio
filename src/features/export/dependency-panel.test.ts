@@ -29,6 +29,19 @@ describe("buildDependencyItems", () => {
     expect(names).not.toContain("tensorflow");
     expect(names).not.toContain("onnx2tf");
   });
+
+  test("RF-DETR ExecuTorch panel keeps both declared dependency rows", () => {
+    const route = routesForProvider("rfdetr").find((item) => item.id === "rfdetr.pth.executorch");
+    const items = buildDependencyItems(providers.rfdetr, route!, [
+      { item: "rfdetr[executorch]>=1.9.0", status: "ready", reason: "", install_hint: 'pip install "rfdetr[executorch]>=1.9.0"' },
+      { item: "torch>=2.13", status: "version_too_old", reason: "old", install_hint: 'pip install "torch>=2.13"', install_package: "torch>=2.13" },
+    ]);
+
+    expect(items.map((item) => item.name)).toEqual([
+      "rfdetr[executorch]>=1.9.0",
+      "torch>=2.13",
+    ]);
+  });
 });
 
 describe("sortDependencyItems", () => {
