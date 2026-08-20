@@ -30,6 +30,3 @@ tauri-plugin-single-instance = "2.4.3"
 uuid = { version = "1", features = ["v4", "fast-rng"] }
 sha2 = "0.10"
 pep440_rs = "0.7.3"
-
-[dev-dependencies]
-tauri = { version = "2.10.0", features = ["test"] }

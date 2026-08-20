@@ -493,18 +493,33 @@ fn resolve_export_python(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn cancel_export<R: tauri::Runtime>(
-    app_handle: tauri::AppHandle<R>,
+pub async fn cancel_export(
+    app_handle: tauri::AppHandle,
     state: tauri::State<'_, ExportState>,
     session_id: String,
 ) -> Result<bool, String> {
+    if !cancel_export_session(&state, &session_id)? {
+        return Ok(false);
+    }
+    app_handle
+        .emit(
+            "export:cancelled",
+            ExportCancelledPayload {
+                session_id: session_id.clone(),
+            },
+        )
+        .map_err(|e| format!("emit error: {}", e))?;
+    Ok(true)
+}
+
+fn cancel_export_session(state: &ExportState, session_id: &str) -> Result<bool, String> {
     // Acquire lock, remove the child atomically.
     let child_opt = {
         let mut sessions = state
             .sessions
             .lock()
             .map_err(|e| format!("sessions lock poisoned: {}", e))?;
-        sessions.remove(&session_id)
+        sessions.remove(session_id)
     };
     match child_opt {
         None => {
@@ -517,15 +532,7 @@ pub async fn cancel_export<R: tauri::Runtime>(
             // (succeeds: terminated; fails: already exited — goal satisfied either way)
             let _ = child.kill();
             // reap zombie; ignore wait errors (process may already be dead)
-            let _ = wait_for_export_child(&mut child, &state.staging_dirs, &session_id, None, true);
-            app_handle
-                .emit(
-                    "export:cancelled",
-                    ExportCancelledPayload {
-                        session_id: session_id.clone(),
-                    },
-                )
-                .map_err(|e| format!("emit error: {}", e))?;
+            let _ = wait_for_export_child(&mut child, &state.staging_dirs, session_id, None, true);
             Ok(true)
         }
     }
@@ -578,7 +585,6 @@ pub async fn open_export_folder(path: String) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::commands::stack_environments::stack_python;
-    use tauri::Manager;
 
     const TEST_CHILD_MODE: &str = "VISION_EXPORT_STUDIO_TEST_CHILD_MODE";
 
@@ -674,9 +680,7 @@ mod tests {
     fn cancel_export_removes_tracked_session_staging() {
         let path = std::env::temp_dir().join(format!("rfdetr-cancelled-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&path).expect("create staging");
-        let app = tauri::test::mock_app();
-        assert!(app.manage(ExportState::default()));
-        let state = app.state::<ExportState>();
+        let state = ExportState::default();
         state
             .sessions
             .lock()
@@ -688,16 +692,10 @@ mod tests {
             .unwrap()
             .insert("cancelled".to_string(), path.to_string_lossy().into_owned());
 
-        let cancelled = tauri::async_runtime::block_on(cancel_export(
-            app.handle().clone(),
-            state,
-            "cancelled".to_string(),
-        ))
-        .expect("cancel export");
+        let cancelled = cancel_export_session(&state, "cancelled").expect("cancel export");
 
         assert!(cancelled);
         assert!(!path.exists());
-        let state = app.state::<ExportState>();
         assert!(state.sessions.lock().unwrap().is_empty());
         assert!(state.staging_dirs.lock().unwrap().is_empty());
     }
