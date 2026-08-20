@@ -517,6 +517,13 @@ mod tests {
         }
         std::fs::write(staging.join("inference_model.onnx"), b"onnx").expect("write onnx");
         std::fs::write(staging.join("_rfdetr_calib_data.npy"), b"calib").expect("write calib");
+        let saved_model = staging.join("saved_model");
+        std::fs::create_dir_all(saved_model.join("variables")).expect("create variables");
+        std::fs::create_dir_all(saved_model.join("assets")).expect("create assets");
+        std::fs::write(saved_model.join("saved_model.pb"), b"saved model")
+            .expect("write saved model");
+        std::fs::write(saved_model.join("fingerprint.pb"), b"fingerprint")
+            .expect("write fingerprint");
 
         super::finalize_tflite_export(&staging, &output, "fp32").expect("finalize");
 
@@ -524,6 +531,11 @@ mod tests {
         assert!(!staging.exists());
         assert!(!output.join("inference_model.onnx").exists());
         assert!(!output.join("_rfdetr_calib_data.npy").exists());
+        assert!(!output.join("saved_model").exists());
+        assert!(!output.join("saved_model/variables").exists());
+        assert!(!output.join("saved_model/assets").exists());
+        assert!(!output.join("saved_model/saved_model.pb").exists());
+        assert!(!output.join("saved_model/fingerprint.pb").exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
