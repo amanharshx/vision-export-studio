@@ -24,6 +24,7 @@ use crate::commands::stack_environments::stack_python;
 #[derive(Default)]
 pub struct ExportState {
     pub sessions: Arc<Mutex<HashMap<String, Child>>>,
+    pub staging_dirs: Arc<Mutex<HashMap<String, String>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -114,8 +115,10 @@ pub async fn start_export(
         if output_dir.contains('=') {
             return Err("output dir must not contain '='".to_string());
         }
-        std::fs::create_dir_all(&output_dir)
-            .map_err(|e| format!("failed to create output dir: {}", e))?;
+        if route_id != "rfdetr.pth.tflite" {
+            std::fs::create_dir_all(&output_dir)
+                .map_err(|e| format!("failed to create output dir: {}", e))?;
+        }
     }
 
     // IMX500 only supports YOLOv8n and YOLO11n (nano) models.
@@ -142,7 +145,7 @@ pub async fn start_export(
     // ------------------------------------------------------------------
     // Build and spawn child process
     // ------------------------------------------------------------------
-    let request = ExportRequest {
+    let mut request = ExportRequest {
         provider,
         source_path: source_path.clone(),
         route_id: route_id.clone(),
@@ -169,39 +172,65 @@ pub async fn start_export(
         rfdetr_trust_confirmed,
         rfdetr_variant_mode,
         rfdetr_manual_class_symbol,
+        tflite_staging_dir: None,
     };
-    let pre_snapshot: Option<Vec<crate::commands::providers::rfdetr::ArtifactFingerprint>> =
-        if matches!(request.provider, ProviderId::RfDetr) {
-            Some(
-                providers::rfdetr::snapshot_rfdetr_artifacts(
-                    &request.route_id,
-                    &request.output_dir,
-                )
+    if request.route_id == "rfdetr.pth.tflite" {
+        let settings = load_settings(app_handle.clone())?;
+        let staging = providers::rfdetr::create_tflite_staging_dir(
+            Path::new(&settings.runtime_dir),
+            &session_id,
+        )?;
+        request.tflite_staging_dir = Some(staging.to_string_lossy().into_owned());
+    }
+    let pre_snapshot: Option<Vec<crate::commands::providers::rfdetr::ArtifactFingerprint>> = if matches!(
+        request.provider,
+        ProviderId::RfDetr
+    )
+        && request.route_id != "rfdetr.pth.tflite"
+    {
+        Some(
+            providers::rfdetr::snapshot_rfdetr_artifacts(&request.route_id, &request.output_dir)
                 .map_err(|e| format!("failed to scan existing RF-DETR artifacts: {}", e))?,
-            )
-        } else {
-            None
-        };
-    let operation_guard = runtime_operations.acquire(RuntimeOperation::Export)?;
+        )
+    } else {
+        None
+    };
+    let operation_guard = match runtime_operations.acquire(RuntimeOperation::Export) {
+        Ok(guard) => guard,
+        Err(error) => {
+            cleanup_tflite_staging(request.tflite_staging_dir.as_deref());
+            return Err(error);
+        }
+    };
 
-    let mut cmd = providers::build_command(&request, &app_handle)?;
+    let mut cmd = match providers::build_command(&request, &app_handle) {
+        Ok(command) => command,
+        Err(error) => {
+            cleanup_tflite_staging(request.tflite_staging_dir.as_deref());
+            return Err(error);
+        }
+    };
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("failed to spawn export process: {}", e))?;
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            cleanup_tflite_staging(request.tflite_staging_dir.as_deref());
+            return Err(format!("failed to spawn export process: {}", error));
+        }
+    };
 
     // Take handles BEFORE storing the child (moving child into sessions map
     // would make the handles inaccessible).
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "no stdout handle".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "no stderr handle".to_string())?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        cleanup_tflite_staging(request.tflite_staging_dir.as_deref());
+        "no stdout handle".to_string()
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        cleanup_tflite_staging(request.tflite_staging_dir.as_deref());
+        "no stderr handle".to_string()
+    })?;
 
     // Store the child in the session map.
     {
@@ -211,11 +240,19 @@ pub async fn start_export(
             .map_err(|e| format!("sessions lock poisoned: {}", e))?;
         sessions.insert(session_id.clone(), child);
     }
+    if let Some(staging_dir) = request.tflite_staging_dir.as_deref() {
+        let mut staging_dirs = state
+            .staging_dirs
+            .lock()
+            .map_err(|e| format!("staging dirs lock poisoned: {}", e))?;
+        staging_dirs.insert(session_id.clone(), staging_dir.to_string());
+    }
 
     // ------------------------------------------------------------------
     // Streaming threads
     // ------------------------------------------------------------------
     let sessions_arc = Arc::clone(&state.sessions);
+    let staging_dirs_arc = Arc::clone(&state.staging_dirs);
 
     // stdout reader thread
     let ah_stdout = app_handle.clone();
@@ -275,6 +312,7 @@ pub async fn start_export(
             let mut sessions = match sessions_arc.lock() {
                 Ok(s) => s,
                 Err(_) => {
+                    cleanup_tflite_staging(request_wait.tflite_staging_dir.as_deref());
                     emit_after_operation_released(operation_guard.take().unwrap(), || {
                         let _ = ah_wait.emit(
                             "export:failed",
@@ -291,17 +329,65 @@ pub async fn start_export(
         };
 
         match child_opt {
-            None => {}
-            Some(mut child) => match child.wait() {
+            None => cleanup_session_staging(
+                &staging_dirs_arc,
+                &sid_wait,
+                request_wait.tflite_staging_dir.as_deref(),
+            ),
+            Some(mut child) => match wait_for_export_child(
+                &mut child,
+                &staging_dirs_arc,
+                &sid_wait,
+                request_wait.tflite_staging_dir.as_deref(),
+                false,
+            ) {
                 Ok(status) => {
                     if status.success() {
-                        let artifact_status = match &pre_snapshot_wait {
-                            Some(ref before) => providers::rfdetr::confirm_artifacts_with_snapshot(
-                                &request_wait,
-                                before,
-                            ),
-                            None => providers::confirm_artifacts(&request_wait),
+                        let artifact_status = if request_wait.route_id == "rfdetr.pth.tflite" {
+                            match providers::rfdetr::finalize_tflite_export(
+                                Path::new(request_wait.tflite_staging_dir.as_deref().unwrap()),
+                                Path::new(&request_wait.output_dir),
+                                &request_wait.precision,
+                            ) {
+                                Ok(_) => providers::ArtifactStatus {
+                                    artifact_moved: true,
+                                    artifact_warning: None,
+                                },
+                                Err(error) => {
+                                    cleanup_session_staging(
+                                        &staging_dirs_arc,
+                                        &sid_wait,
+                                        request_wait.tflite_staging_dir.as_deref(),
+                                    );
+                                    emit_after_operation_released(
+                                        operation_guard.take().unwrap(),
+                                        || {
+                                            let _ = ah_wait.emit(
+                                                "export:failed",
+                                                ExportFailedPayload {
+                                                    session_id: sid_wait.clone(),
+                                                    error,
+                                                },
+                                            );
+                                        },
+                                    );
+                                    return;
+                                }
+                            }
+                        } else {
+                            match &pre_snapshot_wait {
+                                Some(ref before) => {
+                                    providers::rfdetr::confirm_artifacts_with_snapshot(
+                                        &request_wait,
+                                        before,
+                                    )
+                                }
+                                None => providers::confirm_artifacts(&request_wait),
+                            }
                         };
+                        if request_wait.route_id == "rfdetr.pth.tflite" {
+                            let _ = take_session_staging(&staging_dirs_arc, &sid_wait);
+                        }
                         emit_after_operation_released(operation_guard.take().unwrap(), || {
                             let _ = ah_wait.emit(
                                 "export:finished",
@@ -349,6 +435,42 @@ pub async fn start_export(
     Ok(session_id)
 }
 
+fn cleanup_tflite_staging(staging_dir: Option<&str>) {
+    if let Some(path) = staging_dir {
+        let _ = std::fs::remove_dir_all(path);
+    }
+}
+
+fn take_session_staging(
+    staging_dirs: &Mutex<HashMap<String, String>>,
+    session_id: &str,
+) -> Option<String> {
+    staging_dirs.lock().ok()?.remove(session_id)
+}
+
+fn cleanup_session_staging(
+    staging_dirs: &Mutex<HashMap<String, String>>,
+    session_id: &str,
+    fallback: Option<&str>,
+) {
+    let tracked = take_session_staging(staging_dirs, session_id);
+    cleanup_tflite_staging(tracked.as_deref().or(fallback));
+}
+
+fn wait_for_export_child(
+    child: &mut Child,
+    staging_dirs: &Mutex<HashMap<String, String>>,
+    session_id: &str,
+    fallback: Option<&str>,
+    cleanup_on_success: bool,
+) -> std::io::Result<std::process::ExitStatus> {
+    let result = child.wait();
+    if cleanup_on_success || !matches!(&result, Ok(status) if status.success()) {
+        cleanup_session_staging(staging_dirs, session_id, fallback);
+    }
+    result
+}
+
 fn resolve_export_python(
     route_id: &str,
     base_python: &str,
@@ -376,15 +498,29 @@ pub async fn cancel_export(
     state: tauri::State<'_, ExportState>,
     session_id: String,
 ) -> Result<bool, String> {
+    if !cancel_export_session(&state, &session_id)? {
+        return Ok(false);
+    }
+    app_handle
+        .emit(
+            "export:cancelled",
+            ExportCancelledPayload {
+                session_id: session_id.clone(),
+            },
+        )
+        .map_err(|e| format!("emit error: {}", e))?;
+    Ok(true)
+}
+
+fn cancel_export_session(state: &ExportState, session_id: &str) -> Result<bool, String> {
     // Acquire lock, remove the child atomically.
     let child_opt = {
         let mut sessions = state
             .sessions
             .lock()
             .map_err(|e| format!("sessions lock poisoned: {}", e))?;
-        sessions.remove(&session_id)
+        sessions.remove(session_id)
     };
-
     match child_opt {
         None => {
             // Session not found — either already finished or unknown id.
@@ -396,15 +532,7 @@ pub async fn cancel_export(
             // (succeeds: terminated; fails: already exited — goal satisfied either way)
             let _ = child.kill();
             // reap zombie; ignore wait errors (process may already be dead)
-            let _ = child.wait();
-            app_handle
-                .emit(
-                    "export:cancelled",
-                    ExportCancelledPayload {
-                        session_id: session_id.clone(),
-                    },
-                )
-                .map_err(|e| format!("emit error: {}", e))?;
+            let _ = wait_for_export_child(&mut child, &state.staging_dirs, session_id, None, true);
             Ok(true)
         }
     }
@@ -458,6 +586,31 @@ mod tests {
     use super::*;
     use crate::commands::stack_environments::stack_python;
 
+    const TEST_CHILD_MODE: &str = "VISION_EXPORT_STUDIO_TEST_CHILD_MODE";
+
+    fn spawn_test_child(mode: &str) -> Child {
+        let mut command = std::process::Command::new(
+            std::env::current_exe().expect("resolve current Rust test executable"),
+        );
+        command
+            .arg("--exact")
+            .arg("commands::export::tests::export_lifecycle_test_child")
+            .arg("--nocapture")
+            .env(TEST_CHILD_MODE, mode)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command.spawn().expect("spawn lifecycle test child")
+    }
+
+    #[test]
+    fn export_lifecycle_test_child() {
+        match std::env::var(TEST_CHILD_MODE).as_deref() {
+            Ok("fail") => std::process::exit(23),
+            Ok("sleep") => std::thread::sleep(std::time::Duration::from_secs(30)),
+            _ => {}
+        }
+    }
+
     #[test]
     fn rfdetr_export_uses_existing_stack_python() {
         let runtime = std::env::temp_dir().join(format!("rfdetr-export-{}", Uuid::new_v4()));
@@ -490,5 +643,60 @@ mod tests {
             resolve_export_python("ultralytics.pt.onnx", "/base/python", "/unused").unwrap(),
             "/base/python"
         );
+    }
+
+    #[test]
+    fn tflite_staging_cleanup_removes_session_directory() {
+        let path = std::env::temp_dir().join(format!("rfdetr-cleanup-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&path).expect("create staging");
+        let staging_dirs = Mutex::new(HashMap::from([(
+            "session".to_string(),
+            path.to_string_lossy().into_owned(),
+        )]));
+        cleanup_session_staging(&staging_dirs, "session", None);
+        assert!(!path.exists());
+        assert!(staging_dirs.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn failed_waiter_removes_tracked_session_staging() {
+        let path = std::env::temp_dir().join(format!("rfdetr-failed-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&path).expect("create staging");
+        let staging_dirs = Mutex::new(HashMap::from([(
+            "failed".to_string(),
+            path.to_string_lossy().into_owned(),
+        )]));
+        let mut child = spawn_test_child("fail");
+
+        let status = wait_for_export_child(&mut child, &staging_dirs, "failed", None, false)
+            .expect("wait for failed child");
+
+        assert!(!status.success());
+        assert!(!path.exists());
+        assert!(staging_dirs.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn cancel_export_removes_tracked_session_staging() {
+        let path = std::env::temp_dir().join(format!("rfdetr-cancelled-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&path).expect("create staging");
+        let state = ExportState::default();
+        state
+            .sessions
+            .lock()
+            .unwrap()
+            .insert("cancelled".to_string(), spawn_test_child("sleep"));
+        state
+            .staging_dirs
+            .lock()
+            .unwrap()
+            .insert("cancelled".to_string(), path.to_string_lossy().into_owned());
+
+        let cancelled = cancel_export_session(&state, "cancelled").expect("cancel export");
+
+        assert!(cancelled);
+        assert!(!path.exists());
+        assert!(state.sessions.lock().unwrap().is_empty());
+        assert!(state.staging_dirs.lock().unwrap().is_empty());
     }
 }

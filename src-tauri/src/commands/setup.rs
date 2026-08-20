@@ -2,6 +2,7 @@ use crate::commands::environment::{
     discover_managed_runtime_python, discover_managed_runtime_python_candidate,
     resolve_managed_runtime_base, resolve_python,
 };
+use crate::commands::providers::rfdetr::TFLITE_STAGING_PARENT;
 use crate::commands::runtime_operations::{
     emit_after_operation_released, RuntimeOperation, RuntimeOperationCoordinator,
     RuntimeOperationGuard,
@@ -309,6 +310,24 @@ fn cleanup_next_runtime(runtime_dir: &Path) {
 pub(crate) fn sweep_runtime_rebuild_artifacts(runtime_dir: &Path) {
     for name in [".venv-old", ".venv-next"] {
         let _ = std::fs::remove_dir_all(runtime_dir.join(name));
+    }
+}
+
+pub(crate) fn sweep_rfdetr_tflite_staging(runtime_dir: &Path) {
+    let parent = runtime_dir.join(TFLITE_STAGING_PARENT);
+    let Ok(entries) = std::fs::read_dir(&parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_session = path.is_dir()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| uuid::Uuid::parse_str(name).is_ok());
+        if is_session {
+            let _ = std::fs::remove_dir_all(path);
+        }
     }
 }
 
@@ -889,6 +908,24 @@ mod tests {
         assert!(!Path::new(&runtime_dir).join(".venv-next").exists());
         assert!(Path::new(&runtime_dir).join(".venv-backup").exists());
         fs::remove_dir_all(runtime_dir).unwrap();
+    }
+
+    #[test]
+    fn startup_sweep_removes_only_uuid_named_tflite_staging_directories() {
+        let runtime = std::env::temp_dir().join(format!("rfdetr-sweep-{}", uuid::Uuid::new_v4()));
+        let parent = runtime.join(".rfdetr-tflite-staging");
+        std::fs::create_dir_all(parent.join("550e8400-e29b-41d4-a716-446655440000"))
+            .expect("create abandoned staging");
+        std::fs::create_dir_all(parent.join("keep-me")).expect("create non-session staging");
+        std::fs::create_dir_all(runtime.join("unrelated"))
+            .expect("create unrelated runtime directory");
+
+        super::sweep_rfdetr_tflite_staging(&runtime);
+
+        assert!(!parent.join("550e8400-e29b-41d4-a716-446655440000").exists());
+        assert!(parent.join("keep-me").exists());
+        assert!(runtime.join("unrelated").exists());
+        let _ = std::fs::remove_dir_all(runtime);
     }
 
     #[test]
