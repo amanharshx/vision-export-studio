@@ -334,7 +334,13 @@ pub async fn start_export(
                 &sid_wait,
                 request_wait.tflite_staging_dir.as_deref(),
             ),
-            Some(mut child) => match child.wait() {
+            Some(mut child) => match wait_for_export_child(
+                &mut child,
+                &staging_dirs_arc,
+                &sid_wait,
+                request_wait.tflite_staging_dir.as_deref(),
+                false,
+            ) {
                 Ok(status) => {
                     if status.success() {
                         let artifact_status = if request_wait.route_id == "rfdetr.pth.tflite" {
@@ -399,11 +405,6 @@ pub async fn start_export(
                             );
                         });
                     } else {
-                        cleanup_session_staging(
-                            &staging_dirs_arc,
-                            &sid_wait,
-                            request_wait.tflite_staging_dir.as_deref(),
-                        );
                         let code = status.code().unwrap_or(-1);
                         emit_after_operation_released(operation_guard.take().unwrap(), || {
                             let _ = ah_wait.emit(
@@ -417,11 +418,6 @@ pub async fn start_export(
                     }
                 }
                 Err(e) => {
-                    cleanup_session_staging(
-                        &staging_dirs_arc,
-                        &sid_wait,
-                        request_wait.tflite_staging_dir.as_deref(),
-                    );
                     emit_after_operation_released(operation_guard.take().unwrap(), || {
                         let _ = ah_wait.emit(
                             "export:failed",
@@ -461,6 +457,20 @@ fn cleanup_session_staging(
     cleanup_tflite_staging(tracked.as_deref().or(fallback));
 }
 
+fn wait_for_export_child(
+    child: &mut Child,
+    staging_dirs: &Mutex<HashMap<String, String>>,
+    session_id: &str,
+    fallback: Option<&str>,
+    cleanup_on_success: bool,
+) -> std::io::Result<std::process::ExitStatus> {
+    let result = child.wait();
+    if cleanup_on_success || !matches!(&result, Ok(status) if status.success()) {
+        cleanup_session_staging(staging_dirs, session_id, fallback);
+    }
+    result
+}
+
 fn resolve_export_python(
     route_id: &str,
     base_python: &str,
@@ -483,8 +493,8 @@ fn resolve_export_python(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn cancel_export(
-    app_handle: tauri::AppHandle,
+pub async fn cancel_export<R: tauri::Runtime>(
+    app_handle: tauri::AppHandle<R>,
     state: tauri::State<'_, ExportState>,
     session_id: String,
 ) -> Result<bool, String> {
@@ -507,8 +517,7 @@ pub async fn cancel_export(
             // (succeeds: terminated; fails: already exited — goal satisfied either way)
             let _ = child.kill();
             // reap zombie; ignore wait errors (process may already be dead)
-            let _ = child.wait();
-            cleanup_session_staging(&state.staging_dirs, &session_id, None);
+            let _ = wait_for_export_child(&mut child, &state.staging_dirs, &session_id, None, true);
             app_handle
                 .emit(
                     "export:cancelled",
@@ -569,6 +578,32 @@ pub async fn open_export_folder(path: String) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::commands::stack_environments::stack_python;
+    use tauri::Manager;
+
+    const TEST_CHILD_MODE: &str = "VISION_EXPORT_STUDIO_TEST_CHILD_MODE";
+
+    fn spawn_test_child(mode: &str) -> Child {
+        let mut command = std::process::Command::new(
+            std::env::current_exe().expect("resolve current Rust test executable"),
+        );
+        command
+            .arg("--exact")
+            .arg("commands::export::tests::export_lifecycle_test_child")
+            .arg("--nocapture")
+            .env(TEST_CHILD_MODE, mode)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command.spawn().expect("spawn lifecycle test child")
+    }
+
+    #[test]
+    fn export_lifecycle_test_child() {
+        match std::env::var(TEST_CHILD_MODE).as_deref() {
+            Ok("fail") => std::process::exit(23),
+            Ok("sleep") => std::thread::sleep(std::time::Duration::from_secs(30)),
+            _ => {}
+        }
+    }
 
     #[test]
     fn rfdetr_export_uses_existing_stack_python() {
@@ -605,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    fn tflite_staging_cleanup_removes_failed_or_cancelled_session_directory() {
+    fn tflite_staging_cleanup_removes_session_directory() {
         let path = std::env::temp_dir().join(format!("rfdetr-cleanup-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&path).expect("create staging");
         let staging_dirs = Mutex::new(HashMap::from([(
@@ -618,30 +653,52 @@ mod tests {
     }
 
     #[test]
-    fn failed_export_cleanup_removes_tracked_session_staging() {
+    fn failed_waiter_removes_tracked_session_staging() {
         let path = std::env::temp_dir().join(format!("rfdetr-failed-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&path).expect("create staging");
         let staging_dirs = Mutex::new(HashMap::from([(
             "failed".to_string(),
             path.to_string_lossy().into_owned(),
         )]));
+        let mut child = spawn_test_child("fail");
 
-        cleanup_session_staging(&staging_dirs, "failed", None);
+        let status = wait_for_export_child(&mut child, &staging_dirs, "failed", None, false)
+            .expect("wait for failed child");
 
+        assert!(!status.success());
         assert!(!path.exists());
+        assert!(staging_dirs.lock().unwrap().is_empty());
     }
 
     #[test]
-    fn cancelled_export_cleanup_removes_tracked_session_staging() {
+    fn cancel_export_removes_tracked_session_staging() {
         let path = std::env::temp_dir().join(format!("rfdetr-cancelled-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&path).expect("create staging");
-        let staging_dirs = Mutex::new(HashMap::from([(
+        let app = tauri::test::mock_app();
+        assert!(app.manage(ExportState::default()));
+        let state = app.state::<ExportState>();
+        state
+            .sessions
+            .lock()
+            .unwrap()
+            .insert("cancelled".to_string(), spawn_test_child("sleep"));
+        state
+            .staging_dirs
+            .lock()
+            .unwrap()
+            .insert("cancelled".to_string(), path.to_string_lossy().into_owned());
+
+        let cancelled = tauri::async_runtime::block_on(cancel_export(
+            app.handle().clone(),
+            state,
             "cancelled".to_string(),
-            path.to_string_lossy().into_owned(),
-        )]));
+        ))
+        .expect("cancel export");
 
-        cleanup_session_staging(&staging_dirs, "cancelled", None);
-
+        assert!(cancelled);
         assert!(!path.exists());
+        let state = app.state::<ExportState>();
+        assert!(state.sessions.lock().unwrap().is_empty());
+        assert!(state.staging_dirs.lock().unwrap().is_empty());
     }
 }

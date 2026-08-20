@@ -204,9 +204,6 @@ pub fn finalize_tflite_export(
 }
 
 fn confirm_rfdetr_artifacts(route_id: &str, output_dir: &str) -> Result<bool, String> {
-    if route_id == "rfdetr.pth.tflite" {
-        return Err("TFLite artifacts require staged finalization".to_string());
-    }
     let rule =
         rfdetr_artifact_rule(route_id).ok_or_else(|| format!("unknown route: {}", route_id))?;
     let output = Path::new(output_dir);
@@ -270,9 +267,6 @@ pub fn snapshot_rfdetr_artifacts(
     route_id: &str,
     output_dir: &str,
 ) -> Result<Vec<ArtifactFingerprint>, String> {
-    if route_id == "rfdetr.pth.tflite" {
-        return Err("TFLite artifacts require staged finalization".to_string());
-    }
     let rule =
         rfdetr_artifact_rule(route_id).ok_or_else(|| format!("unknown route: {}", route_id))?;
     let output = Path::new(output_dir);
@@ -332,12 +326,6 @@ pub fn confirm_artifacts_with_snapshot(
     request: &ExportRequest,
     before: &[ArtifactFingerprint],
 ) -> ArtifactStatus {
-    if request.route_id == "rfdetr.pth.tflite" {
-        return ArtifactStatus {
-            artifact_moved: false,
-            artifact_warning: Some("TFLite artifacts require staged finalization".to_string()),
-        };
-    }
     if request.output_dir.is_empty() {
         return ArtifactStatus {
             artifact_moved: false,

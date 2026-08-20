@@ -253,9 +253,6 @@ pub fn rfdetr_artifact_rule(route_id: &str) -> Option<RfDetrArtifactRule> {
         "rfdetr.pth.coreml" => Some(RfDetrArtifactRule::Extension {
             extension: ".mlpackage",
         }),
-        "rfdetr.pth.tflite" => Some(RfDetrArtifactRule::Extension {
-            extension: ".tflite",
-        }),
         "rfdetr.pth.executorch" => Some(RfDetrArtifactRule::Extension { extension: ".pte" }),
         _ => None,
     }
