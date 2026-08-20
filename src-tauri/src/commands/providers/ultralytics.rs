@@ -294,6 +294,7 @@ mod tests {
             rfdetr_trust_confirmed: false,
             rfdetr_variant_mode: None,
             rfdetr_manual_class_symbol: None,
+            tflite_staging_dir: None,
         };
         let cmd = super::build_command(&request).expect("build command");
         let args: Vec<String> = cmd
@@ -402,6 +403,7 @@ mod tests {
             rfdetr_trust_confirmed: false,
             rfdetr_variant_mode: None,
             rfdetr_manual_class_symbol: None,
+            tflite_staging_dir: None,
         };
         let cmd = super::build_command(&request).expect("build command");
         let args: Vec<String> = cmd
@@ -613,6 +615,7 @@ mod tests {
             rfdetr_trust_confirmed: false,
             rfdetr_variant_mode: None,
             rfdetr_manual_class_symbol: None,
+            tflite_staging_dir: None,
         }
     }
 

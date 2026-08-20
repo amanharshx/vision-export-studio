@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 
@@ -10,6 +10,15 @@ use crate::commands::provider_registry::{
 };
 
 use super::{ArtifactStatus, ExportRequest};
+
+pub const TFLITE_STAGING_PARENT: &str = ".rfdetr-tflite-staging";
+
+pub fn create_tflite_staging_dir(runtime_dir: &Path, session_id: &str) -> Result<PathBuf, String> {
+    let staging = runtime_dir.join(TFLITE_STAGING_PARENT).join(session_id);
+    std::fs::create_dir_all(&staging)
+        .map_err(|error| format!("failed to create TFLite staging directory: {}", error))?;
+    Ok(staging)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactFingerprint {
@@ -92,7 +101,12 @@ fn append_helper_args(cmd: &mut Command, request: &ExportRequest, helper: &Path)
     cmd.arg("export");
     cmd.arg("--checkpoint").arg(&request.source_path);
     cmd.arg("--route-id").arg(&request.route_id);
-    cmd.arg("--output-dir").arg(&request.output_dir);
+    let output_dir = request
+        .tflite_staging_dir
+        .as_deref()
+        .filter(|_| request.route_id == "rfdetr.pth.tflite")
+        .unwrap_or(&request.output_dir);
+    cmd.arg("--output-dir").arg(output_dir);
     cmd.arg("--variant-mode").arg(variant_mode);
     if let Some(symbol) = request.rfdetr_manual_class_symbol.as_deref() {
         if !symbol.is_empty() {
@@ -110,6 +124,75 @@ fn append_helper_args(cmd: &mut Command, request: &ExportRequest, helper: &Path)
     ) {
         cmd.arg("--precision").arg(&request.precision);
     }
+}
+
+fn tflite_artifacts(staging_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut artifacts = std::fs::read_dir(staging_dir)
+        .map_err(|error| format!("failed to read TFLite staging directory: {}", error))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("failed to read TFLite staging entry: {}", error))?;
+    artifacts.retain(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "tflite"));
+    artifacts.sort();
+    Ok(artifacts)
+}
+
+pub fn finalize_tflite_export(
+    staging_dir: &Path,
+    output_dir: &Path,
+    precision: &str,
+) -> Result<usize, String> {
+    let required = if precision == "int8" { 3 } else { 2 };
+    let artifacts = tflite_artifacts(staging_dir)?;
+    if artifacts.len() != required {
+        return Err(format!(
+            "TFLite export produced {} final artifacts; expected {}",
+            artifacts.len(),
+            required
+        ));
+    }
+
+    if output_dir.exists() {
+        for artifact in &artifacts {
+            let destination = output_dir.join(
+                artifact
+                    .file_name()
+                    .ok_or_else(|| "TFLite artifact has no file name".to_string())?,
+            );
+            if destination.exists() {
+                return Err(format!(
+                    "TFLite artifact already exists in output directory: {}",
+                    destination.display()
+                ));
+            }
+        }
+    }
+
+    std::fs::create_dir_all(output_dir)
+        .map_err(|error| format!("failed to create output directory: {}", error))?;
+    for artifact in &artifacts {
+        let destination = output_dir.join(
+            artifact
+                .file_name()
+                .ok_or_else(|| "TFLite artifact has no file name".to_string())?,
+        );
+        std::fs::rename(artifact, &destination)
+            .or_else(|rename_error| {
+                std::fs::copy(artifact, &destination)
+                    .map(|_| ())
+                    .and_then(|()| std::fs::remove_file(artifact))
+                    .map_err(|copy_error| {
+                        format!(
+                            "failed to move TFLite artifact (rename: {}; copy: {})",
+                            rename_error, copy_error
+                        )
+                    })
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    std::fs::remove_dir_all(staging_dir)
+        .map_err(|error| format!("failed to remove TFLite staging directory: {}", error))?;
+    Ok(artifacts.len())
 }
 
 fn required_artifact_count(route_id: &str, precision: &str) -> usize {
@@ -353,6 +436,7 @@ mod tests {
             rfdetr_trust_confirmed: true,
             rfdetr_variant_mode: None,
             rfdetr_manual_class_symbol: None,
+            tflite_staging_dir: None,
         }
     }
 
@@ -377,6 +461,110 @@ mod tests {
                 .windows(2)
                 .any(|pair| pair == ["--precision", expected]));
         }
+    }
+
+    #[test]
+    fn tflite_helper_args_use_staging_output_dir() {
+        let mut request = make_request("rfdetr.pth.tflite", "/tmp/user-output");
+        request.tflite_staging_dir = Some("/tmp/runtime/.rfdetr-tflite-staging/session".into());
+        let mut command = Command::new("python");
+
+        super::append_helper_args(
+            &mut command,
+            &request,
+            std::path::Path::new("/tmp/rfdetr_export_helper.py"),
+        );
+
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(args.windows(2).any(|pair| {
+            pair == [
+                "--output-dir",
+                "/tmp/runtime/.rfdetr-tflite-staging/session",
+            ]
+        }));
+        assert!(!args
+            .windows(2)
+            .any(|pair| pair == ["--output-dir", "/tmp/user-output"]));
+    }
+
+    #[test]
+    fn tflite_finalization_moves_exact_fp32_artifacts_only() {
+        let root = std::env::temp_dir().join(format!("rfdetr-finalize-{}", uuid::Uuid::new_v4()));
+        let staging = root.join("staging");
+        let output = root.join("output");
+        std::fs::create_dir_all(&staging).expect("create staging");
+        for name in ["rfdetr-small.tflite", "rfdetr-small_dynamic.tflite"] {
+            std::fs::write(staging.join(name), name.as_bytes()).expect("write artifact");
+        }
+        std::fs::write(staging.join("inference_model.onnx"), b"onnx").expect("write onnx");
+        std::fs::write(staging.join("_rfdetr_calib_data.npy"), b"calib").expect("write calib");
+
+        super::finalize_tflite_export(&staging, &output, "fp32").expect("finalize");
+
+        assert_eq!(std::fs::read_dir(&output).expect("read output").count(), 2);
+        assert!(!staging.exists());
+        assert!(!output.join("inference_model.onnx").exists());
+        assert!(!output.join("_rfdetr_calib_data.npy").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tflite_finalization_rejects_missing_artifact_without_touching_output() {
+        let root = std::env::temp_dir().join(format!("rfdetr-missing-{}", uuid::Uuid::new_v4()));
+        let staging = root.join("staging");
+        let output = root.join("output");
+        std::fs::create_dir_all(&staging).expect("create staging");
+        std::fs::create_dir_all(&output).expect("create output");
+        std::fs::write(output.join("keep.txt"), b"keep").expect("write existing");
+        std::fs::write(staging.join("only.tflite"), b"one").expect("write artifact");
+
+        assert!(super::finalize_tflite_export(&staging, &output, "fp32").is_err());
+        assert_eq!(
+            std::fs::read(output.join("keep.txt")).expect("read existing"),
+            b"keep"
+        );
+        assert!(!output.join("only.tflite").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tflite_finalization_checks_all_collisions_before_moving() {
+        let root = std::env::temp_dir().join(format!("rfdetr-collision-{}", uuid::Uuid::new_v4()));
+        let staging = root.join("staging");
+        let output = root.join("output");
+        std::fs::create_dir_all(&staging).expect("create staging");
+        std::fs::create_dir_all(&output).expect("create output");
+        for (name, contents) in [("one.tflite", b"one"), ("two.tflite", b"two")] {
+            std::fs::write(staging.join(name), contents).expect("write staging artifact");
+        }
+        std::fs::write(output.join("two.tflite"), b"existing").expect("write collision");
+
+        assert!(super::finalize_tflite_export(&staging, &output, "fp32").is_err());
+        assert!(!output.join("one.tflite").exists());
+        assert_eq!(
+            std::fs::read(output.join("two.tflite")).expect("read collision"),
+            b"existing"
+        );
+        assert!(staging.join("one.tflite").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tflite_finalization_moves_three_int8_artifacts() {
+        let root = std::env::temp_dir().join(format!("rfdetr-int8-{}", uuid::Uuid::new_v4()));
+        let staging = root.join("staging");
+        let output = root.join("output");
+        std::fs::create_dir_all(&staging).expect("create staging");
+        for name in ["one.tflite", "two.tflite", "three.tflite"] {
+            std::fs::write(staging.join(name), name.as_bytes()).expect("write artifact");
+        }
+
+        super::finalize_tflite_export(&staging, &output, "int8").expect("finalize");
+        assert_eq!(std::fs::read_dir(&output).expect("read output").count(), 3);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

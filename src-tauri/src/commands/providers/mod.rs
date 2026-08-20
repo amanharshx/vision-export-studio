@@ -29,6 +29,7 @@ pub struct ExportRequest {
     pub rfdetr_trust_confirmed: bool,
     pub rfdetr_variant_mode: Option<String>,
     pub rfdetr_manual_class_symbol: Option<String>,
+    pub tflite_staging_dir: Option<String>,
 }
 
 pub struct ArtifactStatus {
