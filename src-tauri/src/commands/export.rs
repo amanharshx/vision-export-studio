@@ -328,12 +328,12 @@ pub async fn start_export(
             sessions.remove(&sid_wait)
         };
 
-        if let Ok(mut staging_dirs) = staging_dirs_arc.lock() {
-            staging_dirs.remove(&sid_wait);
-        }
-
         match child_opt {
-            None => cleanup_tflite_staging(request_wait.tflite_staging_dir.as_deref()),
+            None => cleanup_session_staging(
+                &staging_dirs_arc,
+                &sid_wait,
+                request_wait.tflite_staging_dir.as_deref(),
+            ),
             Some(mut child) => match child.wait() {
                 Ok(status) => {
                     if status.success() {
@@ -348,7 +348,9 @@ pub async fn start_export(
                                     artifact_warning: None,
                                 },
                                 Err(error) => {
-                                    cleanup_tflite_staging(
+                                    cleanup_session_staging(
+                                        &staging_dirs_arc,
+                                        &sid_wait,
                                         request_wait.tflite_staging_dir.as_deref(),
                                     );
                                     emit_after_operation_released(
@@ -377,6 +379,9 @@ pub async fn start_export(
                                 None => providers::confirm_artifacts(&request_wait),
                             }
                         };
+                        if request_wait.route_id == "rfdetr.pth.tflite" {
+                            let _ = take_session_staging(&staging_dirs_arc, &sid_wait);
+                        }
                         emit_after_operation_released(operation_guard.take().unwrap(), || {
                             let _ = ah_wait.emit(
                                 "export:finished",
@@ -394,7 +399,11 @@ pub async fn start_export(
                             );
                         });
                     } else {
-                        cleanup_tflite_staging(request_wait.tflite_staging_dir.as_deref());
+                        cleanup_session_staging(
+                            &staging_dirs_arc,
+                            &sid_wait,
+                            request_wait.tflite_staging_dir.as_deref(),
+                        );
                         let code = status.code().unwrap_or(-1);
                         emit_after_operation_released(operation_guard.take().unwrap(), || {
                             let _ = ah_wait.emit(
@@ -408,7 +417,11 @@ pub async fn start_export(
                     }
                 }
                 Err(e) => {
-                    cleanup_tflite_staging(request_wait.tflite_staging_dir.as_deref());
+                    cleanup_session_staging(
+                        &staging_dirs_arc,
+                        &sid_wait,
+                        request_wait.tflite_staging_dir.as_deref(),
+                    );
                     emit_after_operation_released(operation_guard.take().unwrap(), || {
                         let _ = ah_wait.emit(
                             "export:failed",
@@ -430,6 +443,22 @@ fn cleanup_tflite_staging(staging_dir: Option<&str>) {
     if let Some(path) = staging_dir {
         let _ = std::fs::remove_dir_all(path);
     }
+}
+
+fn take_session_staging(
+    staging_dirs: &Mutex<HashMap<String, String>>,
+    session_id: &str,
+) -> Option<String> {
+    staging_dirs.lock().ok()?.remove(session_id)
+}
+
+fn cleanup_session_staging(
+    staging_dirs: &Mutex<HashMap<String, String>>,
+    session_id: &str,
+    fallback: Option<&str>,
+) {
+    let tracked = take_session_staging(staging_dirs, session_id);
+    cleanup_tflite_staging(tracked.as_deref().or(fallback));
 }
 
 fn resolve_export_python(
@@ -467,12 +496,6 @@ pub async fn cancel_export(
             .map_err(|e| format!("sessions lock poisoned: {}", e))?;
         sessions.remove(&session_id)
     };
-    let staging_dir = state
-        .staging_dirs
-        .lock()
-        .map_err(|e| format!("staging dirs lock poisoned: {}", e))?
-        .remove(&session_id);
-
     match child_opt {
         None => {
             // Session not found — either already finished or unknown id.
@@ -485,7 +508,7 @@ pub async fn cancel_export(
             let _ = child.kill();
             // reap zombie; ignore wait errors (process may already be dead)
             let _ = child.wait();
-            cleanup_tflite_staging(staging_dir.as_deref());
+            cleanup_session_staging(&state.staging_dirs, &session_id, None);
             app_handle
                 .emit(
                     "export:cancelled",
@@ -585,7 +608,40 @@ mod tests {
     fn tflite_staging_cleanup_removes_failed_or_cancelled_session_directory() {
         let path = std::env::temp_dir().join(format!("rfdetr-cleanup-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&path).expect("create staging");
-        cleanup_tflite_staging(path.to_str());
+        let staging_dirs = Mutex::new(HashMap::from([(
+            "session".to_string(),
+            path.to_string_lossy().into_owned(),
+        )]));
+        cleanup_session_staging(&staging_dirs, "session", None);
+        assert!(!path.exists());
+        assert!(staging_dirs.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn failed_export_cleanup_removes_tracked_session_staging() {
+        let path = std::env::temp_dir().join(format!("rfdetr-failed-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&path).expect("create staging");
+        let staging_dirs = Mutex::new(HashMap::from([(
+            "failed".to_string(),
+            path.to_string_lossy().into_owned(),
+        )]));
+
+        cleanup_session_staging(&staging_dirs, "failed", None);
+
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn cancelled_export_cleanup_removes_tracked_session_staging() {
+        let path = std::env::temp_dir().join(format!("rfdetr-cancelled-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&path).expect("create staging");
+        let staging_dirs = Mutex::new(HashMap::from([(
+            "cancelled".to_string(),
+            path.to_string_lossy().into_owned(),
+        )]));
+
+        cleanup_session_staging(&staging_dirs, "cancelled", None);
+
         assert!(!path.exists());
     }
 }
