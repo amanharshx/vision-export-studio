@@ -17,7 +17,7 @@ import type {
   RfDetrVariantMode,
   RouteSpec,
 } from "@/lib/types";
-import type { AppPlatform } from "@/lib/platform";
+import type { HostSupportResult } from "@/lib/tauri/app";
 import { cn } from "@/lib/utils";
 import { AlertTriangle, ChevronDown, Download, FolderOpen, Loader2, Play, Square } from "lucide-react";
 import { buildCommandPreview } from "./command-preview";
@@ -25,7 +25,6 @@ import { DependencyPanel } from "./dependency-panel";
 import { ExportLog } from "./export-log";
 import { OptionsPanel } from "./options-panel";
 import { formatIconMap } from "@/components/format-icons";
-import { architectureMatters, incompatibleReason, isCompatible, UNKNOWN_ARCH } from "@/lib/platform";
 import { categoryBg, categoryIcon } from "./route-card";
 
 interface ExportModalProps {
@@ -33,8 +32,7 @@ interface ExportModalProps {
   onOpenChange: (open: boolean) => void;
   provider: ProviderSpec;
   route: RouteSpec;
-  platform: AppPlatform;
-  platformResolved: boolean;
+  hostSupportResult?: HostSupportResult | null;
   sourcePath: string;
   exportStatus: ExportStatus;
   logLines: string[];
@@ -95,15 +93,23 @@ export function involvesPackageUpdate(depResults: DepCheckResult[] | undefined):
   );
 }
 
-export function getHostSupportStatus(
-  depResults: DepCheckResult[] | undefined,
-  depCheckLoading: boolean | undefined,
-  depCheckError: string | null | undefined,
-): "supported" | "unsupported" | null {
-  if (depCheckLoading || depCheckError || !depResults) return null;
-  return depResults.some((result) => result.status === "platform_unsupported")
-    ? "unsupported"
-    : "supported";
+export function HostSupportBadge({ result }: { result: HostSupportResult | null | undefined }) {
+  if (!result || result.status !== "unsupported") return null;
+  return (
+    <Badge variant="destructive" className="h-6 rounded px-2.5 text-xs font-semibold">
+      Unsupported
+    </Badge>
+  );
+}
+
+export function HostSupportReason({ result }: { result: HostSupportResult | null | undefined }) {
+  if (!result || !result.reason) return null;
+  return (
+    <div className="mt-3 flex gap-2.5 rounded-lg border border-red-200 bg-red-50 p-3">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+      <p className="text-sm text-red-800">{result.reason}</p>
+    </div>
+  );
 }
 
 export function PendingInstallConsent({
@@ -173,8 +179,7 @@ export function ExportModal({
   onOpenChange,
   provider,
   route,
-  platform,
-  platformResolved,
+  hostSupportResult,
   sourcePath,
   exportStatus,
   logLines,
@@ -204,16 +209,6 @@ export function ExportModal({
   const formatIcon = formatIconMap[format.id];
   const Icon = formatIcon ?? categoryIcon(format.category);
   const bg = formatIcon ? "bg-white text-zinc-800" : categoryBg(format.category);
-  const platformCompatibilityKnown = platformResolved
-    && !(platform.arch === UNKNOWN_ARCH && architectureMatters(route.platformLock, platform.os));
-  const currentPlatformCompatible = platformCompatibilityKnown
-    ? isCompatible(route.platformLock, platform.os, platform.arch)
-    : null;
-  const hostSupportStatus = getHostSupportStatus(depResults, depCheckLoading, depCheckError);
-  const platformUnsupportedResult = depResults?.find((result) => result.status === "platform_unsupported");
-  const unsupportedReason = platformUnsupportedResult?.reason ?? (currentPlatformCompatible === false
-    ? (route.unsupportedNote ?? incompatibleReason(route.platformLock, platform.os, platform.arch))
-    : null);
   const isPendingConsent = installPhase === "pending_consent";
   const isInstalling = installPhase === "installing";
   const involvesUpdate = involvesPackageUpdate(depResults);
@@ -277,29 +272,14 @@ export function ExportModal({
                 <DialogTitle className="text-lg">
                   Export to {route.title}
                 </DialogTitle>
-                {hostSupportStatus && (
-                  <Badge
-                    variant={hostSupportStatus === "supported" ? "outline" : "destructive"}
-                    className={cn(
-                      "h-6 rounded px-2.5 text-xs font-semibold",
-                      hostSupportStatus === "supported" && "border-emerald-200 bg-emerald-50 text-emerald-700",
-                    )}
-                  >
-                    {hostSupportStatus === "supported" ? "Host supported" : "Unsupported"}
-                  </Badge>
-                )}
+                <HostSupportBadge result={hostSupportResult} />
               </div>
               <p className="font-mono text-xs text-zinc-400">
                 format={route.targetFormat}{route.backend ? ` · backend=${route.backend}` : ""}
               </p>
             </div>
           </div>
-          {unsupportedReason && (
-            <div className="mt-3 flex gap-2.5 rounded-lg border border-red-200 bg-red-50 p-3">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
-              <p className="text-sm text-red-800">{unsupportedReason}</p>
-            </div>
-          )}
+          <HostSupportReason result={hostSupportResult} />
           <p className="mt-2 text-sm leading-6 text-zinc-500">{route.notes}</p>
           {rfdetrSummary && (
             <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">

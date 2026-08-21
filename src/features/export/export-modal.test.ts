@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { getHostSupportStatus, PendingInstallConsent, PrimaryExportActionLabel } from "./export-modal";
+import { HostSupportBadge, HostSupportReason, PendingInstallConsent, PrimaryExportActionLabel } from "./export-modal";
 import type { DepCheckResult } from "@/lib/types";
 
 const outdatedUltralytics: DepCheckResult = {
@@ -28,29 +28,24 @@ const missingOnnx: DepCheckResult = {
   install_package: "onnx",
 };
 
-const platformUnsupported: DepCheckResult = {
-  item: "platform",
-  status: "platform_unsupported",
-  reason: "This format is not supported on macOS 13. RF-DETR ExecuTorch requires macOS 14 or newer.",
-  install_hint: "This format is not supported on macOS 13. RF-DETR ExecuTorch requires macOS 14 or newer.",
-};
+describe("HostSupportBadge and HostSupportReason", () => {
+  test("renders only confirmed unsupported badge and exact reason", () => {
+    const result = {
+      route_id: "rfdetr.pth.executorch",
+      status: "unsupported" as const,
+      reason: "This format is not supported on macOS 13.",
+    };
+    const html = renderToStaticMarkup(React.createElement(HostSupportBadge, { result }));
+    const reasonHtml = renderToStaticMarkup(React.createElement(HostSupportReason, { result }));
 
-describe("getHostSupportStatus", () => {
-  test("hides status while dependency check is loading", () => {
-    expect(getHostSupportStatus(undefined, true, null)).toBeNull();
+    expect(html).toContain("Unsupported");
+    expect(reasonHtml).toContain("This format is not supported on macOS 13.");
+    expect(html + reasonHtml).not.toContain("Host supported");
   });
 
-  test("hides status when dependency check errors or is absent", () => {
-    expect(getHostSupportStatus(undefined, false, "probe failed")).toBeNull();
-    expect(getHostSupportStatus(undefined, false, null)).toBeNull();
-  });
-
-  test("shows Unsupported for Rust platform rejection", () => {
-    expect(getHostSupportStatus([platformUnsupported], false, null)).toBe("unsupported");
-  });
-
-  test("shows Host supported after completed preflight without platform rejection", () => {
-    expect(getHostSupportStatus([missingOnnx], false, null)).toBe("supported");
+  test("renders nothing while host result is pending", () => {
+    expect(renderToStaticMarkup(React.createElement(HostSupportBadge, { result: null }))).toBe("");
+    expect(renderToStaticMarkup(React.createElement(HostSupportReason, { result: null }))).toBe("");
   });
 });
 

@@ -231,6 +231,47 @@ pub fn validate_route_platform(route_id: &str, host: HostContext<'_>) -> Result<
     ))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RoutePlatformResult {
+    pub route_id: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+pub fn validate_route_platform_batch(
+    route_ids: &[String],
+    host: HostContext<'_>,
+) -> Vec<RoutePlatformResult> {
+    route_ids
+        .iter()
+        .map(|route_id| {
+            if !ULTRALYTICS_ROUTES.contains(&route_id.as_str())
+                && !RFDETR_ROUTES.contains(&route_id.as_str())
+            {
+                return RoutePlatformResult {
+                    route_id: route_id.clone(),
+                    status: "error".to_string(),
+                    reason: Some(format!("unknown route_id: {}", route_id)),
+                };
+            }
+
+            match validate_route_platform(route_id, host) {
+                Ok(()) => RoutePlatformResult {
+                    route_id: route_id.clone(),
+                    status: "supported".to_string(),
+                    reason: None,
+                },
+                Err(reason) => RoutePlatformResult {
+                    route_id: route_id.clone(),
+                    status: "unsupported".to_string(),
+                    reason: Some(reason),
+                },
+            }
+        })
+        .collect()
+}
+
 pub fn validate_rfdetr_manual_class(class_symbol: &str) -> Result<(), String> {
     const ALLOWED: &[&str] = &[
         "RFDETRNano",
@@ -267,6 +308,73 @@ mod tests {
             arch,
             macos_major: None,
         }
+    }
+
+    #[test]
+    fn route_platform_batch_returns_each_requested_route_once() {
+        let route_ids = vec![
+            "rfdetr.pth.onnx".to_string(),
+            "rfdetr.pth.coreml".to_string(),
+            "rfdetr.pth.executorch".to_string(),
+        ];
+
+        let results = validate_route_platform_batch(&route_ids, host("linux", "x86_64"));
+
+        assert_eq!(results.len(), route_ids.len());
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| &result.route_id)
+                .collect::<Vec<_>>(),
+            route_ids.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(results[0].status, "supported");
+        assert_eq!(results[1].status, "unsupported");
+        assert_eq!(results[2].status, "supported");
+    }
+
+    #[test]
+    fn route_platform_batch_preserves_unknown_route_error_and_other_results() {
+        let route_ids = vec!["unknown.route".to_string(), "rfdetr.pth.onnx".to_string()];
+
+        let results = validate_route_platform_batch(&route_ids, host("linux", "x86_64"));
+
+        assert_eq!(results[0].status, "error");
+        assert_eq!(
+            results[0].reason.as_deref(),
+            Some("unknown route_id: unknown.route")
+        );
+        assert_eq!(results[1].status, "supported");
+    }
+
+    #[test]
+    fn route_platform_batch_enforces_rfdetr_executorch_macos_version() {
+        let route_ids = vec!["rfdetr.pth.executorch".to_string()];
+
+        let macos_13 = validate_route_platform_batch(
+            &route_ids,
+            HostContext {
+                os: "macos",
+                arch: "aarch64",
+                macos_major: Some(13),
+            },
+        );
+        let macos_14 = validate_route_platform_batch(
+            &route_ids,
+            HostContext {
+                os: "macos",
+                arch: "aarch64",
+                macos_major: Some(14),
+            },
+        );
+
+        assert_eq!(macos_13[0].status, "unsupported");
+        assert!(macos_13[0]
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("macOS 14 or newer"));
+        assert_eq!(macos_14[0].status, "supported");
     }
 
     #[test]
