@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use tauri::Emitter;
 use uuid::Uuid;
 
+use crate::commands::artifacts::publish_artifacts;
 use crate::commands::provider_registry::{
     current_host_context, validate_provider_route, validate_route_platform,
     validate_source_extension, ProviderId,
@@ -44,6 +45,9 @@ struct ExportFinishedPayload {
     artifact_moved: bool,
     artifact_warning: Option<String>,
     output_dir: Option<String>,
+    published_paths: Vec<String>,
+    run: u32,
+    artifact_count: usize,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -172,33 +176,31 @@ pub async fn start_export(
         rfdetr_trust_confirmed,
         rfdetr_variant_mode,
         rfdetr_manual_class_symbol,
-        tflite_staging_dir: None,
+        staging_dir: None,
     };
-    if request.route_id == "rfdetr.pth.tflite" {
-        let settings = load_settings(app_handle.clone())?;
-        let staging = providers::rfdetr::create_tflite_staging_dir(
-            Path::new(&settings.runtime_dir),
-            &session_id,
-        )?;
-        request.tflite_staging_dir = Some(staging.to_string_lossy().into_owned());
-    }
-    let pre_snapshot: Option<Vec<crate::commands::providers::rfdetr::ArtifactFingerprint>> = if matches!(
-        request.provider,
-        ProviderId::RfDetr
-    )
-        && request.route_id != "rfdetr.pth.tflite"
-    {
-        Some(
-            providers::rfdetr::snapshot_rfdetr_artifacts(&request.route_id, &request.output_dir)
-                .map_err(|e| format!("failed to scan existing RF-DETR artifacts: {}", e))?,
-        )
+    let pre_snapshot = if request.provider == ProviderId::Ultralytics {
+        if !request.output_dir.is_empty() {
+            providers::ultralytics::validate_output_destination(
+                Path::new(&request.source_path),
+                Path::new(&request.output_dir),
+            )?;
+        }
+        Some(providers::ultralytics::snapshot_outputs(&request)?)
     } else {
         None
     };
+    if request.provider == ProviderId::RfDetr {
+        let settings = load_settings(app_handle.clone())?;
+        let staging = providers::rfdetr::create_rfdetr_staging_dir(
+            Path::new(&settings.runtime_dir),
+            &session_id,
+        )?;
+        request.staging_dir = Some(staging.to_string_lossy().into_owned());
+    }
     let operation_guard = match runtime_operations.acquire(RuntimeOperation::Export) {
         Ok(guard) => guard,
         Err(error) => {
-            cleanup_tflite_staging(request.tflite_staging_dir.as_deref());
+            cleanup_staging(request.staging_dir.as_deref());
             return Err(error);
         }
     };
@@ -206,7 +208,7 @@ pub async fn start_export(
     let mut cmd = match providers::build_command(&request, &app_handle) {
         Ok(command) => command,
         Err(error) => {
-            cleanup_tflite_staging(request.tflite_staging_dir.as_deref());
+            cleanup_staging(request.staging_dir.as_deref());
             return Err(error);
         }
     };
@@ -216,7 +218,7 @@ pub async fn start_export(
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(error) => {
-            cleanup_tflite_staging(request.tflite_staging_dir.as_deref());
+            cleanup_staging(request.staging_dir.as_deref());
             return Err(format!("failed to spawn export process: {}", error));
         }
     };
@@ -224,11 +226,11 @@ pub async fn start_export(
     // Take handles BEFORE storing the child (moving child into sessions map
     // would make the handles inaccessible).
     let stdout = child.stdout.take().ok_or_else(|| {
-        cleanup_tflite_staging(request.tflite_staging_dir.as_deref());
+        cleanup_staging(request.staging_dir.as_deref());
         "no stdout handle".to_string()
     })?;
     let stderr = child.stderr.take().ok_or_else(|| {
-        cleanup_tflite_staging(request.tflite_staging_dir.as_deref());
+        cleanup_staging(request.staging_dir.as_deref());
         "no stderr handle".to_string()
     })?;
 
@@ -240,7 +242,7 @@ pub async fn start_export(
             .map_err(|e| format!("sessions lock poisoned: {}", e))?;
         sessions.insert(session_id.clone(), child);
     }
-    if let Some(staging_dir) = request.tflite_staging_dir.as_deref() {
+    if let Some(staging_dir) = request.staging_dir.as_deref() {
         let mut staging_dirs = state
             .staging_dirs
             .lock()
@@ -253,15 +255,21 @@ pub async fn start_export(
     // ------------------------------------------------------------------
     let sessions_arc = Arc::clone(&state.sessions);
     let staging_dirs_arc = Arc::clone(&state.staging_dirs);
+    let export_output = Arc::new(Mutex::new(String::new()));
 
     // stdout reader thread
     let ah_stdout = app_handle.clone();
     let sid_stdout = session_id.clone();
+    let output_stdout = Arc::clone(&export_output);
     let stdout_handle = std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
             match line {
                 Ok(l) => {
+                    if let Ok(mut output) = output_stdout.lock() {
+                        output.push_str(&l);
+                        output.push('\n');
+                    }
                     let _ = ah_stdout.emit(
                         "export:stdout",
                         ExportLinePayload {
@@ -278,11 +286,16 @@ pub async fn start_export(
     // stderr reader thread
     let ah_stderr = app_handle.clone();
     let sid_stderr = session_id.clone();
+    let output_stderr = Arc::clone(&export_output);
     let stderr_handle = std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
         for line in reader.lines() {
             match line {
                 Ok(l) => {
+                    if let Ok(mut output) = output_stderr.lock() {
+                        output.push_str(&l);
+                        output.push('\n');
+                    }
                     let _ = ah_stderr.emit(
                         "export:stderr",
                         ExportLinePayload {
@@ -301,6 +314,7 @@ pub async fn start_export(
     let sid_wait = session_id.clone();
     let request_wait = request.clone();
     let pre_snapshot_wait = pre_snapshot.clone();
+    let export_output_wait = Arc::clone(&export_output);
     std::thread::spawn(move || {
         let mut operation_guard = Some(operation_guard);
         // Wait for both stream readers to finish.
@@ -312,7 +326,7 @@ pub async fn start_export(
             let mut sessions = match sessions_arc.lock() {
                 Ok(s) => s,
                 Err(_) => {
-                    cleanup_tflite_staging(request_wait.tflite_staging_dir.as_deref());
+                    cleanup_staging(request_wait.staging_dir.as_deref());
                     emit_after_operation_released(operation_guard.take().unwrap(), || {
                         let _ = ah_wait.emit(
                             "export:failed",
@@ -332,32 +346,53 @@ pub async fn start_export(
             None => cleanup_session_staging(
                 &staging_dirs_arc,
                 &sid_wait,
-                request_wait.tflite_staging_dir.as_deref(),
+                request_wait.staging_dir.as_deref(),
             ),
             Some(mut child) => match wait_for_export_child(
                 &mut child,
                 &staging_dirs_arc,
                 &sid_wait,
-                request_wait.tflite_staging_dir.as_deref(),
+                request_wait.staging_dir.as_deref(),
                 false,
             ) {
                 Ok(status) => {
                     if status.success() {
-                        let artifact_status = if request_wait.route_id == "rfdetr.pth.tflite" {
-                            match providers::rfdetr::finalize_tflite_export(
-                                Path::new(request_wait.tflite_staging_dir.as_deref().unwrap()),
+                        let published = if request_wait.provider == ProviderId::RfDetr {
+                            let descriptors =
+                                match providers::rfdetr::discover_staged_artifacts(&request_wait) {
+                                    Ok(descriptors) => descriptors,
+                                    Err(error) => {
+                                        cleanup_session_staging(
+                                            &staging_dirs_arc,
+                                            &sid_wait,
+                                            request_wait.staging_dir.as_deref(),
+                                        );
+                                        emit_after_operation_released(
+                                            operation_guard.take().unwrap(),
+                                            || {
+                                                let _ = ah_wait.emit(
+                                                    "export:failed",
+                                                    ExportFailedPayload {
+                                                        session_id: sid_wait.clone(),
+                                                        error,
+                                                    },
+                                                );
+                                            },
+                                        );
+                                        return;
+                                    }
+                                };
+                            match publish_artifacts(
+                                Path::new(&request_wait.source_path),
                                 Path::new(&request_wait.output_dir),
-                                &request_wait.precision,
+                                &descriptors,
                             ) {
-                                Ok(_) => providers::ArtifactStatus {
-                                    artifact_moved: true,
-                                    artifact_warning: None,
-                                },
+                                Ok(publication) => Some(publication),
                                 Err(error) => {
                                     cleanup_session_staging(
                                         &staging_dirs_arc,
                                         &sid_wait,
-                                        request_wait.tflite_staging_dir.as_deref(),
+                                        request_wait.staging_dir.as_deref(),
                                     );
                                     emit_after_operation_released(
                                         operation_guard.take().unwrap(),
@@ -375,18 +410,63 @@ pub async fn start_export(
                                 }
                             }
                         } else {
-                            match &pre_snapshot_wait {
-                                Some(ref before) => {
-                                    providers::rfdetr::confirm_artifacts_with_snapshot(
-                                        &request_wait,
-                                        before,
-                                    )
+                            let before = pre_snapshot_wait.as_deref().unwrap_or(&[]);
+                            let evidence = export_output_wait
+                                .lock()
+                                .map(|output| output.clone())
+                                .unwrap_or_default();
+                            let descriptors =
+                                match providers::ultralytics::discover_artifacts_with_evidence(
+                                    &request_wait,
+                                    before,
+                                    Some(&evidence),
+                                ) {
+                                    Ok(descriptors) => descriptors,
+                                    Err(error) => {
+                                        emit_after_operation_released(
+                                            operation_guard.take().unwrap(),
+                                            || {
+                                                let _ = ah_wait.emit(
+                                                    "export:failed",
+                                                    ExportFailedPayload {
+                                                        session_id: sid_wait.clone(),
+                                                        error,
+                                                    },
+                                                );
+                                            },
+                                        );
+                                        return;
+                                    }
+                                };
+                            match publish_artifacts(
+                                Path::new(&request_wait.source_path),
+                                Path::new(&request_wait.output_dir),
+                                &descriptors,
+                            ) {
+                                Ok(publication) => Some(publication),
+                                Err(error) => {
+                                    emit_after_operation_released(
+                                        operation_guard.take().unwrap(),
+                                        || {
+                                            let _ = ah_wait.emit(
+                                                "export:failed",
+                                                ExportFailedPayload {
+                                                    session_id: sid_wait.clone(),
+                                                    error,
+                                                },
+                                            );
+                                        },
+                                    );
+                                    return;
                                 }
-                                None => providers::confirm_artifacts(&request_wait),
                             }
                         };
-                        if request_wait.route_id == "rfdetr.pth.tflite" {
-                            let _ = take_session_staging(&staging_dirs_arc, &sid_wait);
+                        if request_wait.provider == ProviderId::RfDetr {
+                            cleanup_session_staging(
+                                &staging_dirs_arc,
+                                &sid_wait,
+                                request_wait.staging_dir.as_deref(),
+                            );
                         }
                         emit_after_operation_released(operation_guard.take().unwrap(), || {
                             let _ = ah_wait.emit(
@@ -394,13 +474,31 @@ pub async fn start_export(
                                 ExportFinishedPayload {
                                     session_id: sid_wait,
                                     exit_code: 0,
-                                    artifact_moved: artifact_status.artifact_moved,
-                                    artifact_warning: artifact_status.artifact_warning,
+                                    artifact_moved: published.is_some(),
+                                    artifact_warning: None,
                                     output_dir: if request_wait.output_dir.is_empty() {
                                         None
                                     } else {
                                         Some(request_wait.output_dir.clone())
                                     },
+                                    published_paths: published
+                                        .as_ref()
+                                        .map(|publication| {
+                                            publication
+                                                .paths
+                                                .iter()
+                                                .map(|path| path.to_string_lossy().into_owned())
+                                                .collect()
+                                        })
+                                        .unwrap_or_default(),
+                                    run: published
+                                        .as_ref()
+                                        .map(|publication| publication.run)
+                                        .unwrap_or(0),
+                                    artifact_count: published
+                                        .as_ref()
+                                        .map(|publication| publication.paths.len())
+                                        .unwrap_or(0),
                                 },
                             );
                         });
@@ -435,7 +533,7 @@ pub async fn start_export(
     Ok(session_id)
 }
 
-fn cleanup_tflite_staging(staging_dir: Option<&str>) {
+fn cleanup_staging(staging_dir: Option<&str>) {
     if let Some(path) = staging_dir {
         let _ = std::fs::remove_dir_all(path);
     }
@@ -454,7 +552,7 @@ fn cleanup_session_staging(
     fallback: Option<&str>,
 ) {
     let tracked = take_session_staging(staging_dirs, session_id);
-    cleanup_tflite_staging(tracked.as_deref().or(fallback));
+    cleanup_staging(tracked.as_deref().or(fallback));
 }
 
 fn wait_for_export_child(

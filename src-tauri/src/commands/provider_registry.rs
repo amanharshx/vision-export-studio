@@ -231,33 +231,6 @@ pub fn validate_route_platform(route_id: &str, host: HostContext<'_>) -> Result<
     ))
 }
 
-pub enum RfDetrArtifactRule {
-    Named {
-        extension: &'static str,
-        prefix: &'static str,
-        exact: &'static str,
-    },
-    Extension {
-        extension: &'static str,
-    },
-}
-
-pub fn rfdetr_artifact_rule(route_id: &str) -> Option<RfDetrArtifactRule> {
-    match route_id {
-        "rfdetr.pth.onnx" => Some(RfDetrArtifactRule::Named {
-            extension: ".onnx",
-            prefix: "rfdetr-",
-            exact: "inference_model",
-        }),
-        "rfdetr.pth.engine" => Some(RfDetrArtifactRule::Extension { extension: ".trt" }),
-        "rfdetr.pth.coreml" => Some(RfDetrArtifactRule::Extension {
-            extension: ".mlpackage",
-        }),
-        "rfdetr.pth.executorch" => Some(RfDetrArtifactRule::Extension { extension: ".pte" }),
-        _ => None,
-    }
-}
-
 pub fn validate_rfdetr_manual_class(class_symbol: &str) -> Result<(), String> {
     const ALLOWED: &[&str] = &[
         "RFDETRNano",
@@ -358,31 +331,9 @@ mod tests {
     }
 
     #[test]
-    fn rfdetr_onnx_expects_named_rule() {
-        assert!(matches!(
-            rfdetr_artifact_rule("rfdetr.pth.onnx"),
-            Some(RfDetrArtifactRule::Named { .. })
-        ));
-    }
-
-    #[test]
-    fn rfdetr_engine_expects_extension_rule() {
-        assert!(matches!(
-            rfdetr_artifact_rule("rfdetr.pth.engine"),
-            Some(RfDetrArtifactRule::Extension { .. })
-        ));
-    }
-
-    #[test]
     fn rfdetr_coreml_is_macos_only_with_mlpackage_artifacts() {
         assert!(validate_route_platform("rfdetr.pth.coreml", host("macos", "aarch64")).is_ok());
         assert!(validate_route_platform("rfdetr.pth.coreml", host("linux", "x86_64")).is_err());
-        assert!(matches!(
-            rfdetr_artifact_rule("rfdetr.pth.coreml"),
-            Some(RfDetrArtifactRule::Extension {
-                extension: ".mlpackage"
-            })
-        ));
     }
 
     #[test]
@@ -444,14 +395,6 @@ mod tests {
             assert!(error
                 .contains("Available on macOS ARM64 14+, Linux x86-64, and Windows x86-64 only."));
         }
-    }
-
-    #[test]
-    fn rfdetr_executorch_artifacts_accept_pte_by_extension() {
-        assert!(matches!(
-            rfdetr_artifact_rule("rfdetr.pth.executorch"),
-            Some(RfDetrArtifactRule::Extension { extension: ".pte" })
-        ));
     }
 
     #[test]

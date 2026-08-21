@@ -151,6 +151,9 @@ export interface ExportFinishedPayload {
   artifact_moved: boolean;
   artifact_warning?: string;
   output_dir?: string;
+  published_paths: string[];
+  run: number;
+  artifact_count: number;
 }
 
 export interface ExportFailedPayload {

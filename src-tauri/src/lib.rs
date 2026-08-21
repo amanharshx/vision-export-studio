@@ -3,8 +3,8 @@ mod commands;
 use crate::commands::export::ExportState;
 use crate::commands::runtime_operations::RuntimeOperationCoordinator;
 use crate::commands::setup::{
-    default_runtime_dir, sweep_rfdetr_tflite_staging, sweep_runtime_rebuild_artifacts,
-    SettingsState, SetupState,
+    default_runtime_dir, sweep_rfdetr_staging, sweep_runtime_rebuild_artifacts, SettingsState,
+    SetupState,
 };
 use tauri::Manager;
 
@@ -26,7 +26,7 @@ pub fn run() {
             if let Ok(runtime_dir) = default_runtime_dir(app.handle()) {
                 let runtime_path = std::path::Path::new(&runtime_dir);
                 sweep_runtime_rebuild_artifacts(runtime_path);
-                sweep_rfdetr_tflite_staging(runtime_path);
+                sweep_rfdetr_staging(runtime_path);
             }
             #[cfg(desktop)]
             app.handle()

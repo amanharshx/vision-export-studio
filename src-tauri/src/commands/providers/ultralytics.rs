@@ -1,7 +1,407 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::{ArtifactStatus, ExportRequest};
+use super::ExportRequest;
+use crate::commands::artifacts::{ArtifactDescriptor, ArtifactKind};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutputFingerprint {
+    pub path: PathBuf,
+    entries: Vec<FingerprintEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FingerprintEntry {
+    relative_path: PathBuf,
+    kind: FingerprintKind,
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum FingerprintKind {
+    File,
+    Directory,
+    Symlink,
+}
+
+pub fn validate_output_destination(source: &Path, destination: &Path) -> Result<(), String> {
+    let source_dir = source
+        .parent()
+        .ok_or_else(|| "source has no parent directory".to_string())?;
+    let source_dir = std::fs::canonicalize(source_dir).unwrap_or_else(|_| source_dir.to_path_buf());
+    let destination =
+        std::fs::canonicalize(destination).unwrap_or_else(|_| destination.to_path_buf());
+    if source_dir == destination {
+        return Err(
+            "custom export destination must not equal source checkpoint directory".to_string(),
+        );
+    }
+    Ok(())
+}
+
+pub fn snapshot_outputs(request: &ExportRequest) -> Result<Vec<OutputFingerprint>, String> {
+    let parent = Path::new(&request.source_path)
+        .parent()
+        .ok_or_else(|| "source has no parent directory".to_string())?;
+    collect_route_outputs(request, parent)?
+        .into_iter()
+        .map(|path| fingerprint(&path))
+        .collect()
+}
+
+pub fn discover_artifacts_with_evidence(
+    request: &ExportRequest,
+    before: &[OutputFingerprint],
+    export_output: Option<&str>,
+) -> Result<Vec<ArtifactDescriptor>, String> {
+    let source = Path::new(&request.source_path);
+    let parent = source
+        .parent()
+        .ok_or_else(|| "source has no parent directory".to_string())?;
+    let before_map = before
+        .iter()
+        .map(|item| (&item.path, item))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut candidates = Vec::new();
+    for path in collect_route_outputs(request, parent)? {
+        let fresh = match before_map.get(&path) {
+            None => true,
+            Some(previous) => fingerprint(&path)?.entries != previous.entries,
+        };
+        if fresh {
+            candidates.push(path);
+        }
+    }
+    if candidates.len() != 1 {
+        return Err(format!(
+            "{} export produced {} fresh artifacts; expected exactly one",
+            request.route_id,
+            candidates.len()
+        ));
+    }
+    validate_effective_precision(request, &candidates[0], export_output)?;
+    let (format, kind, extension) = ultralytics_artifact_contract(&request.route_id)?;
+    Ok(vec![ArtifactDescriptor {
+        source_path: candidates[0].clone(),
+        kind,
+        format: format.to_string(),
+        qualifier: if request.route_id == "ultralytics.pt.rknn" {
+            Some(normalize_rknn_chip(&request.chip))
+        } else {
+            None
+        },
+        precision_or_profile: request.precision.clone(),
+        variant: None,
+        extension: extension.map(str::to_string),
+    }])
+}
+
+fn validate_named_precision(path: &Path, requested: &str) -> Result<(), String> {
+    let name = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let produced = if name.contains("int8") || name.contains("integer") {
+        Some("int8")
+    } else if name.contains("fp16") || name.contains("float16") || name.contains("half") {
+        Some("fp16")
+    } else {
+        None
+    };
+    if let Some(produced) = produced {
+        if produced != requested {
+            return Err(format!(
+                "effective precision mismatch: requested {}, produced {}",
+                requested, produced
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_effective_precision(
+    request: &ExportRequest,
+    path: &Path,
+    export_output: Option<&str>,
+) -> Result<(), String> {
+    match request.route_id.as_str() {
+        "ultralytics.pt.onnx" if export_output.is_some() => {
+            let output = export_output.unwrap_or_default();
+            let produced = match parse_onnx_precision_evidence(output) {
+                Some(produced) => produced,
+                None => inspect_onnx_precision(request, path)?,
+            };
+            compare_precision(&request.precision, produced)
+        }
+        "ultralytics.pt.engine" if export_output.is_some() => {
+            let produced = export_output.unwrap_or_default().lines().find_map(|line| {
+                let line = line.to_lowercase();
+                if line.contains("building int8 engine") {
+                    Some("int8")
+                } else if line.contains("building fp16 engine") {
+                    Some("fp16")
+                } else if line.contains("building fp32 engine") {
+                    Some("fp32")
+                } else {
+                    None
+                }
+            });
+            let produced = produced.ok_or_else(|| {
+                "effective precision evidence missing: TensorRT build precision was not reported"
+                    .to_string()
+            })?;
+            compare_precision(&request.precision, produced)
+        }
+        _ => validate_named_precision(path, &request.precision),
+    }
+}
+
+fn parse_onnx_precision_evidence(export_output: &str) -> Option<&'static str> {
+    let output = export_output.to_lowercase();
+    if output.contains("fp16 conversion failure") {
+        Some("fp32")
+    } else if output.contains("converting to fp16") {
+        Some("fp16")
+    } else {
+        None
+    }
+}
+
+fn compare_precision(requested: &str, produced: &str) -> Result<(), String> {
+    if requested == produced {
+        Ok(())
+    } else {
+        Err(format!(
+            "effective precision mismatch: requested {}, produced {}",
+            requested, produced
+        ))
+    }
+}
+
+fn inspect_onnx_precision(request: &ExportRequest, path: &Path) -> Result<&'static str, String> {
+    let script = r#"
+import onnx
+import sys
+
+model = onnx.load(sys.argv[1])
+types = {initializer.data_type for initializer in model.graph.initializer}
+ops = {node.op_type for node in model.graph.node}
+if 10 in types:
+    print("fp16")
+elif 3 in types or 2 in types or {"QuantizeLinear", "DequantizeLinear"} & ops:
+    print("int8")
+else:
+    print("fp32")
+"#;
+    let output = std::process::Command::new(&request.python_path)
+        .arg("-c")
+        .arg(script)
+        .arg(path)
+        .output()
+        .map_err(|error| format!("failed to inspect ONNX precision: {}", error))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to inspect ONNX precision: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    match String::from_utf8_lossy(&output.stdout).trim() {
+        "fp16" => Ok("fp16"),
+        "int8" => Ok("int8"),
+        "fp32" => Ok("fp32"),
+        produced => Err(format!(
+            "failed to inspect ONNX precision: unexpected result {}",
+            produced
+        )),
+    }
+}
+
+fn fingerprint(path: &Path) -> Result<OutputFingerprint, String> {
+    fn visit(path: &Path, root: &Path, entries: &mut Vec<FingerprintEntry>) -> std::io::Result<()> {
+        let metadata = std::fs::symlink_metadata(path)?;
+        let file_type = metadata.file_type();
+        let kind = if file_type.is_symlink() {
+            FingerprintKind::Symlink
+        } else if file_type.is_dir() {
+            FingerprintKind::Directory
+        } else {
+            FingerprintKind::File
+        };
+        let relative_path = path.strip_prefix(root).unwrap_or(path);
+        let relative_path = if relative_path.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            relative_path.to_path_buf()
+        };
+        entries.push(FingerprintEntry {
+            relative_path,
+            kind: kind.clone(),
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+        });
+        if kind == FingerprintKind::Directory {
+            let mut children = std::fs::read_dir(path)?.collect::<Result<Vec<_>, _>>()?;
+            children.sort_by_key(|entry| entry.file_name());
+            for child in children {
+                visit(&child.path(), root, entries)?;
+            }
+        }
+        Ok(())
+    }
+
+    let mut entries = Vec::new();
+    visit(path, path, &mut entries).map_err(|error| {
+        format!(
+            "failed to fingerprint artifact {}: {}",
+            path.display(),
+            error
+        )
+    })?;
+    entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok(OutputFingerprint {
+        path: path.to_path_buf(),
+        entries,
+    })
+}
+
+fn collect_route_outputs(request: &ExportRequest, parent: &Path) -> Result<Vec<PathBuf>, String> {
+    let stem = Path::new(&request.source_path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    let route = request
+        .route_id
+        .strip_prefix("ultralytics.pt.")
+        .ok_or_else(|| format!("unsupported route: {}", request.route_id))?;
+    let mut paths = Vec::new();
+    let entries = std::fs::read_dir(parent)
+        .map_err(|error| format!("failed to scan source output directory: {}", error))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    let mut candidates = entries.clone();
+    if route == "edgetpu" {
+        let saved_model = format!("{}_saved_model", stem);
+        for directory in entries.iter().filter(|path| {
+            path.is_dir()
+                && path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|name| name == saved_model)
+        }) {
+            candidates.extend(
+                std::fs::read_dir(directory)
+                    .into_iter()
+                    .flat_map(|entries| entries.filter_map(Result::ok).map(|entry| entry.path())),
+            );
+        }
+    }
+    for path in candidates {
+        if path == Path::new(&request.source_path) {
+            continue;
+        }
+        if std::fs::symlink_metadata(&path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(true)
+        {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
+        let matches = match route {
+            "onnx" => {
+                path.is_file()
+                    && path.extension().and_then(|value| value.to_str()) == Some("onnx")
+                    && name.starts_with(stem)
+            }
+            "engine" => {
+                path.is_file()
+                    && path.extension().and_then(|value| value.to_str()) == Some("engine")
+                    && name.starts_with(stem)
+            }
+            "torchscript" => {
+                path.is_file()
+                    && path.extension().and_then(|value| value.to_str()) == Some("torchscript")
+                    && name.starts_with(stem)
+            }
+            "mnn" => {
+                path.is_file()
+                    && path.extension().and_then(|value| value.to_str()) == Some("mnn")
+                    && name.starts_with(stem)
+            }
+            "litert" => {
+                path.is_file()
+                    && path.extension().and_then(|value| value.to_str()) == Some("tflite")
+                    && name.starts_with(stem)
+            }
+            "pb" => {
+                path.is_file()
+                    && path.extension().and_then(|value| value.to_str()) == Some("pb")
+                    && name.starts_with(stem)
+            }
+            "edgetpu" => {
+                path.is_file()
+                    && path.extension().and_then(|value| value.to_str()) == Some("tflite")
+                    && name == format!("{}_full_integer_quant_edgetpu.tflite", stem)
+            }
+            "coreml" => {
+                path.is_dir()
+                    && path.extension().and_then(|value| value.to_str()) == Some("mlpackage")
+                    && name.starts_with(stem)
+            }
+            "openvino" => {
+                path.is_dir() && name.starts_with(stem) && name.contains("openvino_model")
+            }
+            "saved_model" => {
+                path.is_dir() && name.starts_with(stem) && name.contains("saved_model")
+            }
+            "paddle" => path.is_dir() && name.starts_with(stem) && name.contains("paddle_model"),
+            "ncnn" => path.is_dir() && name.starts_with(stem) && name.contains("ncnn_model"),
+            "rknn" => path.is_dir() && name.starts_with(stem) && name.contains("rknn"),
+            "imx" | "axelera" => path.is_dir() && name == format!("{}_{}_model", stem, route),
+            "executorch" => {
+                path.is_dir() && name.starts_with(stem) && path.join("model.pte").is_file()
+            }
+            _ => false,
+        };
+        if matches {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+fn ultralytics_artifact_contract(
+    route_id: &str,
+) -> Result<(&'static str, ArtifactKind, Option<&'static str>), String> {
+    let route = route_id
+        .strip_prefix("ultralytics.pt.")
+        .ok_or_else(|| format!("unsupported route: {}", route_id))?;
+    Ok(match route {
+        "torchscript" => ("torchscript", ArtifactKind::File, Some("torchscript")),
+        "onnx" => ("onnx", ArtifactKind::File, Some("onnx")),
+        "engine" => ("engine", ArtifactKind::File, Some("engine")),
+        "litert" => ("litert", ArtifactKind::File, Some("tflite")),
+        "pb" => ("pb", ArtifactKind::File, Some("pb")),
+        "edgetpu" => ("edgetpu", ArtifactKind::File, Some("tflite")),
+        "mnn" => ("mnn", ArtifactKind::File, Some("mnn")),
+        "coreml" => ("coreml", ArtifactKind::Directory, Some("mlpackage")),
+        "openvino" => ("openvino", ArtifactKind::Directory, None),
+        "saved_model" => ("saved_model", ArtifactKind::Directory, None),
+        "paddle" => ("paddle", ArtifactKind::Directory, None),
+        "ncnn" => ("ncnn", ArtifactKind::Directory, None),
+        "rknn" => ("rknn", ArtifactKind::Directory, None),
+        "imx" => ("imx", ArtifactKind::Directory, None),
+        "axelera" => ("axelera", ArtifactKind::Directory, None),
+        "executorch" => ("executorch", ArtifactKind::Directory, None),
+        other => return Err(format!("unsupported route: {}", other)),
+    })
+}
 
 fn canonical_quantize(precision: &str) -> Option<&'static str> {
     match precision {
@@ -70,92 +470,6 @@ fn calibration_recommended(route_id: &str, precision: &str) -> bool {
     }
 }
 
-fn artifact_info(format: &str, precision: &str) -> (&'static str, bool) {
-    match format {
-        "torchscript" => (".torchscript", false),
-        "onnx" => match precision {
-            "8" => ("_int8.onnx", false),
-            _ => (".onnx", false),
-        },
-        "openvino" => ("_openvino_model", true),
-        "coreml" => (".mlpackage", true),
-        "ncnn" => ("_ncnn_model", true),
-        "mnn" => (".mnn", false),
-        "litert" => match precision {
-            "8" => ("_int8.tflite", false),
-            "w8a16" => ("_w8a16.tflite", false),
-            "w8a32" => ("_w8a32.tflite", false),
-            _ => (".tflite", false),
-        },
-        "engine" => (".engine", false),
-        "rknn" => (".rknn", false),
-        "executorch" => (".ptl", false),
-        "edgetpu" => ("_edgetpu.tflite", false),
-        "paddle" => ("_paddle_model", true),
-        "saved_model" => ("_saved_model", true),
-        "pb" => (".pb", false),
-        _ => ("", false),
-    }
-}
-
-fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        if ty.is_dir() {
-            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
-        } else {
-            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
-        }
-    }
-    Ok(())
-}
-
-pub fn move_artifact(
-    source_path: &str,
-    format: &str,
-    precision: &str,
-    output_dir: &str,
-) -> Result<bool, String> {
-    let canonical = canonical_quantize(precision).unwrap_or("32");
-    let (suffix, is_dir) = artifact_info(format, canonical);
-    if suffix.is_empty() {
-        return Ok(false);
-    }
-    let src_path = Path::new(source_path);
-    let stem = match src_path.file_stem().and_then(|s| s.to_str()) {
-        Some(s) => s,
-        None => return Ok(false),
-    };
-    let src_dir = match src_path.parent() {
-        Some(d) => d,
-        None => return Ok(false),
-    };
-    let artifact_name = format!("{}{}", stem, suffix);
-    let artifact_src: PathBuf = src_dir.join(&artifact_name);
-    let artifact_dst: PathBuf = Path::new(output_dir).join(&artifact_name);
-    if !artifact_src.exists() {
-        return Ok(false);
-    }
-    if is_dir {
-        copy_dir_all(&artifact_src, &artifact_dst)
-            .map_err(|e| format!("failed to copy artifact directory: {}", e))?;
-        std::fs::remove_dir_all(&artifact_src)
-            .map_err(|e| format!("failed to remove source artifact directory: {}", e))?;
-    } else if let Err(rename_error) = std::fs::rename(&artifact_src, &artifact_dst) {
-        std::fs::copy(&artifact_src, &artifact_dst).map_err(|copy_error| {
-            format!(
-                "failed to move artifact: rename error: {}; copy fallback error: {}",
-                rename_error, copy_error
-            )
-        })?;
-        std::fs::remove_file(&artifact_src)
-            .map_err(|e| format!("failed to remove source artifact file: {}", e))?;
-    }
-    Ok(true)
-}
-
 pub fn build_command(request: &ExportRequest) -> Result<Command, String> {
     if request.yolo_path.is_empty() || !Path::new(&request.yolo_path).exists() {
         return Err(format!("yolo not found at: {}", request.yolo_path));
@@ -210,49 +524,11 @@ pub fn build_command(request: &ExportRequest) -> Result<Command, String> {
     Ok(cmd)
 }
 
-pub fn confirm_artifacts(request: &ExportRequest) -> ArtifactStatus {
-    if request.output_dir.is_empty() {
-        return ArtifactStatus {
-            artifact_moved: false,
-            artifact_warning: None,
-        };
-    }
-    let yolo_format = match request.route_id.strip_prefix("ultralytics.pt.") {
-        Some(value) => value,
-        None => {
-            return ArtifactStatus {
-                artifact_moved: false,
-                artifact_warning: None,
-            }
-        }
-    };
-    match move_artifact(
-        &request.source_path,
-        yolo_format,
-        &request.precision,
-        &request.output_dir,
-    ) {
-        Ok(true) => ArtifactStatus { artifact_moved: true, artifact_warning: None },
-        Ok(false) => ArtifactStatus {
-            artifact_moved: false,
-            artifact_warning: Some(format!(
-                "Export finished, but artifact was not moved to {}. Output may still be next to source model.",
-                request.output_dir
-            )),
-        },
-        Err(error) => ArtifactStatus {
-            artifact_moved: false,
-            artifact_warning: Some(format!(
-                "Export finished, but artifact move to {} failed: {}",
-                request.output_dir, error
-            )),
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::move_artifact;
+    use super::discover_artifacts_with_evidence;
+    use super::snapshot_outputs;
+    use super::validate_output_destination;
     use std::fs;
     use std::path::PathBuf;
     use uuid::Uuid;
@@ -294,7 +570,7 @@ mod tests {
             rfdetr_trust_confirmed: false,
             rfdetr_variant_mode: None,
             rfdetr_manual_class_symbol: None,
-            tflite_staging_dir: None,
+            staging_dir: None,
         };
         let cmd = super::build_command(&request).expect("build command");
         let args: Vec<String> = cmd
@@ -315,62 +591,6 @@ mod tests {
             ]
         );
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn move_artifact_moves_int8_onnx() {
-        let root = temp_dir("export-int8-onnx");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        let source_artifact = source_dir.join("best_int8.onnx");
-        fs::write(&source_model, "model").expect("write source model");
-        fs::write(&source_artifact, "artifact").expect("write source artifact");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "onnx",
-            "int8",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("move artifact");
-
-        assert!(moved);
-        assert!(!source_artifact.exists());
-        assert!(output_dir.join("best_int8.onnx").exists());
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn move_artifact_moves_plain_onnx_for_fp32() {
-        let root = temp_dir("export-fp32-onnx");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        let source_artifact = source_dir.join("best.onnx");
-        fs::write(&source_model, "model").expect("write source model");
-        fs::write(&source_artifact, "artifact").expect("write source artifact");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "onnx",
-            "fp32",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("move artifact");
-
-        assert!(moved);
-        assert!(!source_artifact.exists());
-        assert!(output_dir.join("best.onnx").exists());
-
-        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
@@ -403,7 +623,7 @@ mod tests {
             rfdetr_trust_confirmed: false,
             rfdetr_variant_mode: None,
             rfdetr_manual_class_symbol: None,
-            tflite_staging_dir: None,
+            staging_dir: None,
         };
         let cmd = super::build_command(&request).expect("build command");
         let args: Vec<String> = cmd
@@ -415,170 +635,6 @@ mod tests {
         assert!(!args.contains(&"half=True".to_string()));
         assert!(!args.contains(&"int8=True".to_string()));
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn move_artifact_moves_tflite_for_litert() {
-        let root = temp_dir("export-litert");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        let source_artifact = source_dir.join("best.tflite");
-        fs::write(&source_model, "model").expect("write source model");
-        fs::write(&source_artifact, "artifact").expect("write source artifact");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "litert",
-            "fp32",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("move artifact");
-
-        assert!(moved);
-        assert!(!source_artifact.exists());
-        assert!(output_dir.join("best.tflite").exists());
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn move_artifact_moves_int8_tflite_for_litert() {
-        let root = temp_dir("export-litert-int8");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        let source_artifact = source_dir.join("best_int8.tflite");
-        fs::write(&source_model, "model").expect("write source model");
-        fs::write(&source_artifact, "artifact").expect("write source artifact");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "litert",
-            "int8",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("move artifact");
-
-        assert!(moved);
-        assert!(!source_artifact.exists());
-        assert!(output_dir.join("best_int8.tflite").exists());
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn move_artifact_moves_w8a16_tflite_for_litert() {
-        let root = temp_dir("export-litert-w8a16");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        let source_artifact = source_dir.join("best_w8a16.tflite");
-        fs::write(&source_model, "model").expect("write source model");
-        fs::write(&source_artifact, "artifact").expect("write source artifact");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "litert",
-            "w8a16",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("move artifact");
-
-        assert!(moved);
-        assert!(!source_artifact.exists());
-        assert!(output_dir.join("best_w8a16.tflite").exists());
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn move_artifact_moves_w8a32_tflite_for_litert() {
-        let root = temp_dir("export-litert-w8a32");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        let source_artifact = source_dir.join("best_w8a32.tflite");
-        fs::write(&source_model, "model").expect("write source model");
-        fs::write(&source_artifact, "artifact").expect("write source artifact");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "litert",
-            "w8a32",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("move artifact");
-
-        assert!(moved);
-        assert!(!source_artifact.exists());
-        assert!(output_dir.join("best_w8a32.tflite").exists());
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn move_artifact_moves_plain_tflite_for_litert_fp32() {
-        let root = temp_dir("export-litert-fp32");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        let source_artifact = source_dir.join("best.tflite");
-        fs::write(&source_model, "model").expect("write source model");
-        fs::write(&source_artifact, "artifact").expect("write source artifact");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "litert",
-            "fp32",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("move artifact");
-
-        assert!(moved);
-        assert!(!source_artifact.exists());
-        assert!(output_dir.join("best.tflite").exists());
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn move_artifact_reports_missing_artifact() {
-        let root = temp_dir("export-missing");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        fs::write(&source_model, "model").expect("write source model");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "onnx",
-            "",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("missing artifact should not error");
-
-        assert!(!moved);
-
-        fs::remove_dir_all(root).expect("cleanup");
     }
 
     fn request_with_precision(
@@ -615,7 +671,7 @@ mod tests {
             rfdetr_trust_confirmed: false,
             rfdetr_variant_mode: None,
             rfdetr_manual_class_symbol: None,
-            tflite_staging_dir: None,
+            staging_dir: None,
         }
     }
 
@@ -775,5 +831,277 @@ mod tests {
         assert!(!args.iter().any(|arg| arg.starts_with("data=")));
         let _ =
             std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());
+    }
+
+    #[test]
+    fn discovery_contract_covers_every_supported_ultralytics_route() {
+        let cases = [
+            ("torchscript", "best.torchscript", "fp32", "torchscript"),
+            ("onnx", "best.onnx", "fp32", "onnx"),
+            ("engine", "best.engine", "fp32", "engine"),
+            ("litert", "best_int8.tflite", "int8", "litert"),
+            ("pb", "best.pb", "fp32", "pb"),
+            (
+                "edgetpu",
+                "best_saved_model/best_full_integer_quant_edgetpu.tflite",
+                "int8",
+                "edgetpu",
+            ),
+            ("mnn", "best.mnn", "fp32", "mnn"),
+            ("coreml", "best.mlpackage", "fp32", "coreml"),
+            ("openvino", "best_openvino_model", "fp32", "openvino"),
+            ("saved_model", "best_saved_model", "fp32", "saved_model"),
+            ("paddle", "best_paddle_model", "fp32", "paddle"),
+            ("ncnn", "best_ncnn_model", "fp32", "ncnn"),
+            ("rknn", "best_rknn_model", "int8", "rknn"),
+            ("imx", "best_imx_model", "int8", "imx"),
+            ("axelera", "best_axelera_model", "int8", "axelera"),
+            (
+                "executorch",
+                "best_executorch/model.pte",
+                "fp32",
+                "executorch",
+            ),
+        ];
+        for (route, relative_output, precision, expected_format) in cases {
+            let request = request_with_precision(
+                &format!("ultralytics.pt.{}", route),
+                precision,
+                None,
+                if route == "rknn" { "rk3588" } else { "" },
+            );
+            let source = PathBuf::from(&request.source_path);
+            let root = source.parent().expect("source parent");
+            let before = snapshot_outputs(&request).expect("snapshot route outputs");
+            let output = root.join(relative_output);
+            if let Some(parent) = output.parent() {
+                fs::create_dir_all(parent).expect("create nested output parent");
+            }
+            if route == "executorch" {
+                fs::create_dir_all(output.parent().expect("ExecuTorch bundle parent"))
+                    .expect("create bundle");
+                fs::write(&output, b"artifact").expect("write artifact");
+            } else if route != "coreml" && output.extension().is_some() {
+                fs::write(&output, b"artifact").expect("write artifact");
+            } else {
+                fs::create_dir_all(&output).expect("create bundle");
+                if route == "coreml" {
+                    fs::write(output.join("metadata.json"), b"bundle").expect("write package");
+                } else if route == "executorch" {
+                    fs::write(output.join("model.pte"), b"bundle").expect("write package");
+                }
+            }
+            let descriptors = discover_artifacts_with_evidence(&request, &before, None)
+                .expect("discover route output");
+            assert_eq!(descriptors[0].format, expected_format);
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn discovery_ignores_stale_top_level_artifact() {
+        let request = request_with_precision("ultralytics.pt.onnx", "fp16", None, "");
+        let source = PathBuf::from(&request.source_path);
+        let root = source.parent().expect("source parent");
+        fs::write(root.join("best.onnx"), b"stale-artifact").expect("write stale artifact");
+        let before = snapshot_outputs(&request).expect("snapshot stale artifact");
+        fs::write(
+            root.join("best.onnx"),
+            b"new-artifact-with-different-length",
+        )
+        .expect("write fresh artifact");
+        let descriptors = discover_artifacts_with_evidence(&request, &before, None)
+            .expect("discover fresh artifact");
+        assert_eq!(descriptors.len(), 1);
+        assert!(descriptors[0].source_path.ends_with("best.onnx"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn discovery_detects_rewritten_child_inside_existing_bundle() {
+        let request = request_with_precision("ultralytics.pt.openvino", "fp32", None, "");
+        let source = PathBuf::from(&request.source_path);
+        let root = source.parent().expect("source parent");
+        let bundle = root.join("best_openvino_model");
+        fs::create_dir_all(&bundle).expect("create bundle");
+        fs::write(bundle.join("model.xml"), b"stale").expect("write stale child");
+        let before = snapshot_outputs(&request).expect("snapshot bundle");
+        fs::write(
+            bundle.join("model.xml"),
+            b"fresh-child-with-different-length",
+        )
+        .expect("rewrite child");
+
+        let descriptors = discover_artifacts_with_evidence(&request, &before, None)
+            .expect("discover rewritten bundle");
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(descriptors[0].source_path, bundle);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn discovery_detects_bundle_descendant_addition_and_removal() {
+        let request = request_with_precision("ultralytics.pt.rknn", "int8", None, "rk3588");
+        let source = PathBuf::from(&request.source_path);
+        let root = source.parent().expect("source parent");
+        let bundle = root.join("best_rknn_model");
+        fs::create_dir_all(&bundle).expect("create bundle");
+        fs::write(bundle.join("model.rknn"), b"artifact").expect("write child");
+        let before = snapshot_outputs(&request).expect("snapshot bundle");
+
+        fs::write(bundle.join("metadata.yaml"), b"metadata").expect("add child");
+        assert!(discover_artifacts_with_evidence(&request, &before, None).is_ok());
+
+        let after_addition = snapshot_outputs(&request).expect("snapshot added bundle");
+        fs::remove_file(bundle.join("metadata.yaml")).expect("remove child");
+        assert!(discover_artifacts_with_evidence(&request, &after_addition, None).is_ok());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn discovery_requires_exact_imx_and_axelera_bundle_names() {
+        for (route, exact_name, unrelated_name) in [
+            ("imx", "best_imx_model", "best_imx"),
+            ("axelera", "best_axelera_model", "best_axelera_extra"),
+        ] {
+            let request =
+                request_with_precision(&format!("ultralytics.pt.{}", route), "int8", None, "");
+            let source = PathBuf::from(&request.source_path);
+            let root = source.parent().expect("source parent");
+            let before = snapshot_outputs(&request).expect("snapshot route outputs");
+            let unrelated = root.join(unrelated_name);
+            fs::create_dir_all(&unrelated).expect("create unrelated bundle");
+            assert!(discover_artifacts_with_evidence(&request, &before, None).is_err());
+            fs::remove_dir_all(&unrelated).expect("remove unrelated bundle");
+
+            let exact = root.join(exact_name);
+            fs::create_dir_all(&exact).expect("create exact bundle");
+            let descriptors = discover_artifacts_with_evidence(&request, &before, None)
+                .expect("discover exact bundle");
+            assert_eq!(descriptors[0].source_path, exact);
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn discovery_accepts_precisionless_upstream_onnx_and_tensorrt_names() {
+        for (route, precision, filename) in [
+            ("onnx", "fp16", "best.onnx"),
+            ("engine", "fp16", "best.engine"),
+            ("engine", "int8", "best.engine"),
+        ] {
+            let request =
+                request_with_precision(&format!("ultralytics.pt.{}", route), precision, None, "");
+            let source = PathBuf::from(&request.source_path);
+            let root = source.parent().expect("source parent");
+            let before = snapshot_outputs(&request).expect("snapshot route outputs");
+            fs::write(root.join(filename), b"artifact").expect("write artifact");
+            let evidence = if route == "onnx" {
+                "ONNX: converting to FP16..."
+            } else if precision == "fp16" {
+                "TensorRT: building FP16 engine as best.engine"
+            } else {
+                "TensorRT: building INT8 engine as best.engine"
+            };
+            let descriptors = discover_artifacts_with_evidence(&request, &before, Some(evidence))
+                .expect("discover precisionless upstream artifact");
+            assert_eq!(descriptors[0].precision_or_profile, precision);
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn discovery_rejects_wrong_top_level_kind() {
+        let cases = [
+            ("onnx", "best.onnx", true),
+            ("openvino", "best_openvino_model", false),
+            ("coreml", "best.mlpackage", false),
+        ];
+        for (route, name, expected_file) in cases {
+            let request =
+                request_with_precision(&format!("ultralytics.pt.{}", route), "fp32", None, "");
+            let source = PathBuf::from(&request.source_path);
+            let root = source.parent().expect("source parent");
+            let before = snapshot_outputs(&request).expect("snapshot route outputs");
+            let output = root.join(name);
+            if expected_file {
+                fs::create_dir_all(&output).expect("create wrong directory kind");
+            } else {
+                fs::write(&output, b"wrong kind").expect("create wrong file kind");
+            }
+            assert!(discover_artifacts_with_evidence(&request, &before, None).is_err());
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn destination_equal_source_directory_is_rejected() {
+        let root = temp_dir("destination-check");
+        let source = root.join("best.pt");
+        std::fs::write(&source, b"model").expect("write checkpoint");
+        let error =
+            validate_output_destination(&source, &root).expect_err("same directory must fail");
+        assert!(error.contains("source checkpoint directory"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fresh_artifact_precision_marker_mismatch_is_rejected() {
+        let root = temp_dir("precision-mismatch");
+        let source = root.join("best.pt");
+        std::fs::write(&source, b"model").expect("write checkpoint");
+        let request = request_with_precision("ultralytics.pt.onnx", "fp16", None, "");
+        let mut request = request;
+        request.source_path = source.to_string_lossy().into_owned();
+        let before = snapshot_outputs(&request).expect("snapshot outputs");
+        std::fs::write(root.join("best_int8.onnx"), b"artifact").expect("write artifact");
+        let error = discover_artifacts_with_evidence(&request, &before, None)
+            .expect_err("mismatch must fail");
+        assert!(error.contains("requested fp16, produced int8"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn precision_evidence_rejects_onnx_fallback_and_tensorrt_downgrade() {
+        for (route, precision, filename, evidence, expected) in [
+            (
+                "onnx",
+                "fp16",
+                "best.onnx",
+                "ONNX: FP16 conversion failure: unsupported operator",
+                "produced fp32",
+            ),
+            (
+                "engine",
+                "fp16",
+                "best.engine",
+                "TensorRT: building FP32 engine as best.engine",
+                "produced fp32",
+            ),
+        ] {
+            let request =
+                request_with_precision(&format!("ultralytics.pt.{}", route), precision, None, "");
+            let source = PathBuf::from(&request.source_path);
+            let root = source.parent().expect("source parent");
+            let before = snapshot_outputs(&request).expect("snapshot route outputs");
+            fs::write(root.join(filename), b"artifact").expect("write artifact");
+            let error = discover_artifacts_with_evidence(&request, &before, Some(evidence))
+                .expect_err("precision downgrade must fail");
+            assert!(error.contains(expected), "unexpected error: {}", error);
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn tensorrt_missing_precision_evidence_fails_closed() {
+        let request = request_with_precision("ultralytics.pt.engine", "fp16", None, "");
+        let source = PathBuf::from(&request.source_path);
+        let root = source.parent().expect("source parent");
+        let before = snapshot_outputs(&request).expect("snapshot route outputs");
+        fs::write(root.join("best.engine"), b"artifact").expect("write artifact");
+        let error = discover_artifacts_with_evidence(&request, &before, Some(""))
+            .expect_err("missing TensorRT evidence must fail");
+        assert!(error.contains("precision evidence missing"));
+        let _ = fs::remove_dir_all(root);
     }
 }
