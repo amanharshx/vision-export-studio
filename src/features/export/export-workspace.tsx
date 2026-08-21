@@ -412,13 +412,12 @@ export function getUltralyticsGroupStatus(
   }
 }
 
-export function getRfdetrGroupSummary(stacks: StackEnvironment[]): string {
-  const status = stacks.every((stack) =>
+export function getRfdetrGroupStatus(stacks: StackEnvironment[]): "ready" | "error" {
+  return stacks.every((stack) =>
     stack.python_version.status === "available" && stack.rfdetr_version.status === "available",
   )
     ? "ready"
     : "error";
-  return `${stacks.length} installed · ${status}`;
 }
 
 function providerGroupIcon(status: ProviderGroupStatus) {
@@ -497,7 +496,8 @@ export function EnvironmentGroups({
 }) {
   const ultralyticsGroupStatus = getUltralyticsGroupStatus(envInfo, envError, redetecting);
   const ultralyticsGroupSummary = ultralyticsGroupStatus[0].toUpperCase() + ultralyticsGroupStatus.slice(1);
-  const rfdetrGroupSummary = getRfdetrGroupSummary(stacks);
+  const rfdetrGroupStatus = getRfdetrGroupStatus(stacks);
+  const rfdetrGroupSummary = `${stacks.length} installed · ${rfdetrGroupStatus}`;
 
   return (
     <>
@@ -557,9 +557,7 @@ export function EnvironmentGroups({
       <ProviderGroup
         title="Roboflow RF-DETR"
         summary={rfdetrGroupSummary}
-        status={stacks.some((stack) =>
-          stack.python_version.status !== "available" || stack.rfdetr_version.status !== "available",
-        ) ? "error" : "ready"}
+        status={rfdetrGroupStatus}
         defaultExpanded={defaultExpanded}
       >
         {stacks.length > 0 ? (

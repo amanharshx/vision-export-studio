@@ -8,7 +8,7 @@ import {
   ProviderGroup,
   StackEnvironmentRow,
   StackEnvironmentCards,
-  getRfdetrGroupSummary,
+  getRfdetrGroupStatus,
   getUltralyticsGroupStatus,
 } from "./export-workspace";
 import type { EnvironmentInfo, StackEnvironment } from "@/lib/types";
@@ -123,6 +123,7 @@ describe("provider groups", () => {
     expect((html.match(/Ultralytics YOLO/g) ?? []).length).toBe(1);
     expect((html.match(/Roboflow RF-DETR/g) ?? []).length).toBe(1);
     expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain("0 installed · ready");
     expect(html).not.toContain(">3.12.12<");
     expect(html).not.toContain("No RF-DETR environments installed");
   });
@@ -173,10 +174,10 @@ describe("provider groups", () => {
       python_version: { status: "available", version: "3.12.12" },
       rfdetr_version: { status: "available", version: "1.9.0" },
     };
-    expect(getRfdetrGroupSummary([stack])).toBe("1 installed · ready");
-    expect(getRfdetrGroupSummary([{ ...stack, python_version: { status: "unavailable" } }]))
-      .toBe("1 installed · error");
-    expect(getRfdetrGroupSummary([{ ...stack, rfdetr_version: { status: "unavailable" } }]))
-      .toBe("1 installed · error");
+    expect(getRfdetrGroupStatus([stack])).toBe("ready");
+    expect(getRfdetrGroupStatus([{ ...stack, python_version: { status: "unavailable" } }]))
+      .toBe("error");
+    expect(getRfdetrGroupStatus([{ ...stack, rfdetr_version: { status: "unavailable" } }]))
+      .toBe("error");
   });
 });
