@@ -314,19 +314,21 @@ pub(crate) fn sweep_runtime_rebuild_artifacts(runtime_dir: &Path) {
 }
 
 pub(crate) fn sweep_rfdetr_staging(runtime_dir: &Path) {
-    let parent = runtime_dir.join(RFDETR_STAGING_PARENT);
-    let Ok(entries) = std::fs::read_dir(&parent) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let is_session = path.is_dir()
-            && path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| uuid::Uuid::parse_str(name).is_ok());
-        if is_session {
-            let _ = std::fs::remove_dir_all(path);
+    for parent_name in [RFDETR_STAGING_PARENT, ".rfdetr-tflite-staging"] {
+        let parent = runtime_dir.join(parent_name);
+        let Ok(entries) = std::fs::read_dir(&parent) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_session = path.is_dir()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| uuid::Uuid::parse_str(name).is_ok());
+            if is_session {
+                let _ = std::fs::remove_dir_all(path);
+            }
         }
     }
 }

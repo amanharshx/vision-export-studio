@@ -1,8 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[cfg(test)]
-use super::ArtifactStatus;
 use super::ExportRequest;
 use crate::commands::artifacts::{ArtifactDescriptor, ArtifactKind};
 
@@ -65,7 +63,7 @@ pub fn discover_artifacts(
             candidates.len()
         ));
     }
-    validate_named_precision(&candidates[0], &request.precision)?;
+    validate_named_precision(&candidates[0], &request.route_id, &request.precision)?;
     let (format, kind, extension) = ultralytics_artifact_contract(&request.route_id)?;
     Ok(vec![ArtifactDescriptor {
         source_path: candidates[0].clone(),
@@ -82,7 +80,7 @@ pub fn discover_artifacts(
     }])
 }
 
-fn validate_named_precision(path: &Path, requested: &str) -> Result<(), String> {
+fn validate_named_precision(path: &Path, route_id: &str, requested: &str) -> Result<(), String> {
     let name = path
         .file_stem()
         .and_then(|value| value.to_str())
@@ -102,6 +100,13 @@ fn validate_named_precision(path: &Path, requested: &str) -> Result<(), String> 
                 requested, produced
             ));
         }
+    } else if matches!(route_id, "ultralytics.pt.onnx" | "ultralytics.pt.engine")
+        && requested != "fp32"
+    {
+        return Err(format!(
+            "effective precision mismatch: requested {}, produced unknown",
+            requested
+        ));
     }
     Ok(())
 }
@@ -125,24 +130,35 @@ fn collect_route_outputs(request: &ExportRequest, parent: &Path) -> Result<Vec<P
         .strip_prefix("ultralytics.pt.")
         .ok_or_else(|| format!("unsupported route: {}", request.route_id))?;
     let mut paths = Vec::new();
-    fn walk(path: &Path, paths: &mut Vec<PathBuf>) -> std::io::Result<()> {
-        for entry in std::fs::read_dir(path)? {
-            let entry = entry?;
-            let child = entry.path();
-            if child.is_dir() {
-                paths.push(child.clone());
-                walk(&child, paths)?;
-            } else {
-                paths.push(child);
-            }
+    let entries = std::fs::read_dir(parent)
+        .map_err(|error| format!("failed to scan source output directory: {}", error))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    let mut candidates = entries.clone();
+    if route == "edgetpu" {
+        for directory in entries.iter().filter(|path| {
+            path.is_dir()
+                && path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|name| name.starts_with(stem) && name.contains("edgetpu"))
+        }) {
+            candidates.extend(
+                std::fs::read_dir(directory)
+                    .into_iter()
+                    .flat_map(|entries| entries.filter_map(Result::ok).map(|entry| entry.path())),
+            );
         }
-        Ok(())
     }
-    let mut all = Vec::new();
-    walk(parent, &mut all)
-        .map_err(|error| format!("failed to scan source output directory: {}", error))?;
-    for path in all {
+    for path in candidates {
         if path == Path::new(&request.source_path) {
+            continue;
+        }
+        if std::fs::symlink_metadata(&path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(true)
+        {
             continue;
         }
         let name = path
@@ -224,12 +240,12 @@ fn ultralytics_artifact_contract(
         "onnx" => ("onnx", ArtifactKind::File, Some("onnx")),
         "engine" => ("engine", ArtifactKind::File, Some("engine")),
         "litert" => ("litert", ArtifactKind::File, Some("tflite")),
-        "pb" => ("graphdef", ArtifactKind::File, Some("pb")),
+        "pb" => ("pb", ArtifactKind::File, Some("pb")),
         "edgetpu" => ("edgetpu", ArtifactKind::File, Some("tflite")),
         "mnn" => ("mnn", ArtifactKind::File, Some("mnn")),
         "coreml" => ("coreml", ArtifactKind::Directory, Some("mlpackage")),
         "openvino" => ("openvino", ArtifactKind::Directory, None),
-        "saved_model" => ("savedmodel", ArtifactKind::Directory, None),
+        "saved_model" => ("saved_model", ArtifactKind::Directory, None),
         "paddle" => ("paddle", ArtifactKind::Directory, None),
         "ncnn" => ("ncnn", ArtifactKind::Directory, None),
         "rknn" => ("rknn", ArtifactKind::Directory, None),
@@ -307,95 +323,6 @@ fn calibration_recommended(route_id: &str, precision: &str) -> bool {
     }
 }
 
-#[cfg(test)]
-fn artifact_info(format: &str, precision: &str) -> (&'static str, bool) {
-    match format {
-        "torchscript" => (".torchscript", false),
-        "onnx" => match precision {
-            "8" => ("_int8.onnx", false),
-            _ => (".onnx", false),
-        },
-        "openvino" => ("_openvino_model", true),
-        "coreml" => (".mlpackage", true),
-        "ncnn" => ("_ncnn_model", true),
-        "mnn" => (".mnn", false),
-        "litert" => match precision {
-            "8" => ("_int8.tflite", false),
-            "w8a16" => ("_w8a16.tflite", false),
-            "w8a32" => ("_w8a32.tflite", false),
-            _ => (".tflite", false),
-        },
-        "engine" => (".engine", false),
-        "rknn" => (".rknn", false),
-        "executorch" => (".ptl", false),
-        "edgetpu" => ("_edgetpu.tflite", false),
-        "paddle" => ("_paddle_model", true),
-        "saved_model" => ("_saved_model", true),
-        "pb" => (".pb", false),
-        _ => ("", false),
-    }
-}
-
-#[cfg(test)]
-fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        if ty.is_dir() {
-            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
-        } else {
-            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-pub fn move_artifact(
-    source_path: &str,
-    format: &str,
-    precision: &str,
-    output_dir: &str,
-) -> Result<bool, String> {
-    let canonical = canonical_quantize(precision).unwrap_or("32");
-    let (suffix, is_dir) = artifact_info(format, canonical);
-    if suffix.is_empty() {
-        return Ok(false);
-    }
-    let src_path = Path::new(source_path);
-    let stem = match src_path.file_stem().and_then(|s| s.to_str()) {
-        Some(s) => s,
-        None => return Ok(false),
-    };
-    let src_dir = match src_path.parent() {
-        Some(d) => d,
-        None => return Ok(false),
-    };
-    let artifact_name = format!("{}{}", stem, suffix);
-    let artifact_src: PathBuf = src_dir.join(&artifact_name);
-    let artifact_dst: PathBuf = Path::new(output_dir).join(&artifact_name);
-    if !artifact_src.exists() {
-        return Ok(false);
-    }
-    if is_dir {
-        copy_dir_all(&artifact_src, &artifact_dst)
-            .map_err(|e| format!("failed to copy artifact directory: {}", e))?;
-        std::fs::remove_dir_all(&artifact_src)
-            .map_err(|e| format!("failed to remove source artifact directory: {}", e))?;
-    } else if let Err(rename_error) = std::fs::rename(&artifact_src, &artifact_dst) {
-        std::fs::copy(&artifact_src, &artifact_dst).map_err(|copy_error| {
-            format!(
-                "failed to move artifact: rename error: {}; copy fallback error: {}",
-                rename_error, copy_error
-            )
-        })?;
-        std::fs::remove_file(&artifact_src)
-            .map_err(|e| format!("failed to remove source artifact file: {}", e))?;
-    }
-    Ok(true)
-}
-
 pub fn build_command(request: &ExportRequest) -> Result<Command, String> {
     if request.yolo_path.is_empty() || !Path::new(&request.yolo_path).exists() {
         return Err(format!("yolo not found at: {}", request.yolo_path));
@@ -451,51 +378,8 @@ pub fn build_command(request: &ExportRequest) -> Result<Command, String> {
 }
 
 #[cfg(test)]
-#[allow(dead_code)]
-pub fn confirm_artifacts(request: &ExportRequest) -> ArtifactStatus {
-    if request.output_dir.is_empty() {
-        return ArtifactStatus {
-            artifact_moved: false,
-            artifact_warning: None,
-        };
-    }
-    let yolo_format = match request.route_id.strip_prefix("ultralytics.pt.") {
-        Some(value) => value,
-        None => {
-            return ArtifactStatus {
-                artifact_moved: false,
-                artifact_warning: None,
-            }
-        }
-    };
-    match move_artifact(
-        &request.source_path,
-        yolo_format,
-        &request.precision,
-        &request.output_dir,
-    ) {
-        Ok(true) => ArtifactStatus { artifact_moved: true, artifact_warning: None },
-        Ok(false) => ArtifactStatus {
-            artifact_moved: false,
-            artifact_warning: Some(format!(
-                "Export finished, but artifact was not moved to {}. Output may still be next to source model.",
-                request.output_dir
-            )),
-        },
-        Err(error) => ArtifactStatus {
-            artifact_moved: false,
-            artifact_warning: Some(format!(
-                "Export finished, but artifact move to {} failed: {}",
-                request.output_dir, error
-            )),
-        },
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::discover_artifacts;
-    use super::move_artifact;
     use super::snapshot_outputs;
     use super::validate_output_destination;
     use std::fs;
@@ -563,62 +447,6 @@ mod tests {
     }
 
     #[test]
-    fn move_artifact_moves_int8_onnx() {
-        let root = temp_dir("export-int8-onnx");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        let source_artifact = source_dir.join("best_int8.onnx");
-        fs::write(&source_model, "model").expect("write source model");
-        fs::write(&source_artifact, "artifact").expect("write source artifact");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "onnx",
-            "int8",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("move artifact");
-
-        assert!(moved);
-        assert!(!source_artifact.exists());
-        assert!(output_dir.join("best_int8.onnx").exists());
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn move_artifact_moves_plain_onnx_for_fp32() {
-        let root = temp_dir("export-fp32-onnx");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        let source_artifact = source_dir.join("best.onnx");
-        fs::write(&source_model, "model").expect("write source model");
-        fs::write(&source_artifact, "artifact").expect("write source artifact");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "onnx",
-            "fp32",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("move artifact");
-
-        assert!(moved);
-        assert!(!source_artifact.exists());
-        assert!(output_dir.join("best.onnx").exists());
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
     fn build_command_uses_litert_format() {
         let root = temp_dir("build-cmd-litert");
         let yolo_path = root.join("yolo");
@@ -660,170 +488,6 @@ mod tests {
         assert!(!args.contains(&"half=True".to_string()));
         assert!(!args.contains(&"int8=True".to_string()));
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn move_artifact_moves_tflite_for_litert() {
-        let root = temp_dir("export-litert");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        let source_artifact = source_dir.join("best.tflite");
-        fs::write(&source_model, "model").expect("write source model");
-        fs::write(&source_artifact, "artifact").expect("write source artifact");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "litert",
-            "fp32",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("move artifact");
-
-        assert!(moved);
-        assert!(!source_artifact.exists());
-        assert!(output_dir.join("best.tflite").exists());
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn move_artifact_moves_int8_tflite_for_litert() {
-        let root = temp_dir("export-litert-int8");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        let source_artifact = source_dir.join("best_int8.tflite");
-        fs::write(&source_model, "model").expect("write source model");
-        fs::write(&source_artifact, "artifact").expect("write source artifact");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "litert",
-            "int8",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("move artifact");
-
-        assert!(moved);
-        assert!(!source_artifact.exists());
-        assert!(output_dir.join("best_int8.tflite").exists());
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn move_artifact_moves_w8a16_tflite_for_litert() {
-        let root = temp_dir("export-litert-w8a16");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        let source_artifact = source_dir.join("best_w8a16.tflite");
-        fs::write(&source_model, "model").expect("write source model");
-        fs::write(&source_artifact, "artifact").expect("write source artifact");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "litert",
-            "w8a16",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("move artifact");
-
-        assert!(moved);
-        assert!(!source_artifact.exists());
-        assert!(output_dir.join("best_w8a16.tflite").exists());
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn move_artifact_moves_w8a32_tflite_for_litert() {
-        let root = temp_dir("export-litert-w8a32");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        let source_artifact = source_dir.join("best_w8a32.tflite");
-        fs::write(&source_model, "model").expect("write source model");
-        fs::write(&source_artifact, "artifact").expect("write source artifact");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "litert",
-            "w8a32",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("move artifact");
-
-        assert!(moved);
-        assert!(!source_artifact.exists());
-        assert!(output_dir.join("best_w8a32.tflite").exists());
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn move_artifact_moves_plain_tflite_for_litert_fp32() {
-        let root = temp_dir("export-litert-fp32");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        let source_artifact = source_dir.join("best.tflite");
-        fs::write(&source_model, "model").expect("write source model");
-        fs::write(&source_artifact, "artifact").expect("write source artifact");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "litert",
-            "fp32",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("move artifact");
-
-        assert!(moved);
-        assert!(!source_artifact.exists());
-        assert!(output_dir.join("best.tflite").exists());
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn move_artifact_reports_missing_artifact() {
-        let root = temp_dir("export-missing");
-        let source_dir = root.join("source");
-        let output_dir = root.join("output");
-        fs::create_dir_all(&source_dir).expect("create source dir");
-        fs::create_dir_all(&output_dir).expect("create output dir");
-
-        let source_model = source_dir.join("best.pt");
-        fs::write(&source_model, "model").expect("write source model");
-
-        let moved = move_artifact(
-            &source_model.to_string_lossy(),
-            "onnx",
-            "",
-            &output_dir.to_string_lossy(),
-        )
-        .expect("missing artifact should not error");
-
-        assert!(!moved);
-
-        fs::remove_dir_all(root).expect("cleanup");
     }
 
     fn request_with_precision(
@@ -1020,6 +684,108 @@ mod tests {
         assert!(!args.iter().any(|arg| arg.starts_with("data=")));
         let _ =
             std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());
+    }
+
+    #[test]
+    fn discovery_contract_covers_every_supported_ultralytics_route() {
+        let cases = [
+            ("torchscript", "best.torchscript", "fp32", "torchscript"),
+            ("onnx", "best.onnx", "fp32", "onnx"),
+            ("engine", "best.engine", "fp32", "engine"),
+            ("litert", "best_int8.tflite", "int8", "litert"),
+            ("pb", "best.pb", "fp32", "pb"),
+            (
+                "edgetpu",
+                "best_edgetpu/nested_edgetpu.tflite",
+                "int8",
+                "edgetpu",
+            ),
+            ("mnn", "best.mnn", "fp32", "mnn"),
+            ("coreml", "best.mlpackage", "fp32", "coreml"),
+            ("openvino", "best_openvino_model", "fp32", "openvino"),
+            ("saved_model", "best_saved_model", "fp32", "saved_model"),
+            ("paddle", "best_paddle_model", "fp32", "paddle"),
+            ("ncnn", "best_ncnn_model", "fp32", "ncnn"),
+            ("rknn", "best_rknn_model", "int8", "rknn"),
+            ("imx", "best_imx", "int8", "imx"),
+            ("axelera", "best_axelera", "int8", "axelera"),
+            (
+                "executorch",
+                "best_executorch/model.pte",
+                "fp32",
+                "executorch",
+            ),
+        ];
+        for (route, relative_output, precision, expected_format) in cases {
+            let request = request_with_precision(
+                &format!("ultralytics.pt.{}", route),
+                precision,
+                None,
+                if route == "rknn" { "rk3588" } else { "" },
+            );
+            let source = PathBuf::from(&request.source_path);
+            let root = source.parent().expect("source parent");
+            let before = snapshot_outputs(&request).expect("snapshot route outputs");
+            let output = root.join(relative_output);
+            if let Some(parent) = output.parent() {
+                fs::create_dir_all(parent).expect("create nested output parent");
+            }
+            if route == "executorch" {
+                fs::create_dir_all(output.parent().expect("ExecuTorch bundle parent"))
+                    .expect("create bundle");
+                fs::write(&output, b"artifact").expect("write artifact");
+            } else if route != "coreml" && output.extension().is_some() {
+                fs::write(&output, b"artifact").expect("write artifact");
+            } else {
+                fs::create_dir_all(&output).expect("create bundle");
+                if route == "coreml" {
+                    fs::write(output.join("metadata.json"), b"bundle").expect("write package");
+                } else if route == "executorch" {
+                    fs::write(output.join("model.pte"), b"bundle").expect("write package");
+                }
+            }
+            let descriptors = discover_artifacts(&request, &before).expect("discover route output");
+            assert_eq!(descriptors[0].format, expected_format);
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn discovery_ignores_stale_top_level_artifact() {
+        let request = request_with_precision("ultralytics.pt.onnx", "fp16", None, "");
+        let source = PathBuf::from(&request.source_path);
+        let root = source.parent().expect("source parent");
+        fs::write(root.join("best.onnx"), b"old").expect("write stale artifact");
+        let before = snapshot_outputs(&request).expect("snapshot stale artifact");
+        fs::write(root.join("best_fp16.onnx"), b"new").expect("write fresh artifact");
+        let descriptors = discover_artifacts(&request, &before).expect("discover fresh artifact");
+        assert_eq!(descriptors.len(), 1);
+        assert!(descriptors[0].source_path.ends_with("best_fp16.onnx"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn discovery_rejects_wrong_top_level_kind() {
+        let cases = [
+            ("onnx", "best.onnx", true),
+            ("openvino", "best_openvino_model", false),
+            ("coreml", "best.mlpackage", false),
+        ];
+        for (route, name, expected_file) in cases {
+            let request =
+                request_with_precision(&format!("ultralytics.pt.{}", route), "fp32", None, "");
+            let source = PathBuf::from(&request.source_path);
+            let root = source.parent().expect("source parent");
+            let before = snapshot_outputs(&request).expect("snapshot route outputs");
+            let output = root.join(name);
+            if expected_file {
+                fs::create_dir_all(&output).expect("create wrong directory kind");
+            } else {
+                fs::write(&output, b"wrong kind").expect("create wrong file kind");
+            }
+            assert!(discover_artifacts(&request, &before).is_err());
+            let _ = fs::remove_dir_all(root);
+        }
     }
 
     #[test]

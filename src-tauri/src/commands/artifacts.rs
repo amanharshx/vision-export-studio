@@ -106,10 +106,6 @@ fn next_run(
     stem: &str,
     descriptors: &[ArtifactDescriptor],
 ) -> Result<u32, String> {
-    let expected = descriptors
-        .iter()
-        .filter_map(|descriptor| descriptor.variant.as_deref())
-        .collect::<Vec<_>>();
     let family = family_prefix(stem, &descriptors[0]);
     let entries = match fs::read_dir(destination) {
         Ok(entries) => entries,
@@ -122,12 +118,7 @@ fn next_run(
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        let Some(run) = parse_family_run(
-            name,
-            &family,
-            &expected,
-            descriptors[0].extension.as_deref(),
-        ) else {
+        let Some(run) = parse_family_run(&path, name, &family, descriptors) else {
             continue;
         };
         highest = highest.max(run);
@@ -147,37 +138,47 @@ fn family_prefix(stem: &str, descriptor: &ArtifactDescriptor) -> String {
 }
 
 fn parse_family_run(
+    path: &Path,
     name: &str,
     family: &str,
-    variants: &[&str],
-    extension: Option<&str>,
+    descriptors: &[ArtifactDescriptor],
 ) -> Option<u32> {
-    let without_extension = extension
-        .and_then(|extension| name.strip_suffix(&format!(".{}", extension)))
-        .unwrap_or(name);
-    if !variants.is_empty() {
-        let variant = variants
-            .iter()
-            .find(|variant| without_extension.ends_with(&format!("_{}", variant)))?;
-        let suffix = format!("_{}", variant);
+    for descriptor in descriptors {
+        let kind_matches = match descriptor.kind {
+            ArtifactKind::File => path.is_file(),
+            ArtifactKind::Directory => path.is_dir(),
+        };
+        if !kind_matches {
+            continue;
+        }
+        let without_extension = match descriptor.extension.as_deref() {
+            Some(extension) => name.strip_suffix(&format!(".{}", extension))?,
+            None if path.extension().is_none() => name,
+            None => continue,
+        };
         if !without_extension.starts_with(family) {
-            return None;
+            continue;
+        }
+        let suffix = descriptor
+            .variant
+            .as_deref()
+            .map(|variant| format!("_{}", variant))
+            .unwrap_or_default();
+        if !without_extension.ends_with(&suffix) {
+            continue;
         }
         let run_part = without_extension
             .strip_prefix(family)?
             .strip_suffix(&suffix)?
             .strip_prefix('_')
             .unwrap_or("");
-        if run_part.is_empty() {
-            return Some(1);
-        }
-        return run_part.parse().ok();
+        return if run_part.is_empty() {
+            Some(1)
+        } else {
+            run_part.parse().ok()
+        };
     }
-    let remainder = without_extension.strip_prefix(family)?;
-    if remainder.is_empty() {
-        return Some(1);
-    }
-    remainder.strip_prefix('_')?.parse().ok()
+    None
 }
 
 fn publish_one(source: &Path, target: &Path, kind: &ArtifactKind) -> Result<(), String> {
@@ -292,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn allocates_shared_run_for_set_and_reallocates_after_final_collision() {
+    fn allocates_shared_run_for_set() {
         let root = temp_dir("set");
         let source = root.join("checkpoint.pth");
         fs::write(&source, b"checkpoint").unwrap();
@@ -324,6 +325,38 @@ mod tests {
         assert_eq!(publication.run, 1);
         assert!(root.join("checkpoint_tflite_int8_fp32.tflite").exists());
         assert!(root.join("checkpoint_tflite_int8_fp16.tflite").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scanner_requires_exact_extension_and_top_level_kind() {
+        let root = temp_dir("kind-scan");
+        let source = root.join("best.pt");
+        fs::write(&source, b"checkpoint").unwrap();
+        fs::write(root.join("best_onnx_fp32"), b"wrong kind").unwrap();
+        fs::write(root.join("best_onnx_fp32.pb"), b"wrong extension").unwrap();
+        let upstream = root.join("upstream.onnx");
+        fs::write(&upstream, b"artifact").unwrap();
+        let publication =
+            publish_artifacts(&source, &root, &[file_descriptor(&upstream, "fp32")]).unwrap();
+        assert_eq!(publication.run, 1);
+        assert!(root.join("best_onnx_fp32.onnx").exists());
+
+        let bundle = root.join("bundle");
+        fs::create_dir_all(&bundle).unwrap();
+        let bundle_descriptor = ArtifactDescriptor {
+            source_path: bundle,
+            kind: ArtifactKind::Directory,
+            format: "saved_model".into(),
+            qualifier: None,
+            precision_or_profile: "fp32".into(),
+            variant: None,
+            extension: None,
+        };
+        fs::write(root.join("best_saved_model_fp32"), b"wrong kind").unwrap();
+        let publication = publish_artifacts(&source, &root, &[bundle_descriptor]).unwrap();
+        assert_eq!(publication.run, 2);
+        assert!(root.join("best_saved_model_fp32_2").is_dir());
         let _ = fs::remove_dir_all(root);
     }
 

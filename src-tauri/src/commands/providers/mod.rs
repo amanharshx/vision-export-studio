@@ -32,12 +32,6 @@ pub struct ExportRequest {
     pub staging_dir: Option<String>,
 }
 
-#[cfg(test)]
-pub struct ArtifactStatus {
-    pub artifact_moved: bool,
-    pub artifact_warning: Option<String>,
-}
-
 pub fn build_command(
     request: &ExportRequest,
     app_handle: &tauri::AppHandle,
@@ -45,14 +39,5 @@ pub fn build_command(
     match request.provider {
         ProviderId::Ultralytics => ultralytics::build_command(request),
         ProviderId::RfDetr => rfdetr::build_command(request, app_handle),
-    }
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-pub fn confirm_artifacts(request: &ExportRequest) -> ArtifactStatus {
-    match request.provider {
-        ProviderId::Ultralytics => ultralytics::confirm_artifacts(request),
-        ProviderId::RfDetr => rfdetr::confirm_artifacts(request),
     }
 }
