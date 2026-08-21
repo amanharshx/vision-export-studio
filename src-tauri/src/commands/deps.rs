@@ -788,18 +788,7 @@ fn parse_rfdetr_probe_output(
             install_package: None,
         }];
     }
-    definition
-        .distributions
-        .iter()
-        .map(|requirement| {
-            let installed = output
-                .distributions
-                .iter()
-                .find(|row| row.name == requirement.name)
-                .and_then(|row| row.version.as_deref());
-            versioned_rfdetr_result(requirement, installed)
-        })
-        .collect()
+    unreachable!("RF-DETR probe definition has unexpected distribution shape");
 }
 
 fn missing_rfdetr_module_result(module: &str) -> DepCheckResult {
