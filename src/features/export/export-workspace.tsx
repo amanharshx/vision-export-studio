@@ -403,11 +403,13 @@ export function getUltralyticsGroupStatus(
 ): Exclude<ProviderGroupStatus, "error"> {
   if (redetecting || (!envInfo && !envError)) return "loading";
   if (!envInfo) return "missing";
-  const pythonReady = Boolean(envInfo.python_version);
-  const yoloReady = Boolean(envInfo.yolo_path);
-  if (pythonReady && yoloReady) return "ready";
-  if (pythonReady || yoloReady) return "partial";
-  return "missing";
+  switch (envInfo.status) {
+    case "ok": return "ready";
+    case "partial": return "partial";
+    case "loading": return "loading";
+    case "missing":
+    case "error": return "missing";
+  }
 }
 
 export function getRfdetrGroupSummary(stacks: StackEnvironment[]): string {
@@ -440,13 +442,13 @@ function providerGroupIconColor(status: ProviderGroupStatus): string {
 export function ProviderGroup({
   title,
   summary,
-  status = summary.endsWith("error") ? "error" : "ready",
+  status,
   children,
   defaultExpanded = false,
 }: {
   title: string;
   summary: string;
-  status?: ProviderGroupStatus;
+  status: ProviderGroupStatus;
   children?: React.ReactNode;
   defaultExpanded?: boolean;
 }) {
@@ -469,6 +471,102 @@ export function ProviderGroup({
       </button>
       {expanded && <div className="space-y-3 px-1 pb-1 pt-2">{children}</div>}
     </section>
+  );
+}
+
+export function EnvironmentGroups({
+  envInfo,
+  envError,
+  redetecting,
+  managedRuntimeUpgradeNudge,
+  openManagedRuntimeUpgrade,
+  mayStartRuntimeUpgrade,
+  stacks,
+  defaultExpanded = false,
+}: {
+  envInfo: EnvironmentInfo | null;
+  envError: string | null;
+  redetecting: boolean;
+  managedRuntimeUpgradeNudge: string | null;
+  openManagedRuntimeUpgrade: () => void;
+  mayStartRuntimeUpgrade: boolean;
+  stacks: StackEnvironment[];
+  defaultExpanded?: boolean;
+}) {
+  const ultralyticsGroupStatus = getUltralyticsGroupStatus(envInfo, envError, redetecting);
+  const ultralyticsGroupSummary = ultralyticsGroupStatus[0].toUpperCase() + ultralyticsGroupStatus.slice(1);
+  const rfdetrGroupSummary = getRfdetrGroupSummary(stacks);
+
+  return (
+    <>
+      <ProviderGroup
+        title="Ultralytics YOLO"
+        summary={ultralyticsGroupSummary}
+        status={ultralyticsGroupStatus}
+        defaultExpanded={defaultExpanded}
+      >
+        <EnvCard
+          title="Python"
+          status={
+            redetecting || (!envInfo && !envError)
+              ? "loading"
+              : envError || !envInfo?.python_version
+                ? "error"
+                : "ok"
+          }
+          version={envInfo?.python_version || (envError ? "Error" : "...")}
+          path={envInfo?.python_path}
+          hint={
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <CircleHelp className="h-3 w-3 text-zinc-300 transition-colors hover:text-zinc-500" />
+                </TooltipTrigger>
+                <TooltipContent side="top" className="whitespace-nowrap">
+                  Recommended: Python 3.12 (3.10&ndash;3.13 supported)
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          }
+        >
+          {managedRuntimeUpgradeNudge && (
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
+              <span>{managedRuntimeUpgradeNudge}</span>
+              <Button size="sm" variant="outline" className="shrink-0" onClick={openManagedRuntimeUpgrade} disabled={!mayStartRuntimeUpgrade}>
+                Set up
+              </Button>
+            </div>
+          )}
+        </EnvCard>
+        <EnvCard
+          title="Ultralytics YOLO"
+          status={
+            redetecting || (!envInfo && !envError)
+              ? "loading"
+              : envInfo?.ultralytics_version
+                ? "ok"
+                : "error"
+          }
+          version={envInfo?.ultralytics_version || (redetecting ? "..." : "Not found")}
+          path={envInfo?.yolo_path || undefined}
+        />
+      </ProviderGroup>
+
+      <ProviderGroup
+        title="Roboflow RF-DETR"
+        summary={rfdetrGroupSummary}
+        status={stacks.some((stack) => stack.python_version.status !== "available") ? "error" : "ready"}
+        defaultExpanded={defaultExpanded}
+      >
+        {stacks.length > 0 ? (
+          <StackEnvironmentCards stacks={stacks} />
+        ) : (
+          <p className="rounded-xl border border-dashed border-zinc-300 bg-white/60 px-4 py-3 text-xs text-zinc-500">
+            No RF-DETR environments installed
+          </p>
+        )}
+      </ProviderGroup>
+    </>
   );
 }
 
@@ -700,10 +798,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     managedRuntimeUpgrade,
     mayStartRuntimeUpgrade,
   );
-  const ultralyticsGroupStatus = getUltralyticsGroupStatus(envInfo, envError, redetecting);
-  const ultralyticsGroupSummary = ultralyticsGroupStatus[0].toUpperCase() + ultralyticsGroupStatus.slice(1);
-  const rfdetrGroupSummary = getRfdetrGroupSummary(stackEnvironments);
-
   // Ref to current sessionId for use inside event listener closures
   const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = sessionId;
@@ -1660,71 +1754,15 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                 Status
               </p>
 
-              <ProviderGroup
-                title="Ultralytics YOLO"
-                summary={ultralyticsGroupSummary}
-                status={ultralyticsGroupStatus}
-              >
-                <EnvCard
-                  title="Python"
-                  status={
-                    redetecting || (!envInfo && !envError)
-                      ? "loading"
-                      : envError || !envInfo?.python_version
-                        ? "error"
-                        : "ok"
-                  }
-                  version={envInfo?.python_version || (envError ? "Error" : "...")}
-                  path={envInfo?.python_path}
-                  hint={
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <CircleHelp className="h-3 w-3 text-zinc-300 transition-colors hover:text-zinc-500" />
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="whitespace-nowrap">
-                          Recommended: Python 3.12 (3.10&ndash;3.13 supported)
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  }
-                >
-                  {managedRuntimeUpgradeNudge && (
-                    <div className="mt-3 flex items-center justify-between gap-3 rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
-                      <span>{managedRuntimeUpgradeNudge}</span>
-                      <Button size="sm" variant="outline" className="shrink-0" onClick={openManagedRuntimeUpgrade} disabled={!mayStartRuntimeUpgrade}>
-                        Set up
-                      </Button>
-                    </div>
-                  )}
-                </EnvCard>
-                <EnvCard
-                  title="Ultralytics YOLO"
-                  status={
-                    redetecting || (!envInfo && !envError)
-                      ? "loading"
-                      : envInfo?.ultralytics_version
-                        ? "ok"
-                        : "error"
-                  }
-                  version={envInfo?.ultralytics_version || (redetecting ? "..." : "Not found")}
-                  path={envInfo?.yolo_path || undefined}
-                />
-              </ProviderGroup>
-
-              <ProviderGroup
-                title="Roboflow RF-DETR"
-                summary={rfdetrGroupSummary}
-                status={stackEnvironments.some((stack) => stack.python_version.status !== "available") ? "error" : "ready"}
-              >
-                {stackEnvironments.length > 0 ? (
-                  <StackEnvironmentCards stacks={stackEnvironments} />
-                ) : (
-                  <p className="rounded-xl border border-dashed border-zinc-300 bg-white/60 px-4 py-3 text-xs text-zinc-500">
-                    No RF-DETR environments installed
-                  </p>
-                )}
-              </ProviderGroup>
+              <EnvironmentGroups
+                envInfo={envInfo}
+                envError={envError}
+                redetecting={redetecting}
+                managedRuntimeUpgradeNudge={managedRuntimeUpgradeNudge}
+                openManagedRuntimeUpgrade={openManagedRuntimeUpgrade}
+                mayStartRuntimeUpgrade={mayStartRuntimeUpgrade}
+                stacks={stackEnvironments}
+              />
             </div>
 
             {/* Configuration */}

@@ -4,6 +4,7 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   EnvCard,
+  EnvironmentGroups,
   ProviderGroup,
   StackEnvironmentCards,
   getRfdetrGroupSummary,
@@ -86,25 +87,28 @@ describe("provider groups", () => {
 
   test("renders exactly two named groups collapsed by default", () => {
     const html = renderToStaticMarkup(
-      React.createElement(
-        React.Fragment,
-        null,
-        React.createElement(ProviderGroup, { title: "Ultralytics YOLO", summary: "Ready" }, "Python"),
-        React.createElement(ProviderGroup, { title: "Roboflow RF-DETR", summary: "0 installed · ready" }, "RF-DETR"),
-      ),
+      React.createElement(EnvironmentGroups, {
+        envInfo: env,
+        envError: null,
+        redetecting: false,
+        managedRuntimeUpgradeNudge: null,
+        openManagedRuntimeUpgrade: () => {},
+        mayStartRuntimeUpgrade: true,
+        stacks: [],
+      }),
     );
     expect((html.match(/Ultralytics YOLO/g) ?? []).length).toBe(1);
     expect((html.match(/Roboflow RF-DETR/g) ?? []).length).toBe(1);
     expect(html).toContain('aria-expanded="false"');
-    expect(html).not.toContain(">Python<");
-    expect(html).not.toContain(">RF-DETR<");
+    expect(html).not.toContain(">3.12.12<");
+    expect(html).not.toContain("No RF-DETR environments installed");
   });
 
   test("expanded group renders children and uses aria-expanded true", () => {
     const html = renderToStaticMarkup(
       React.createElement(
         ProviderGroup,
-        { title: "Ultralytics YOLO", summary: "Ready", defaultExpanded: true },
+        { title: "Ultralytics YOLO", summary: "Ready", status: "ready", defaultExpanded: true },
         React.createElement("span", null, "Python details"),
       ),
     );
@@ -114,11 +118,16 @@ describe("provider groups", () => {
 
   test("RF-DETR empty state has no phantom cards", () => {
     const html = renderToStaticMarkup(
-      React.createElement(
-        ProviderGroup,
-        { title: "Roboflow RF-DETR", summary: getRfdetrGroupSummary([]), defaultExpanded: true },
-        React.createElement("p", null, "No RF-DETR environments installed"),
-      ),
+      React.createElement(EnvironmentGroups, {
+        envInfo: env,
+        envError: null,
+        redetecting: false,
+        managedRuntimeUpgradeNudge: null,
+        openManagedRuntimeUpgrade: () => {},
+        mayStartRuntimeUpgrade: true,
+        stacks: [],
+        defaultExpanded: true,
+      }),
     );
     expect(html).toContain("No RF-DETR environments installed");
     expect(html).not.toContain("RF-DETR TensorRT");
@@ -127,8 +136,9 @@ describe("provider groups", () => {
   test("aggregate state reports loading, ready, partial, and missing", () => {
     expect(getUltralyticsGroupStatus(null, null, false)).toBe("loading");
     expect(getUltralyticsGroupStatus(env, null, false)).toBe("ready");
-    expect(getUltralyticsGroupStatus({ ...env, yolo_path: "" }, null, false)).toBe("partial");
-    expect(getUltralyticsGroupStatus({ ...env, python_version: "", yolo_path: "" }, null, false)).toBe("missing");
+    expect(getUltralyticsGroupStatus({ ...env, status: "partial", ultralytics_version: "" }, null, false)).toBe("partial");
+    expect(getUltralyticsGroupStatus({ ...env, status: "partial", yolo_path: "" }, null, false)).toBe("partial");
+    expect(getUltralyticsGroupStatus({ ...env, status: "missing", python_version: "", yolo_path: "" }, null, false)).toBe("missing");
     expect(getUltralyticsGroupStatus(null, "detect failed", false)).toBe("missing");
   });
 
