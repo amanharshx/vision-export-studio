@@ -737,6 +737,30 @@ fn parse_rfdetr_probe_output(
         return fail("probe returned incomplete or duplicate distribution rows".to_string());
     }
     if let Some(row) = output.modules.iter().find(|row| !row.present) {
+        if route_id == "rfdetr.pth.executorch" && row.name == "torch" {
+            return definition
+                .distributions
+                .iter()
+                .map(|requirement| {
+                    if requirement.name == "torch" {
+                        DepCheckResult {
+                            item: "torch>=2.13".to_string(),
+                            status: "missing_package".to_string(),
+                            reason: "module 'torch' is not available".to_string(),
+                            install_hint: "pip install \"torch>=2.13\"".to_string(),
+                            install_package: Some("torch>=2.13".to_string()),
+                        }
+                    } else {
+                        let installed = output
+                            .distributions
+                            .iter()
+                            .find(|distribution| distribution.name == requirement.name)
+                            .and_then(|distribution| distribution.version.as_deref());
+                        versioned_rfdetr_result(requirement, installed)
+                    }
+                })
+                .collect();
+        }
         return fail(format!("module '{}' is not available", row.name));
     }
     for requirement in definition.distributions {
@@ -1922,27 +1946,6 @@ mod tests {
     }
 
     #[test]
-    fn injected_rfdetr_and_torch_versions_below_executorch_floors_are_installable() {
-        let result = parse_rfdetr_probe_output(
-            "rfdetr.pth.executorch",
-            r#"{"modules":[{"name":"rfdetr","present":true},{"name":"executorch.exir","present":true},{"name":"torch","present":true}],"distributions":[{"name":"rfdetr","version":"1.8.9"},{"name":"torch","version":"2.12.1"}]}"#,
-            "pip install \"rfdetr[executorch]>=1.9.0\"",
-            "rfdetr[executorch]>=1.9.0",
-        );
-
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].status, "version_too_old");
-        assert_eq!(result[0].item, "rfdetr[executorch]>=1.9.0");
-        assert_eq!(
-            result[0].install_package.as_deref(),
-            Some("rfdetr[executorch]>=1.9.0")
-        );
-        assert_eq!(result[1].status, "version_too_old");
-        assert_eq!(result[1].item, "torch>=2.13");
-        assert_eq!(result[1].install_package.as_deref(), Some("torch>=2.13"));
-    }
-
-    #[test]
     fn executorch_probe_preserves_two_dependency_rows_for_each_state() {
         let modules = r#"[{"name":"rfdetr","present":true},{"name":"executorch.exir","present":true},{"name":"torch","present":true}]"#;
         let rows = |rfdetr: &str, torch: &str| {
@@ -1977,6 +1980,25 @@ mod tests {
         assert_eq!(missing_torch[1].item, "torch>=2.13");
         assert_eq!(
             missing_torch[1].install_package.as_deref(),
+            Some("torch>=2.13")
+        );
+
+        let missing_torch_module = parse_rfdetr_probe_output(
+            "rfdetr.pth.executorch",
+            r#"{"modules":[{"name":"rfdetr","present":true},{"name":"executorch.exir","present":true},{"name":"torch","present":false}],"distributions":[{"name":"rfdetr","version":"1.9.0"},{"name":"torch","version":"2.13"}]}"#,
+            "pip install \"rfdetr[executorch]>=1.9.0\"",
+            "rfdetr[executorch]>=1.9.0",
+        );
+        assert_eq!(missing_torch_module.len(), 2);
+        assert_eq!(missing_torch_module[0].status, "ready");
+        assert_eq!(missing_torch_module[1].status, "missing_package");
+        assert_eq!(missing_torch_module[1].item, "torch>=2.13");
+        assert_eq!(
+            missing_torch_module[1].install_hint,
+            "pip install \"torch>=2.13\""
+        );
+        assert_eq!(
+            missing_torch_module[1].install_package.as_deref(),
             Some("torch>=2.13")
         );
 
