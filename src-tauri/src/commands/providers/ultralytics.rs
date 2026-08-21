@@ -34,9 +34,10 @@ pub fn snapshot_outputs(request: &ExportRequest) -> Result<Vec<OutputFingerprint
         .map(|paths| paths.into_iter().map(|path| fingerprint(&path)).collect())
 }
 
-pub fn discover_artifacts(
+pub fn discover_artifacts_with_evidence(
     request: &ExportRequest,
     before: &[OutputFingerprint],
+    export_output: Option<&str>,
 ) -> Result<Vec<ArtifactDescriptor>, String> {
     let source = Path::new(&request.source_path);
     let parent = source
@@ -63,7 +64,7 @@ pub fn discover_artifacts(
             candidates.len()
         ));
     }
-    validate_named_precision(&candidates[0], &request.precision)?;
+    validate_effective_precision(request, &candidates[0], export_output)?;
     let (format, kind, extension) = ultralytics_artifact_contract(&request.route_id)?;
     Ok(vec![ArtifactDescriptor {
         source_path: candidates[0].clone(),
@@ -102,6 +103,103 @@ fn validate_named_precision(path: &Path, requested: &str) -> Result<(), String> 
         }
     }
     Ok(())
+}
+
+fn validate_effective_precision(
+    request: &ExportRequest,
+    path: &Path,
+    export_output: Option<&str>,
+) -> Result<(), String> {
+    match request.route_id.as_str() {
+        "ultralytics.pt.onnx" if export_output.is_some() => {
+            let output = export_output.unwrap_or_default();
+            let produced = match parse_onnx_precision_evidence(output) {
+                Some(produced) => produced,
+                None => inspect_onnx_precision(request, path)?,
+            };
+            compare_precision(&request.precision, produced)
+        }
+        "ultralytics.pt.engine" if export_output.is_some() => {
+            let produced = export_output.unwrap_or_default().lines().find_map(|line| {
+                let line = line.to_lowercase();
+                if line.contains("building int8 engine") {
+                    Some("int8")
+                } else if line.contains("building fp16 engine") {
+                    Some("fp16")
+                } else if line.contains("building fp32 engine") {
+                    Some("fp32")
+                } else {
+                    None
+                }
+            });
+            let produced = produced.ok_or_else(|| {
+                "effective precision evidence missing: TensorRT build precision was not reported"
+                    .to_string()
+            })?;
+            compare_precision(&request.precision, produced)
+        }
+        _ => validate_named_precision(path, &request.precision),
+    }
+}
+
+fn parse_onnx_precision_evidence(export_output: &str) -> Option<&'static str> {
+    let output = export_output.to_lowercase();
+    if output.contains("fp16 conversion failure") {
+        Some("fp32")
+    } else if output.contains("converting to fp16") {
+        Some("fp16")
+    } else {
+        None
+    }
+}
+
+fn compare_precision(requested: &str, produced: &str) -> Result<(), String> {
+    if requested == produced {
+        Ok(())
+    } else {
+        Err(format!(
+            "effective precision mismatch: requested {}, produced {}",
+            requested, produced
+        ))
+    }
+}
+
+fn inspect_onnx_precision(request: &ExportRequest, path: &Path) -> Result<&'static str, String> {
+    let script = r#"
+import onnx
+import sys
+
+model = onnx.load(sys.argv[1])
+types = {initializer.data_type for initializer in model.graph.initializer}
+ops = {node.op_type for node in model.graph.node}
+if 10 in types:
+    print("fp16")
+elif 3 in types or 2 in types or {"QuantizeLinear", "DequantizeLinear"} & ops:
+    print("int8")
+else:
+    print("fp32")
+"#;
+    let output = std::process::Command::new(&request.python_path)
+        .arg("-c")
+        .arg(script)
+        .arg(path)
+        .output()
+        .map_err(|error| format!("failed to inspect ONNX precision: {}", error))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to inspect ONNX precision: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    match String::from_utf8_lossy(&output.stdout).trim() {
+        "fp16" => Ok("fp16"),
+        "int8" => Ok("int8"),
+        "fp32" => Ok("fp32"),
+        produced => Err(format!(
+            "failed to inspect ONNX precision: unexpected result {}",
+            produced
+        )),
+    }
 }
 
 fn fingerprint(path: &Path) -> OutputFingerprint {
@@ -373,7 +471,7 @@ pub fn build_command(request: &ExportRequest) -> Result<Command, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::discover_artifacts;
+    use super::discover_artifacts_with_evidence;
     use super::snapshot_outputs;
     use super::validate_output_destination;
     use std::fs;
@@ -684,7 +782,7 @@ mod tests {
     fn discovery_contract_covers_every_supported_ultralytics_route() {
         let cases = [
             ("torchscript", "best.torchscript", "fp32", "torchscript"),
-            ("onnx", "best.onnx", "fp16", "onnx"),
+            ("onnx", "best.onnx", "fp32", "onnx"),
             ("engine", "best.engine", "fp32", "engine"),
             ("litert", "best_int8.tflite", "int8", "litert"),
             ("pb", "best.pb", "fp32", "pb"),
@@ -738,7 +836,8 @@ mod tests {
                     fs::write(output.join("model.pte"), b"bundle").expect("write package");
                 }
             }
-            let descriptors = discover_artifacts(&request, &before).expect("discover route output");
+            let descriptors = discover_artifacts_with_evidence(&request, &before, None)
+                .expect("discover route output");
             assert_eq!(descriptors[0].format, expected_format);
             let _ = fs::remove_dir_all(root);
         }
@@ -752,7 +851,8 @@ mod tests {
         fs::write(root.join("best.onnx"), b"old").expect("write stale artifact");
         let before = snapshot_outputs(&request).expect("snapshot stale artifact");
         fs::write(root.join("best.onnx"), b"new").expect("write fresh artifact");
-        let descriptors = discover_artifacts(&request, &before).expect("discover fresh artifact");
+        let descriptors = discover_artifacts_with_evidence(&request, &before, None)
+            .expect("discover fresh artifact");
         assert_eq!(descriptors.len(), 1);
         assert!(descriptors[0].source_path.ends_with("best.onnx"));
         let _ = fs::remove_dir_all(root);
@@ -771,7 +871,14 @@ mod tests {
             let root = source.parent().expect("source parent");
             let before = snapshot_outputs(&request).expect("snapshot route outputs");
             fs::write(root.join(filename), b"artifact").expect("write artifact");
-            let descriptors = discover_artifacts(&request, &before)
+            let evidence = if route == "onnx" {
+                "ONNX: converting to FP16..."
+            } else if precision == "fp16" {
+                "TensorRT: building FP16 engine as best.engine"
+            } else {
+                "TensorRT: building INT8 engine as best.engine"
+            };
+            let descriptors = discover_artifacts_with_evidence(&request, &before, Some(evidence))
                 .expect("discover precisionless upstream artifact");
             assert_eq!(descriptors[0].precision_or_profile, precision);
             let _ = fs::remove_dir_all(root);
@@ -797,7 +904,7 @@ mod tests {
             } else {
                 fs::write(&output, b"wrong kind").expect("create wrong file kind");
             }
-            assert!(discover_artifacts(&request, &before).is_err());
+            assert!(discover_artifacts_with_evidence(&request, &before, None).is_err());
             let _ = fs::remove_dir_all(root);
         }
     }
@@ -823,8 +930,53 @@ mod tests {
         request.source_path = source.to_string_lossy().into_owned();
         let before = snapshot_outputs(&request).expect("snapshot outputs");
         std::fs::write(root.join("best_int8.onnx"), b"artifact").expect("write artifact");
-        let error = discover_artifacts(&request, &before).expect_err("mismatch must fail");
+        let error = discover_artifacts_with_evidence(&request, &before, None)
+            .expect_err("mismatch must fail");
         assert!(error.contains("requested fp16, produced int8"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn precision_evidence_rejects_onnx_fallback_and_tensorrt_downgrade() {
+        for (route, precision, filename, evidence, expected) in [
+            (
+                "onnx",
+                "fp16",
+                "best.onnx",
+                "ONNX: FP16 conversion failure: unsupported operator",
+                "produced fp32",
+            ),
+            (
+                "engine",
+                "fp16",
+                "best.engine",
+                "TensorRT: building FP32 engine as best.engine",
+                "produced fp32",
+            ),
+        ] {
+            let request =
+                request_with_precision(&format!("ultralytics.pt.{}", route), precision, None, "");
+            let source = PathBuf::from(&request.source_path);
+            let root = source.parent().expect("source parent");
+            let before = snapshot_outputs(&request).expect("snapshot route outputs");
+            fs::write(root.join(filename), b"artifact").expect("write artifact");
+            let error = discover_artifacts_with_evidence(&request, &before, Some(evidence))
+                .expect_err("precision downgrade must fail");
+            assert!(error.contains(expected), "unexpected error: {}", error);
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn tensorrt_missing_precision_evidence_fails_closed() {
+        let request = request_with_precision("ultralytics.pt.engine", "fp16", None, "");
+        let source = PathBuf::from(&request.source_path);
+        let root = source.parent().expect("source parent");
+        let before = snapshot_outputs(&request).expect("snapshot route outputs");
+        fs::write(root.join("best.engine"), b"artifact").expect("write artifact");
+        let error = discover_artifacts_with_evidence(&request, &before, Some(""))
+            .expect_err("missing TensorRT evidence must fail");
+        assert!(error.contains("precision evidence missing"));
+        let _ = fs::remove_dir_all(root);
     }
 }

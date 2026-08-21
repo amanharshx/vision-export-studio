@@ -255,15 +255,21 @@ pub async fn start_export(
     // ------------------------------------------------------------------
     let sessions_arc = Arc::clone(&state.sessions);
     let staging_dirs_arc = Arc::clone(&state.staging_dirs);
+    let export_output = Arc::new(Mutex::new(String::new()));
 
     // stdout reader thread
     let ah_stdout = app_handle.clone();
     let sid_stdout = session_id.clone();
+    let output_stdout = Arc::clone(&export_output);
     let stdout_handle = std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
             match line {
                 Ok(l) => {
+                    if let Ok(mut output) = output_stdout.lock() {
+                        output.push_str(&l);
+                        output.push('\n');
+                    }
                     let _ = ah_stdout.emit(
                         "export:stdout",
                         ExportLinePayload {
@@ -280,11 +286,16 @@ pub async fn start_export(
     // stderr reader thread
     let ah_stderr = app_handle.clone();
     let sid_stderr = session_id.clone();
+    let output_stderr = Arc::clone(&export_output);
     let stderr_handle = std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
         for line in reader.lines() {
             match line {
                 Ok(l) => {
+                    if let Ok(mut output) = output_stderr.lock() {
+                        output.push_str(&l);
+                        output.push('\n');
+                    }
                     let _ = ah_stderr.emit(
                         "export:stderr",
                         ExportLinePayload {
@@ -303,6 +314,7 @@ pub async fn start_export(
     let sid_wait = session_id.clone();
     let request_wait = request.clone();
     let pre_snapshot_wait = pre_snapshot.clone();
+    let export_output_wait = Arc::clone(&export_output);
     std::thread::spawn(move || {
         let mut operation_guard = Some(operation_guard);
         // Wait for both stream readers to finish.
@@ -399,27 +411,33 @@ pub async fn start_export(
                             }
                         } else {
                             let before = pre_snapshot_wait.as_deref().unwrap_or(&[]);
-                            let descriptors = match providers::ultralytics::discover_artifacts(
-                                &request_wait,
-                                before,
-                            ) {
-                                Ok(descriptors) => descriptors,
-                                Err(error) => {
-                                    emit_after_operation_released(
-                                        operation_guard.take().unwrap(),
-                                        || {
-                                            let _ = ah_wait.emit(
-                                                "export:failed",
-                                                ExportFailedPayload {
-                                                    session_id: sid_wait.clone(),
-                                                    error,
-                                                },
-                                            );
-                                        },
-                                    );
-                                    return;
-                                }
-                            };
+                            let evidence = export_output_wait
+                                .lock()
+                                .map(|output| output.clone())
+                                .unwrap_or_default();
+                            let descriptors =
+                                match providers::ultralytics::discover_artifacts_with_evidence(
+                                    &request_wait,
+                                    before,
+                                    Some(&evidence),
+                                ) {
+                                    Ok(descriptors) => descriptors,
+                                    Err(error) => {
+                                        emit_after_operation_released(
+                                            operation_guard.take().unwrap(),
+                                            || {
+                                                let _ = ah_wait.emit(
+                                                    "export:failed",
+                                                    ExportFailedPayload {
+                                                        session_id: sid_wait.clone(),
+                                                        error,
+                                                    },
+                                                );
+                                            },
+                                        );
+                                        return;
+                                    }
+                                };
                             match publish_artifacts(
                                 Path::new(&request_wait.source_path),
                                 Path::new(&request_wait.output_dir),
