@@ -32,7 +32,7 @@ import type {
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, FileBox, FolderOpen, Info, RefreshCw, RotateCcw, X, CircleHelp, Loader2 } from "lucide-react";
+import { ArrowLeft, ChevronDown, FileBox, FolderOpen, Info, RefreshCw, RotateCcw, X, CircleHelp, Loader2, BadgeCheck, CircleX, CircleDashed, TriangleAlert } from "lucide-react";
 import { UpdateChecker } from "@/components/update-checker";
 import {
   Sheet,
@@ -394,6 +394,83 @@ function isRfDetrExportReady(
 }
 
 type EnvCardStatus = "ok" | "error" | "loading";
+export type ProviderGroupStatus = "ready" | "partial" | "missing" | "loading" | "error";
+
+export function getUltralyticsGroupStatus(
+  envInfo: EnvironmentInfo | null,
+  envError: string | null,
+  redetecting: boolean,
+): Exclude<ProviderGroupStatus, "error"> {
+  if (redetecting || (!envInfo && !envError)) return "loading";
+  if (!envInfo) return "missing";
+  const pythonReady = Boolean(envInfo.python_version);
+  const yoloReady = Boolean(envInfo.yolo_path);
+  if (pythonReady && yoloReady) return "ready";
+  if (pythonReady || yoloReady) return "partial";
+  return "missing";
+}
+
+export function getRfdetrGroupSummary(stacks: StackEnvironment[]): string {
+  const status = stacks.every((stack) => stack.python_version.status === "available")
+    ? "ready"
+    : "error";
+  return `${stacks.length} installed · ${status}`;
+}
+
+function providerGroupIcon(status: ProviderGroupStatus) {
+  switch (status) {
+    case "ready": return BadgeCheck;
+    case "partial": return TriangleAlert;
+    case "missing":
+    case "error": return CircleX;
+    case "loading": return CircleDashed;
+  }
+}
+
+function providerGroupIconColor(status: ProviderGroupStatus): string {
+  switch (status) {
+    case "ready": return "text-emerald-600";
+    case "partial": return "text-amber-500";
+    case "missing":
+    case "error": return "text-red-500";
+    case "loading": return "text-zinc-400";
+  }
+}
+
+export function ProviderGroup({
+  title,
+  summary,
+  status = summary.endsWith("error") ? "error" : "ready",
+  children,
+  defaultExpanded = false,
+}: {
+  title: string;
+  summary: string;
+  status?: ProviderGroupStatus;
+  children?: React.ReactNode;
+  defaultExpanded?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const Icon = providerGroupIcon(status);
+  return (
+    <section className="rounded-xl border border-zinc-200/80 bg-zinc-100/50 p-2">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-white/70"
+      >
+        <Icon className={`size-4 shrink-0 ${providerGroupIconColor(status)}`} aria-hidden="true" />
+        <span className="min-w-0 flex-1">
+          <span className="block text-[13px] font-semibold text-zinc-800">{title}</span>
+          <span className="block truncate text-[11px] text-zinc-500">{summary}</span>
+        </span>
+        <ChevronDown className={`size-4 shrink-0 text-zinc-400 transition-transform ${expanded ? "rotate-180" : ""}`} aria-hidden="true" />
+      </button>
+      {expanded && <div className="space-y-3 px-1 pb-1 pt-2">{children}</div>}
+    </section>
+  );
+}
 
 const ENV_CARD_PLACEHOLDERS = new Set(["Not found", "Error", "..."]);
 const ENV_CARD_MAX_VERSION_LENGTH = 32;
@@ -623,6 +700,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     managedRuntimeUpgrade,
     mayStartRuntimeUpgrade,
   );
+  const ultralyticsGroupStatus = getUltralyticsGroupStatus(envInfo, envError, redetecting);
+  const ultralyticsGroupSummary = ultralyticsGroupStatus[0].toUpperCase() + ultralyticsGroupStatus.slice(1);
+  const rfdetrGroupSummary = getRfdetrGroupSummary(stackEnvironments);
 
   // Ref to current sessionId for use inside event listener closures
   const sessionIdRef = useRef<string | null>(null);
@@ -1580,53 +1660,71 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                 Status
               </p>
 
-              <EnvCard
-                title="Python"
-                status={
-                  redetecting || (!envInfo && !envError)
-                    ? "loading"
-                    : envError || !envInfo?.python_version
-                      ? "error"
-                      : "ok"
-                }
-                version={envInfo?.python_version || (envError ? "Error" : "...")}
-                path={envInfo?.python_path}
-                hint={
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <CircleHelp className="h-3 w-3 text-zinc-300 transition-colors hover:text-zinc-500" />
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="whitespace-nowrap">
-                        Recommended: Python 3.12 (3.10&ndash;3.13 supported)
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                }
-              >
-                {managedRuntimeUpgradeNudge && (
-                  <div className="mt-3 flex items-center justify-between gap-3 rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
-                    <span>{managedRuntimeUpgradeNudge}</span>
-                    <Button size="sm" variant="outline" className="shrink-0" onClick={openManagedRuntimeUpgrade} disabled={!mayStartRuntimeUpgrade}>
-                      Set up
-                    </Button>
-                  </div>
-                )}
-              </EnvCard>
-
-              <EnvCard
+              <ProviderGroup
                 title="Ultralytics YOLO"
-                status={
-                  redetecting || (!envInfo && !envError)
-                    ? "loading"
-                    : envInfo?.ultralytics_version
-                      ? "ok"
-                      : "error"
-                }
-                version={envInfo?.ultralytics_version || (redetecting ? "..." : "Not found")}
-                path={envInfo?.yolo_path || undefined}
-              />
-              <StackEnvironmentCards stacks={stackEnvironments} />
+                summary={ultralyticsGroupSummary}
+                status={ultralyticsGroupStatus}
+              >
+                <EnvCard
+                  title="Python"
+                  status={
+                    redetecting || (!envInfo && !envError)
+                      ? "loading"
+                      : envError || !envInfo?.python_version
+                        ? "error"
+                        : "ok"
+                  }
+                  version={envInfo?.python_version || (envError ? "Error" : "...")}
+                  path={envInfo?.python_path}
+                  hint={
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <CircleHelp className="h-3 w-3 text-zinc-300 transition-colors hover:text-zinc-500" />
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="whitespace-nowrap">
+                          Recommended: Python 3.12 (3.10&ndash;3.13 supported)
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  }
+                >
+                  {managedRuntimeUpgradeNudge && (
+                    <div className="mt-3 flex items-center justify-between gap-3 rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
+                      <span>{managedRuntimeUpgradeNudge}</span>
+                      <Button size="sm" variant="outline" className="shrink-0" onClick={openManagedRuntimeUpgrade} disabled={!mayStartRuntimeUpgrade}>
+                        Set up
+                      </Button>
+                    </div>
+                  )}
+                </EnvCard>
+                <EnvCard
+                  title="Ultralytics YOLO"
+                  status={
+                    redetecting || (!envInfo && !envError)
+                      ? "loading"
+                      : envInfo?.ultralytics_version
+                        ? "ok"
+                        : "error"
+                  }
+                  version={envInfo?.ultralytics_version || (redetecting ? "..." : "Not found")}
+                  path={envInfo?.yolo_path || undefined}
+                />
+              </ProviderGroup>
+
+              <ProviderGroup
+                title="Roboflow RF-DETR"
+                summary={rfdetrGroupSummary}
+                status={stackEnvironments.some((stack) => stack.python_version.status !== "available") ? "error" : "ready"}
+              >
+                {stackEnvironments.length > 0 ? (
+                  <StackEnvironmentCards stacks={stackEnvironments} />
+                ) : (
+                  <p className="rounded-xl border border-dashed border-zinc-300 bg-white/60 px-4 py-3 text-xs text-zinc-500">
+                    No RF-DETR environments installed
+                  </p>
+                )}
+              </ProviderGroup>
             </div>
 
             {/* Configuration */}
