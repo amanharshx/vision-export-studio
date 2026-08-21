@@ -62,7 +62,7 @@ describe("StackEnvironmentCards", () => {
   test("renders one card for each returned stack", () => {
     const html = renderToStaticMarkup(React.createElement(StackEnvironmentCards, { stacks }));
     expect(html).toContain("RF-DETR");
-    expect(html).toContain("rfdetr 1.9.0");
+    expect(html).toContain("RF-DETR 1.9.0");
   });
 
   test("renders nothing when no stack environments exist", () => {

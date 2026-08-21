@@ -681,7 +681,7 @@ export function StackEnvironmentRow({
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] font-semibold text-zinc-800">{stack.display_name}</span>
           <span className={`block truncate font-mono text-[11px] ${status === "ok" ? "text-zinc-500" : "text-red-500"}`}>
-            rfdetr {packageVersion}
+            RF-DETR {packageVersion}
           </span>
         </span>
         <ChevronDown className={`size-4 shrink-0 text-zinc-400 transition-transform ${expanded ? "rotate-180" : ""}`} aria-hidden="true" />
@@ -693,11 +693,6 @@ export function StackEnvironmentRow({
             status={pythonAvailable ? "ok" : "error"}
             version={stack.python_version.status === "available" ? stack.python_version.version : "Unavailable"}
             path={stack.python_path}
-          />
-          <EnvCard
-            title="RF-DETR package"
-            status={packageAvailable ? "ok" : "error"}
-            version={packageVersion}
           />
           <p className={`px-1 text-[11px] ${status === "ok" ? "text-emerald-600" : "text-red-600"}`}>
             Status: {status === "ok" ? "Ready" : "Error"}
