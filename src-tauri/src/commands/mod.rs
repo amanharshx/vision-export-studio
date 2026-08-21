@@ -1,4 +1,5 @@
 pub mod app;
+pub mod artifacts;
 pub mod deps;
 pub mod environment;
 pub mod export;

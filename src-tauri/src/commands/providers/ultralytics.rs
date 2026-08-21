@@ -1,7 +1,244 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::{ArtifactStatus, ExportRequest};
+#[cfg(test)]
+use super::ArtifactStatus;
+use super::ExportRequest;
+use crate::commands::artifacts::{ArtifactDescriptor, ArtifactKind};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutputFingerprint {
+    pub path: PathBuf,
+    pub len: u64,
+    pub modified: Option<std::time::SystemTime>,
+}
+
+pub fn validate_output_destination(source: &Path, destination: &Path) -> Result<(), String> {
+    let source_dir = source
+        .parent()
+        .ok_or_else(|| "source has no parent directory".to_string())?;
+    let source_dir = std::fs::canonicalize(source_dir).unwrap_or_else(|_| source_dir.to_path_buf());
+    let destination =
+        std::fs::canonicalize(destination).unwrap_or_else(|_| destination.to_path_buf());
+    if source_dir == destination {
+        return Err(
+            "custom export destination must not equal source checkpoint directory".to_string(),
+        );
+    }
+    Ok(())
+}
+
+pub fn snapshot_outputs(request: &ExportRequest) -> Result<Vec<OutputFingerprint>, String> {
+    let parent = Path::new(&request.source_path)
+        .parent()
+        .ok_or_else(|| "source has no parent directory".to_string())?;
+    collect_route_outputs(request, parent)
+        .map(|paths| paths.into_iter().map(|path| fingerprint(&path)).collect())
+}
+
+pub fn discover_artifacts(
+    request: &ExportRequest,
+    before: &[OutputFingerprint],
+) -> Result<Vec<ArtifactDescriptor>, String> {
+    let source = Path::new(&request.source_path);
+    let parent = source
+        .parent()
+        .ok_or_else(|| "source has no parent directory".to_string())?;
+    let before_map = before
+        .iter()
+        .map(|item| (&item.path, item))
+        .collect::<std::collections::HashMap<_, _>>();
+    let candidates = collect_route_outputs(request, parent)?
+        .into_iter()
+        .filter(|path| match before_map.get(path) {
+            None => true,
+            Some(previous) => {
+                let current = fingerprint(path);
+                current.len != previous.len || current.modified != previous.modified
+            }
+        })
+        .collect::<Vec<_>>();
+    if candidates.len() != 1 {
+        return Err(format!(
+            "{} export produced {} fresh artifacts; expected exactly one",
+            request.route_id,
+            candidates.len()
+        ));
+    }
+    validate_named_precision(&candidates[0], &request.precision)?;
+    let (format, kind, extension) = ultralytics_artifact_contract(&request.route_id)?;
+    Ok(vec![ArtifactDescriptor {
+        source_path: candidates[0].clone(),
+        kind,
+        format: format.to_string(),
+        qualifier: if request.route_id == "ultralytics.pt.rknn" {
+            Some(normalize_rknn_chip(&request.chip))
+        } else {
+            None
+        },
+        precision_or_profile: request.precision.clone(),
+        variant: None,
+        extension: extension.map(str::to_string),
+    }])
+}
+
+fn validate_named_precision(path: &Path, requested: &str) -> Result<(), String> {
+    let name = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let produced = if name.contains("int8") || name.contains("integer") {
+        Some("int8")
+    } else if name.contains("fp16") || name.contains("float16") || name.contains("half") {
+        Some("fp16")
+    } else {
+        None
+    };
+    if let Some(produced) = produced {
+        if produced != requested {
+            return Err(format!(
+                "effective precision mismatch: requested {}, produced {}",
+                requested, produced
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn fingerprint(path: &Path) -> OutputFingerprint {
+    let metadata = std::fs::metadata(path).ok();
+    OutputFingerprint {
+        path: path.to_path_buf(),
+        len: metadata.as_ref().map(|meta| meta.len()).unwrap_or(0),
+        modified: metadata.and_then(|meta| meta.modified().ok()),
+    }
+}
+
+fn collect_route_outputs(request: &ExportRequest, parent: &Path) -> Result<Vec<PathBuf>, String> {
+    let stem = Path::new(&request.source_path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    let route = request
+        .route_id
+        .strip_prefix("ultralytics.pt.")
+        .ok_or_else(|| format!("unsupported route: {}", request.route_id))?;
+    let mut paths = Vec::new();
+    fn walk(path: &Path, paths: &mut Vec<PathBuf>) -> std::io::Result<()> {
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            let child = entry.path();
+            if child.is_dir() {
+                paths.push(child.clone());
+                walk(&child, paths)?;
+            } else {
+                paths.push(child);
+            }
+        }
+        Ok(())
+    }
+    let mut all = Vec::new();
+    walk(parent, &mut all)
+        .map_err(|error| format!("failed to scan source output directory: {}", error))?;
+    for path in all {
+        if path == Path::new(&request.source_path) {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
+        let matches = match route {
+            "onnx" => {
+                path.is_file()
+                    && path.extension().and_then(|value| value.to_str()) == Some("onnx")
+                    && name.starts_with(stem)
+            }
+            "engine" => {
+                path.is_file()
+                    && path.extension().and_then(|value| value.to_str()) == Some("engine")
+                    && name.starts_with(stem)
+            }
+            "torchscript" => {
+                path.is_file()
+                    && path.extension().and_then(|value| value.to_str()) == Some("torchscript")
+                    && name.starts_with(stem)
+            }
+            "mnn" => {
+                path.is_file()
+                    && path.extension().and_then(|value| value.to_str()) == Some("mnn")
+                    && name.starts_with(stem)
+            }
+            "litert" => {
+                path.is_file()
+                    && path.extension().and_then(|value| value.to_str()) == Some("tflite")
+                    && name.starts_with(stem)
+            }
+            "pb" => {
+                path.is_file()
+                    && path.extension().and_then(|value| value.to_str()) == Some("pb")
+                    && name.starts_with(stem)
+            }
+            "edgetpu" => {
+                path.is_file()
+                    && path.extension().and_then(|value| value.to_str()) == Some("tflite")
+                    && name.contains("edgetpu")
+            }
+            "coreml" => {
+                path.is_dir()
+                    && path.extension().and_then(|value| value.to_str()) == Some("mlpackage")
+                    && name.starts_with(stem)
+            }
+            "openvino" => {
+                path.is_dir() && name.starts_with(stem) && name.contains("openvino_model")
+            }
+            "saved_model" => {
+                path.is_dir() && name.starts_with(stem) && name.contains("saved_model")
+            }
+            "paddle" => path.is_dir() && name.starts_with(stem) && name.contains("paddle_model"),
+            "ncnn" => path.is_dir() && name.starts_with(stem) && name.contains("ncnn_model"),
+            "rknn" => path.is_dir() && name.starts_with(stem) && name.contains("rknn"),
+            "imx" | "axelera" => path.is_dir() && name.starts_with(stem),
+            "executorch" => {
+                path.is_dir() && name.starts_with(stem) && path.join("model.pte").is_file()
+            }
+            _ => false,
+        };
+        if matches {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+fn ultralytics_artifact_contract(
+    route_id: &str,
+) -> Result<(&'static str, ArtifactKind, Option<&'static str>), String> {
+    let route = route_id
+        .strip_prefix("ultralytics.pt.")
+        .ok_or_else(|| format!("unsupported route: {}", route_id))?;
+    Ok(match route {
+        "torchscript" => ("torchscript", ArtifactKind::File, Some("torchscript")),
+        "onnx" => ("onnx", ArtifactKind::File, Some("onnx")),
+        "engine" => ("engine", ArtifactKind::File, Some("engine")),
+        "litert" => ("litert", ArtifactKind::File, Some("tflite")),
+        "pb" => ("graphdef", ArtifactKind::File, Some("pb")),
+        "edgetpu" => ("edgetpu", ArtifactKind::File, Some("tflite")),
+        "mnn" => ("mnn", ArtifactKind::File, Some("mnn")),
+        "coreml" => ("coreml", ArtifactKind::Directory, Some("mlpackage")),
+        "openvino" => ("openvino", ArtifactKind::Directory, None),
+        "saved_model" => ("savedmodel", ArtifactKind::Directory, None),
+        "paddle" => ("paddle", ArtifactKind::Directory, None),
+        "ncnn" => ("ncnn", ArtifactKind::Directory, None),
+        "rknn" => ("rknn", ArtifactKind::Directory, None),
+        "imx" => ("imx", ArtifactKind::Directory, None),
+        "axelera" => ("axelera", ArtifactKind::Directory, None),
+        "executorch" => ("executorch", ArtifactKind::Directory, None),
+        other => return Err(format!("unsupported route: {}", other)),
+    })
+}
 
 fn canonical_quantize(precision: &str) -> Option<&'static str> {
     match precision {
@@ -70,6 +307,7 @@ fn calibration_recommended(route_id: &str, precision: &str) -> bool {
     }
 }
 
+#[cfg(test)]
 fn artifact_info(format: &str, precision: &str) -> (&'static str, bool) {
     match format {
         "torchscript" => (".torchscript", false),
@@ -98,6 +336,7 @@ fn artifact_info(format: &str, precision: &str) -> (&'static str, bool) {
     }
 }
 
+#[cfg(test)]
 fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
@@ -112,6 +351,7 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub fn move_artifact(
     source_path: &str,
     format: &str,
@@ -210,6 +450,8 @@ pub fn build_command(request: &ExportRequest) -> Result<Command, String> {
     Ok(cmd)
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn confirm_artifacts(request: &ExportRequest) -> ArtifactStatus {
     if request.output_dir.is_empty() {
         return ArtifactStatus {
@@ -252,7 +494,10 @@ pub fn confirm_artifacts(request: &ExportRequest) -> ArtifactStatus {
 
 #[cfg(test)]
 mod tests {
+    use super::discover_artifacts;
     use super::move_artifact;
+    use super::snapshot_outputs;
+    use super::validate_output_destination;
     use std::fs;
     use std::path::PathBuf;
     use uuid::Uuid;
@@ -294,7 +539,7 @@ mod tests {
             rfdetr_trust_confirmed: false,
             rfdetr_variant_mode: None,
             rfdetr_manual_class_symbol: None,
-            tflite_staging_dir: None,
+            staging_dir: None,
         };
         let cmd = super::build_command(&request).expect("build command");
         let args: Vec<String> = cmd
@@ -403,7 +648,7 @@ mod tests {
             rfdetr_trust_confirmed: false,
             rfdetr_variant_mode: None,
             rfdetr_manual_class_symbol: None,
-            tflite_staging_dir: None,
+            staging_dir: None,
         };
         let cmd = super::build_command(&request).expect("build command");
         let args: Vec<String> = cmd
@@ -615,7 +860,7 @@ mod tests {
             rfdetr_trust_confirmed: false,
             rfdetr_variant_mode: None,
             rfdetr_manual_class_symbol: None,
-            tflite_staging_dir: None,
+            staging_dir: None,
         }
     }
 
@@ -775,5 +1020,31 @@ mod tests {
         assert!(!args.iter().any(|arg| arg.starts_with("data=")));
         let _ =
             std::fs::remove_dir_all(std::path::Path::new(&request.output_dir).parent().unwrap());
+    }
+
+    #[test]
+    fn destination_equal_source_directory_is_rejected() {
+        let root = temp_dir("destination-check");
+        let source = root.join("best.pt");
+        std::fs::write(&source, b"model").expect("write checkpoint");
+        let error =
+            validate_output_destination(&source, &root).expect_err("same directory must fail");
+        assert!(error.contains("source checkpoint directory"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fresh_artifact_precision_marker_mismatch_is_rejected() {
+        let root = temp_dir("precision-mismatch");
+        let source = root.join("best.pt");
+        std::fs::write(&source, b"model").expect("write checkpoint");
+        let request = request_with_precision("ultralytics.pt.onnx", "fp16", None, "");
+        let mut request = request;
+        request.source_path = source.to_string_lossy().into_owned();
+        let before = snapshot_outputs(&request).expect("snapshot outputs");
+        std::fs::write(root.join("best_int8.onnx"), b"artifact").expect("write artifact");
+        let error = discover_artifacts(&request, &before).expect_err("mismatch must fail");
+        assert!(error.contains("requested fp16, produced int8"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

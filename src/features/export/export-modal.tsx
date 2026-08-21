@@ -51,6 +51,9 @@ interface ExportModalProps {
   onInstallAndExport: () => void;
   outputDir?: string;
   completedOutputDir?: string | null;
+  publishedPaths: string[];
+  publishedRun: number;
+  publishedArtifactCount: number;
   onShowExportFolder: () => void;
   managedRuntimeUpgradeEligible: boolean;
   managedRuntimeUpgradeDisabled: boolean;
@@ -188,6 +191,9 @@ export function ExportModal({
   onInstallAndExport,
   outputDir,
   completedOutputDir,
+  publishedPaths,
+  publishedRun,
+  publishedArtifactCount,
   onShowExportFolder,
   managedRuntimeUpgradeEligible,
   managedRuntimeUpgradeDisabled,
@@ -372,6 +378,14 @@ export function ExportModal({
             {errorMsg && (
               <div className="rounded-md border border-red-200 bg-red-50 p-3">
                 <p className="text-sm text-red-800">{errorMsg}</p>
+              </div>
+            )}
+
+            {exportStatus === "finished" && publishedPaths.length > 0 && (
+              <div className="rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+                {publishedPaths.length === 1
+                  ? `Created ${publishedPaths[0].split(/[\\/]/).pop()}`
+                  : `Created ${publishedArtifactCount} artifacts in run ${publishedRun}`}
               </div>
             )}
 

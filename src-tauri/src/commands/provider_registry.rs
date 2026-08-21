@@ -231,6 +231,7 @@ pub fn validate_route_platform(route_id: &str, host: HostContext<'_>) -> Result<
     ))
 }
 
+#[cfg(test)]
 pub enum RfDetrArtifactRule {
     Named {
         extension: &'static str,
@@ -242,6 +243,7 @@ pub enum RfDetrArtifactRule {
     },
 }
 
+#[cfg(test)]
 pub fn rfdetr_artifact_rule(route_id: &str) -> Option<RfDetrArtifactRule> {
     match route_id {
         "rfdetr.pth.onnx" => Some(RfDetrArtifactRule::Named {

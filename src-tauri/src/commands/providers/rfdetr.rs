@@ -1,26 +1,248 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(test)]
 use std::time::SystemTime;
 
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use tauri::Manager;
 
-use crate::commands::provider_registry::{
-    rfdetr_artifact_rule, validate_rfdetr_manual_class, RfDetrArtifactRule,
-};
+use crate::commands::artifacts::{ArtifactDescriptor, ArtifactKind};
+use crate::commands::provider_registry::validate_rfdetr_manual_class;
+#[cfg(test)]
+use crate::commands::provider_registry::{rfdetr_artifact_rule, RfDetrArtifactRule};
 
-use super::{ArtifactStatus, ExportRequest};
+#[cfg(test)]
+use super::ArtifactStatus;
+use super::ExportRequest;
 
-pub const TFLITE_STAGING_PARENT: &str = ".rfdetr-tflite-staging";
+pub const RFDETR_STAGING_PARENT: &str = ".rfdetr-staging";
 
-pub fn create_tflite_staging_dir(runtime_dir: &Path, session_id: &str) -> Result<PathBuf, String> {
-    let staging = runtime_dir.join(TFLITE_STAGING_PARENT).join(session_id);
+pub fn create_rfdetr_staging_dir(runtime_dir: &Path, session_id: &str) -> Result<PathBuf, String> {
+    let staging = runtime_dir.join(RFDETR_STAGING_PARENT).join(session_id);
     std::fs::create_dir_all(&staging)
-        .map_err(|error| format!("failed to create TFLite staging directory: {}", error))?;
+        .map_err(|error| format!("failed to create RF-DETR staging directory: {}", error))?;
     Ok(staging)
 }
 
+pub fn discover_staged_artifacts(
+    request: &ExportRequest,
+) -> Result<Vec<ArtifactDescriptor>, String> {
+    let staging = request
+        .staging_dir
+        .as_deref()
+        .map(Path::new)
+        .ok_or_else(|| "RF-DETR export requires a staging directory".to_string())?;
+    let mut entries = std::fs::read_dir(staging)
+        .map_err(|error| format!("failed to read RF-DETR staging directory: {}", error))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("failed to read RF-DETR staging entry: {}", error))?;
+    entries.sort();
+    let descriptor = |path: PathBuf,
+                      format: &str,
+                      extension: Option<&str>,
+                      precision: &str,
+                      variant: Option<&str>,
+                      kind: ArtifactKind| ArtifactDescriptor {
+        source_path: path,
+        kind,
+        format: format.to_string(),
+        qualifier: None,
+        precision_or_profile: precision.to_string(),
+        variant: variant.map(str::to_string),
+        extension: extension.map(str::to_string),
+    };
+
+    match request.route_id.as_str() {
+        "rfdetr.pth.onnx" => exactly_one_file(&entries, "onnx").map(|path| {
+            vec![descriptor(
+                path,
+                "onnx",
+                Some("onnx"),
+                "fp32",
+                None,
+                ArtifactKind::File,
+            )]
+        }),
+        "rfdetr.pth.engine" => exactly_one_file(&entries, "trt").and_then(|path| {
+            validate_named_precision(&path, &request.precision)?;
+            Ok(vec![descriptor(
+                path,
+                "engine",
+                Some("engine"),
+                &request.precision,
+                None,
+                ArtifactKind::File,
+            )])
+        }),
+        "rfdetr.pth.coreml" => exactly_one_directory(&entries, "mlpackage").map(|path| {
+            vec![descriptor(
+                path,
+                "coreml",
+                Some("mlpackage"),
+                &request.precision,
+                None,
+                ArtifactKind::Directory,
+            )]
+        }),
+        "rfdetr.pth.executorch" => exactly_one_file(&entries, "pte").map(|path| {
+            vec![descriptor(
+                path,
+                "executorch",
+                Some("pte"),
+                "fp32",
+                None,
+                ArtifactKind::File,
+            )]
+        }),
+        "rfdetr.pth.tflite" => discover_tflite_set(entries, request, descriptor),
+        route => Err(format!("unsupported RF-DETR route: {}", route)),
+    }
+    .map_err(|error| format!("RF-DETR artifact validation failed: {}", error))
+}
+
+fn validate_named_precision(path: &Path, requested: &str) -> Result<(), String> {
+    let name = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let produced = if name.contains("fp16") || name.contains("float16") {
+        Some("fp16")
+    } else if name.contains("fp32") || name.contains("float32") {
+        Some("fp32")
+    } else {
+        None
+    };
+    if let Some(produced) = produced {
+        if produced != requested {
+            return Err(format!(
+                "effective precision mismatch: requested {}, produced {}",
+                requested, produced
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn exactly_one_file(entries: &[PathBuf], extension: &str) -> Result<PathBuf, String> {
+    let matches = entries
+        .iter()
+        .filter(|path| {
+            path.is_file() && path.extension().and_then(|value| value.to_str()) == Some(extension)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [path] => Ok(path.clone()),
+        [] => Err(format!(
+            "expected exactly one .{} file, found none",
+            extension
+        )),
+        _ => Err(format!(
+            "expected exactly one .{} file, found {}",
+            extension,
+            matches.len()
+        )),
+    }
+}
+
+fn exactly_one_directory(entries: &[PathBuf], extension: &str) -> Result<PathBuf, String> {
+    let matches = entries
+        .iter()
+        .filter(|path| {
+            path.is_dir() && path.extension().and_then(|value| value.to_str()) == Some(extension)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [path] => Ok(path.clone()),
+        [] => Err(format!(
+            "expected exactly one .{} bundle, found none",
+            extension
+        )),
+        _ => Err(format!(
+            "expected exactly one .{} bundle, found {}",
+            extension,
+            matches.len()
+        )),
+    }
+}
+
+fn discover_tflite_set<F>(
+    entries: Vec<PathBuf>,
+    request: &ExportRequest,
+    descriptor: F,
+) -> Result<Vec<ArtifactDescriptor>, String>
+where
+    F: Fn(PathBuf, &str, Option<&str>, &str, Option<&str>, ArtifactKind) -> ArtifactDescriptor,
+{
+    let files = entries
+        .into_iter()
+        .filter(|path| {
+            path.is_file() && path.extension().and_then(|value| value.to_str()) == Some("tflite")
+        })
+        .collect::<Vec<_>>();
+    let expected = if request.precision == "int8" { 3 } else { 2 };
+    if files.len() != expected {
+        return Err(format!(
+            "TFLite {} profile produced {} .tflite files; expected {}",
+            request.precision,
+            files.len(),
+            expected
+        ));
+    }
+    let mut found = Vec::new();
+    for path in files {
+        let name = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let variant =
+            if name.contains("dynamic") || name.contains("range") || name.contains("quant") {
+                "dynamic_range_quant"
+            } else if name.contains("float16") || name.contains("fp16") {
+                "fp16"
+            } else if name.contains("float32") || name.contains("fp32") {
+                "fp32"
+            } else {
+                return Err(format!("unrecognized TFLite semantic variant: {}", name));
+            };
+        if found
+            .iter()
+            .any(|item: &ArtifactDescriptor| item.variant.as_deref() == Some(variant))
+        {
+            return Err(format!("duplicate TFLite semantic variant: {}", variant));
+        }
+        found.push(descriptor(
+            path,
+            "tflite",
+            Some("tflite"),
+            &request.precision,
+            Some(variant),
+            ArtifactKind::File,
+        ));
+    }
+    let required = if request.precision == "int8" {
+        ["fp32", "fp16", "dynamic_range_quant"].as_slice()
+    } else {
+        ["fp32", "fp16"].as_slice()
+    };
+    if required.iter().any(|variant| {
+        !found
+            .iter()
+            .any(|item| item.variant.as_deref() == Some(*variant))
+    }) {
+        return Err("TFLite profile missing required semantic variant".to_string());
+    }
+    found.sort_by_key(|item| item.variant.clone());
+    Ok(found)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub struct ArtifactFingerprint {
     pub name: String,
     pub len: u64,
@@ -28,6 +250,7 @@ pub struct ArtifactFingerprint {
     pub digest: [u8; 32],
 }
 
+#[cfg(test)]
 fn sha256_file(path: &Path) -> Result<[u8; 32], String> {
     let data =
         std::fs::read(path).map_err(|e| format!("failed to read file for hashing: {}", e))?;
@@ -36,6 +259,7 @@ fn sha256_file(path: &Path) -> Result<[u8; 32], String> {
     Ok(hasher.finalize().into())
 }
 
+#[cfg(test)]
 fn sha256_directory(path: &Path) -> Result<[u8; 32], String> {
     fn hash_entries(path: &Path, hasher: &mut Sha256) -> Result<(), String> {
         let mut entries: Vec<_> = std::fs::read_dir(path)
@@ -105,14 +329,10 @@ fn append_helper_args(
     cmd.arg("export");
     cmd.arg("--checkpoint").arg(&request.source_path);
     cmd.arg("--route-id").arg(&request.route_id);
-    let output_dir = if request.route_id == "rfdetr.pth.tflite" {
-        request
-            .tflite_staging_dir
-            .as_deref()
-            .ok_or_else(|| "RF-DETR TFLite export requires a staging directory".to_string())?
-    } else {
-        &request.output_dir
-    };
+    let output_dir = request
+        .staging_dir
+        .as_deref()
+        .ok_or_else(|| "RF-DETR export requires a staging directory".to_string())?;
     cmd.arg("--output-dir").arg(output_dir);
     cmd.arg("--variant-mode").arg(variant_mode);
     if let Some(symbol) = request.rfdetr_manual_class_symbol.as_deref() {
@@ -134,6 +354,7 @@ fn append_helper_args(
     Ok(())
 }
 
+#[cfg(test)]
 fn tflite_artifacts(staging_dir: &Path) -> Result<Vec<PathBuf>, String> {
     let mut artifacts = std::fs::read_dir(staging_dir)
         .map_err(|error| format!("failed to read TFLite staging directory: {}", error))?
@@ -145,6 +366,7 @@ fn tflite_artifacts(staging_dir: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(artifacts)
 }
 
+#[cfg(test)]
 pub fn finalize_tflite_export(
     staging_dir: &Path,
     output_dir: &Path,
@@ -203,6 +425,7 @@ pub fn finalize_tflite_export(
     Ok(artifacts.len())
 }
 
+#[cfg(test)]
 fn confirm_rfdetr_artifacts(route_id: &str, output_dir: &str) -> Result<bool, String> {
     let rule =
         rfdetr_artifact_rule(route_id).ok_or_else(|| format!("unknown route: {}", route_id))?;
@@ -235,6 +458,8 @@ fn confirm_rfdetr_artifacts(route_id: &str, output_dir: &str) -> Result<bool, St
     }
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn confirm_artifacts(request: &ExportRequest) -> ArtifactStatus {
     if request.output_dir.is_empty() {
         return ArtifactStatus {
@@ -263,6 +488,7 @@ pub fn confirm_artifacts(request: &ExportRequest) -> ArtifactStatus {
     }
 }
 
+#[cfg(test)]
 pub fn snapshot_rfdetr_artifacts(
     route_id: &str,
     output_dir: &str,
@@ -322,6 +548,7 @@ pub fn snapshot_rfdetr_artifacts(
     Ok(fingerprints)
 }
 
+#[cfg(test)]
 pub fn confirm_artifacts_with_snapshot(
     request: &ExportRequest,
     before: &[ArtifactFingerprint],
@@ -404,6 +631,7 @@ mod tests {
     use super::super::ExportRequest;
     use super::confirm_artifacts_with_snapshot;
     use super::confirm_rfdetr_artifacts;
+    use super::discover_staged_artifacts;
     use super::snapshot_rfdetr_artifacts;
     use super::ArtifactFingerprint;
     use std::process::Command;
@@ -432,7 +660,7 @@ mod tests {
             rfdetr_trust_confirmed: true,
             rfdetr_variant_mode: None,
             rfdetr_manual_class_symbol: None,
-            tflite_staging_dir: None,
+            staging_dir: None,
         }
     }
 
@@ -441,6 +669,7 @@ mod tests {
         for (precision, expected) in [("fp16", "fp16"), ("fp32", "fp32")] {
             let mut request = make_request("rfdetr.pth.engine", "/tmp/output");
             request.precision = precision.to_string();
+            request.staging_dir = Some("/tmp/runtime/.rfdetr-staging/session".into());
             let mut command = Command::new("python");
 
             super::append_helper_args(
@@ -448,7 +677,7 @@ mod tests {
                 &request,
                 std::path::Path::new("/tmp/rfdetr_export_helper.py"),
             )
-            .expect("non-TFLite route does not need staging");
+            .expect("every RF-DETR route uses staging");
 
             let args: Vec<String> = command
                 .get_args()
@@ -463,7 +692,7 @@ mod tests {
     #[test]
     fn tflite_helper_args_use_staging_output_dir() {
         let mut request = make_request("rfdetr.pth.tflite", "/tmp/user-output");
-        request.tflite_staging_dir = Some("/tmp/runtime/.rfdetr-tflite-staging/session".into());
+        request.staging_dir = Some("/tmp/runtime/.rfdetr-staging/session".into());
         let mut command = Command::new("python");
 
         super::append_helper_args(
@@ -477,12 +706,9 @@ mod tests {
             .get_args()
             .map(|arg| arg.to_string_lossy().to_string())
             .collect();
-        assert!(args.windows(2).any(|pair| {
-            pair == [
-                "--output-dir",
-                "/tmp/runtime/.rfdetr-tflite-staging/session",
-            ]
-        }));
+        assert!(args
+            .windows(2)
+            .any(|pair| { pair == ["--output-dir", "/tmp/runtime/.rfdetr-staging/session",] }));
         assert!(!args
             .windows(2)
             .any(|pair| pair == ["--output-dir", "/tmp/user-output"]));
@@ -976,6 +1202,41 @@ mod tests {
             "same-size trt rewrite should be detected via digest"
         );
         assert!(status.artifact_warning.is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn staged_tflite_int8_aliases_map_to_required_semantic_variants() {
+        let root = std::env::temp_dir().join(format!("rfdetr-discovery-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create staging");
+        for name in [
+            "model_float32.tflite",
+            "model_float16.tflite",
+            "model_dynamic_range_quant.tflite",
+        ] {
+            std::fs::write(root.join(name), b"artifact").expect("write artifact");
+        }
+        let mut request = make_request("rfdetr.pth.tflite", "/tmp/output");
+        request.precision = "int8".into();
+        request.staging_dir = Some(root.to_string_lossy().into_owned());
+        let artifacts = discover_staged_artifacts(&request).expect("discover staged set");
+        assert_eq!(artifacts.len(), 3);
+        assert!(artifacts
+            .iter()
+            .any(|item| item.variant.as_deref() == Some("dynamic_range_quant")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn staged_tflite_rejects_duplicate_semantic_variants() {
+        let root = std::env::temp_dir().join(format!("rfdetr-duplicate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create staging");
+        for name in ["model_fp32.tflite", "other_float32.tflite"] {
+            std::fs::write(root.join(name), b"artifact").expect("write artifact");
+        }
+        let mut request = make_request("rfdetr.pth.tflite", "/tmp/output");
+        request.staging_dir = Some(root.to_string_lossy().into_owned());
+        assert!(discover_staged_artifacts(&request).is_err());
         let _ = std::fs::remove_dir_all(root);
     }
 }

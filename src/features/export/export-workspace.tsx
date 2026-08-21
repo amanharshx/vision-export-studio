@@ -532,6 +532,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const [logLines, setLogLines] = useState<string[]>([]);
   const [invokeError, setInvokeError] = useState<string | null>(null);
   const [completedOutputDir, setCompletedOutputDir] = useState<string | null>(null);
+  const [publishedPaths, setPublishedPaths] = useState<string[]>([]);
+  const [publishedRun, setPublishedRun] = useState(0);
+  const [publishedArtifactCount, setPublishedArtifactCount] = useState(0);
 
   // Export options
   const [options, setOptions] = useState<ExportOptions>(defaultOptions);
@@ -715,6 +718,13 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
           if (event.payload.artifact_warning) {
             setLogLines((prev) => [...prev, "[warning] " + event.payload.artifact_warning]);
           }
+          setPublishedPaths(event.payload.published_paths);
+          setPublishedRun(event.payload.run);
+          setPublishedArtifactCount(event.payload.artifact_count);
+          setLogLines((prev) => [
+            ...prev,
+            ...event.payload.published_paths.map((path) => "[published] " + path),
+          ]);
           const exportRoute = currentExportRouteRef.current;
           if (exportRoute) {
             captureAnalyticsEvent("export_completed", {
@@ -896,6 +906,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     setInstallPhase("idle");
     setInvokeError(message);
     setCompletedOutputDir(null);
+    setPublishedPaths([]);
+    setPublishedRun(0);
+    setPublishedArtifactCount(0);
     setExportStatus("failed");
     setLogLines(["[error] " + message]);
   }, []);
@@ -1940,6 +1953,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         onInstallAndExport={handleInstallAndExport}
         outputDir={getResolvedOutputDir(sourcePath, outputDirOverride)}
         completedOutputDir={completedOutputDir}
+        publishedPaths={publishedPaths}
+        publishedRun={publishedRun}
+        publishedArtifactCount={publishedArtifactCount}
         onShowExportFolder={handleShowExportFolder}
         managedRuntimeUpgradeEligible={Boolean(managedRuntimeUpgrade?.eligible)}
         managedRuntimeUpgradeDisabled={!mayStartRuntimeUpgrade}

@@ -29,9 +29,10 @@ pub struct ExportRequest {
     pub rfdetr_trust_confirmed: bool,
     pub rfdetr_variant_mode: Option<String>,
     pub rfdetr_manual_class_symbol: Option<String>,
-    pub tflite_staging_dir: Option<String>,
+    pub staging_dir: Option<String>,
 }
 
+#[cfg(test)]
 pub struct ArtifactStatus {
     pub artifact_moved: bool,
     pub artifact_warning: Option<String>,
@@ -47,6 +48,8 @@ pub fn build_command(
     }
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn confirm_artifacts(request: &ExportRequest) -> ArtifactStatus {
     match request.provider {
         ProviderId::Ultralytics => ultralytics::confirm_artifacts(request),
