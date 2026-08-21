@@ -576,6 +576,19 @@ pub(crate) fn probe_python_version(python: &str) -> Result<String, String> {
     probe(python, "import platform; print(platform.python_version())")
 }
 
+/// Return installed distribution version without importing its package.
+pub(crate) fn probe_distribution_version(
+    python: &str,
+    distribution: &str,
+) -> Result<String, String> {
+    probe(python, &distribution_version_probe_code(distribution))
+        .map(|out| last_version_line(&out).to_string())
+}
+
+pub(crate) fn distribution_version_probe_code(distribution: &str) -> String {
+    format!("import importlib.metadata as _metadata; print(_metadata.version({distribution:?}))",)
+}
+
 /// Python snippet that prints a distribution version without importing the
 /// package. Falls back to the module's `__version__` when metadata is absent.
 /// Assumes the distribution name matches the importable name, which holds for
@@ -2107,5 +2120,14 @@ possible problem with your settings or a recent ultralytics package update.\n8.4
         let code = version_probe_code("ultralytics");
         assert!(code.contains("importlib.metadata"));
         assert!(!code.starts_with("import ultralytics"));
+    }
+
+    #[test]
+    fn distribution_version_probe_only_reads_metadata() {
+        let code = distribution_version_probe_code("rfdetr");
+        assert!(code.contains("importlib.metadata"));
+        assert!(code.contains("version(\"rfdetr\")"));
+        assert!(!code.contains("import rfdetr"));
+        assert!(!code.contains("torch"));
     }
 }

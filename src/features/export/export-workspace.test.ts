@@ -230,6 +230,7 @@ describe("stack environment refresh", () => {
       display_name: "RF-DETR",
       python_path: "/tmp/runtime/envs/rfdetr-default/.venv/bin/python",
       python_version: { status: "available", version: "3.12.12" },
+      rfdetr_version: { status: "available", version: "1.9.0" },
     }];
     let received: StackEnvironment[] | undefined;
 

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::commands::deps::probe_python_version;
+use crate::commands::deps::{probe_distribution_version, probe_python_version};
 use crate::commands::setup::load_settings;
 use crate::commands::setup::venv_python_at;
 
@@ -70,11 +70,19 @@ pub enum PythonVersion {
 }
 
 #[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum PackageVersion {
+    Available { version: String },
+    Unavailable,
+}
+
+#[derive(serde::Serialize)]
 pub struct StackEnvironmentInfo {
     pub key: String,
     pub display_name: String,
     pub python_path: String,
     pub python_version: PythonVersion,
+    pub rfdetr_version: PackageVersion,
 }
 
 pub(crate) fn list_stack_environments_for_runtime(runtime_dir: &str) -> Vec<StackEnvironmentInfo> {
@@ -95,6 +103,9 @@ pub(crate) fn list_stack_environments_for_runtime(runtime_dir: &str) -> Vec<Stac
                     python_version: probe_python_version(&python_path)
                         .map(|version| PythonVersion::Available { version })
                         .unwrap_or(PythonVersion::Unavailable),
+                    rfdetr_version: probe_distribution_version(&python_path, "rfdetr")
+                        .map(|version| PackageVersion::Available { version })
+                        .unwrap_or(PackageVersion::Unavailable),
                     python_path,
                 })
         })
@@ -197,6 +208,7 @@ mod tests {
             assert_eq!(stack.display_name, expected_stack.display_name);
             assert_eq!(stack.python_path, interpreter.to_string_lossy());
             assert!(matches!(stack.python_version, PythonVersion::Unavailable));
+            assert!(matches!(stack.rfdetr_version, PackageVersion::Unavailable));
         }
         fs::remove_dir_all(runtime_dir).unwrap();
     }

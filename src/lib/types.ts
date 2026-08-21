@@ -83,11 +83,16 @@ export type PythonVersion =
   | { status: "available"; version: string }
   | { status: "unavailable" };
 
+export type PackageVersion =
+  | { status: "available"; version: string }
+  | { status: "unavailable" };
+
 export interface StackEnvironment {
   key: string;
   display_name: string;
   python_path: string;
   python_version: PythonVersion;
+  rfdetr_version: PackageVersion;
 }
 
 export interface ExportOptions {
