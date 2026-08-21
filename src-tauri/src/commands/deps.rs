@@ -175,6 +175,7 @@ struct DistributionRequirement {
     required: &'static str,
 }
 
+#[derive(Clone, Copy)]
 struct RfDetrProbeDefinition {
     item: &'static str,
     install_hint: &'static str,
@@ -625,24 +626,18 @@ struct RfDetrDistributionRow {
 }
 
 /// Build one import-free probe for one RF-DETR route.
-fn rfdetr_probe_code(route_id: &str) -> Result<String, String> {
-    let definition = match route_id {
-        "rfdetr.pth.onnx"
-        | "rfdetr.pth.engine"
-        | "rfdetr.pth.coreml"
-        | "rfdetr.pth.tflite"
-        | "rfdetr.pth.executorch" => rfdetr_probe(route_id),
-        _ => return Err(format!("unknown RF-DETR route: {}", route_id)),
-    };
-    let modules = serde_json::to_string(definition.modules).map_err(|e| e.to_string())?;
+fn rfdetr_probe_code(route_id: &str) -> String {
+    let definition = rfdetr_probe(route_id);
+    let modules = serde_json::to_string(definition.modules).expect("static module names serialize");
     let distributions: Vec<&str> = definition
         .distributions
         .iter()
         .map(|distribution| distribution.name)
         .collect();
-    let distributions = serde_json::to_string(&distributions).map_err(|e| e.to_string())?;
+    let distributions =
+        serde_json::to_string(&distributions).expect("static distribution names serialize");
 
-    Ok(format!(
+    format!(
         r#"import importlib.machinery as _machinery
 import importlib.metadata as _metadata
 import importlib.util as _util
@@ -673,7 +668,7 @@ for _name in _distributions:
 print(_json.dumps({{"modules": _module_rows, "distributions": _distribution_rows}}))"#,
         modules = modules,
         distributions = distributions,
-    ))
+    )
 }
 
 fn probe_failure_result(definition: RfDetrProbeDefinition, reason: String) -> DepCheckResult {
@@ -686,22 +681,38 @@ fn probe_failure_result(definition: RfDetrProbeDefinition, reason: String) -> De
     }
 }
 
+fn probe_failure_results(
+    route_id: &str,
+    definition: RfDetrProbeDefinition,
+    reason: String,
+) -> Vec<DepCheckResult> {
+    if route_id == "rfdetr.pth.executorch" {
+        return vec![
+            probe_failure_result(definition, reason.clone()),
+            missing_torch_probe_result(reason),
+        ];
+    }
+    vec![probe_failure_result(definition, reason)]
+}
+
+fn missing_torch_probe_result(reason: String) -> DepCheckResult {
+    DepCheckResult {
+        item: "torch>=2.13".to_string(),
+        status: "missing_package".to_string(),
+        reason,
+        install_hint: "pip install \"torch>=2.13\"".to_string(),
+        install_package: Some("torch>=2.13".to_string()),
+    }
+}
+
 fn parse_rfdetr_probe_output(
     route_id: &str,
     raw: &str,
     install_hint: &str,
-    install_package: &str,
+    _install_package: &str,
 ) -> Vec<DepCheckResult> {
     let definition = rfdetr_probe(route_id);
-    let fail = |reason: String| {
-        vec![DepCheckResult {
-            item: definition.item.to_string(),
-            status: "missing_package".to_string(),
-            reason,
-            install_hint: install_hint.to_string(),
-            install_package: Some(install_package.to_string()),
-        }]
-    };
+    let fail = |reason: String| probe_failure_results(route_id, definition, reason);
     let output: RfDetrProbeOutput = match serde_json::from_str(raw) {
         Ok(output) => output,
         Err(error) => return fail(format!("probe returned malformed JSON: {}", error)),
@@ -788,7 +799,10 @@ fn parse_rfdetr_probe_output(
             install_package: None,
         }];
     }
-    unreachable!("RF-DETR probe definition has unexpected distribution shape");
+    fail(format!(
+        "probe definition has unexpected distribution shape for {}",
+        route_id
+    ))
 }
 
 fn missing_rfdetr_module_result(module: &str) -> DepCheckResult {
@@ -856,10 +870,7 @@ fn versioned_rfdetr_result(
 
 fn check_rfdetr_probe_dep(python: &str, route_id: &str) -> Vec<DepCheckResult> {
     let definition = rfdetr_probe(route_id);
-    let code = match rfdetr_probe_code(route_id) {
-        Ok(code) => code,
-        Err(error) => return vec![probe_failure_result(definition, error)],
-    };
+    let code = rfdetr_probe_code(route_id);
     match probe(python, &code) {
         Ok(output) => parse_rfdetr_probe_output(
             route_id,
@@ -867,10 +878,9 @@ fn check_rfdetr_probe_dep(python: &str, route_id: &str) -> Vec<DepCheckResult> {
             definition.install_hint,
             definition.install_package,
         ),
-        Err(error) => vec![probe_failure_result(
-            definition,
-            format!("probe failed: {}", error),
-        )],
+        Err(error) => {
+            probe_failure_results(route_id, definition, format!("probe failed: {}", error))
+        }
     }
 }
 
@@ -1518,7 +1528,7 @@ mod tests {
 
     #[test]
     fn executorch_probe_uses_distribution_floors_without_imports() {
-        let probe = rfdetr_probe_code("rfdetr.pth.executorch").expect("ExecuTorch probe");
+        let probe = rfdetr_probe_code("rfdetr.pth.executorch");
         assert!(probe.contains("PathFinder.find_spec"));
         let definition = rfdetr_probe("rfdetr.pth.executorch");
         assert_eq!(
@@ -1534,13 +1544,26 @@ mod tests {
         assert!(!probe.contains("import executorch"));
     }
 
+    fn available_test_python() -> Option<&'static str> {
+        ["python3", "python"].into_iter().find(|python| {
+            Command::new(python)
+                .args(["-c", "pass"])
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
+        })
+    }
+
     #[test]
     fn probe_does_not_import_framework_packages() {
-        let code = rfdetr_probe_code("rfdetr.pth.executorch").expect("ExecuTorch probe");
+        let Some(python) = available_test_python() else {
+            return;
+        };
+        let code = rfdetr_probe_code("rfdetr.pth.executorch");
         let code = format!(
             "exec({code:?})\nassert 'executorch' not in __import__('sys').modules\nassert 'torch' not in __import__('sys').modules\nassert 'rfdetr' not in __import__('sys').modules",
         );
-        probe("python3", &code).expect("probe must leave framework modules absent");
+        probe(python, &code).expect("probe must leave framework modules absent");
     }
 
     #[test]
@@ -1566,6 +1589,22 @@ mod tests {
     }
 
     #[test]
+    fn malformed_executorch_probe_returns_two_installable_rows() {
+        let result = parse_rfdetr_probe_output(
+            "rfdetr.pth.executorch",
+            "not json",
+            "pip install \"rfdetr[executorch]>=1.9.0\"",
+            "rfdetr[executorch]>=1.9.0",
+        );
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|row| row.status == "missing_package"));
+        assert_eq!(result[0].item, "rfdetr[executorch]>=1.9.0");
+        assert_eq!(result[1].item, "torch>=2.13");
+        assert_eq!(result[1].install_hint, "pip install \"torch>=2.13\"");
+        assert_eq!(result[1].install_package.as_deref(), Some("torch>=2.13"));
+    }
+
+    #[test]
     fn missing_module_preserves_rfdetr_install_remedy() {
         let result = parse_rfdetr_probe_output(
             "rfdetr.pth.engine",
@@ -1584,7 +1623,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn failed_rfdetr_probe_fails_closed_with_install_remedy() {
+    fn failed_executorch_probe_returns_two_installable_rows() {
         use std::os::unix::fs::PermissionsExt;
 
         let root = std::env::temp_dir().join(format!("rfdetr-probe-fail-{}", Uuid::new_v4()));
@@ -1592,14 +1631,19 @@ mod tests {
         let python = root.join("python");
         std::fs::write(&python, b"#!/bin/sh\nexit 7\n").unwrap();
         std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let result = check_rfdetr_probe_dep(python.to_str().unwrap(), "rfdetr.pth.onnx");
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].status, "missing_package");
-        assert_eq!(result[0].install_package.as_deref(), Some("rfdetr[onnx]"));
-        assert!(result[0].reason.contains("probe failed"));
+        let result = check_rfdetr_probe_dep(python.to_str().unwrap(), "rfdetr.pth.executorch");
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|row| row.status == "missing_package"));
+        assert!(result.iter().all(|row| row.reason.contains("probe failed")));
+        assert_eq!(
+            result[0].install_package.as_deref(),
+            Some("rfdetr[executorch]>=1.9.0")
+        );
+        assert_eq!(result[1].install_package.as_deref(), Some("torch>=2.13"));
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn rfdetr_probe_launches_one_package_process() {
         let root = std::env::temp_dir().join(format!("rfdetr-probe-count-{}", Uuid::new_v4()));
@@ -1614,11 +1658,8 @@ mod tests {
             ),
         )
         .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
         let result = check_rfdetr_probe_dep(python.to_str().unwrap(), "rfdetr.pth.onnx");
         assert!(result.iter().all(|row| row.status != "ready"));
         assert_eq!(std::fs::read_to_string(&count).unwrap().len(), 1);
