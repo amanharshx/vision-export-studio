@@ -7,8 +7,22 @@ use crate::commands::artifacts::{ArtifactDescriptor, ArtifactKind};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutputFingerprint {
     pub path: PathBuf,
-    pub len: u64,
-    pub modified: Option<std::time::SystemTime>,
+    entries: Vec<FingerprintEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FingerprintEntry {
+    relative_path: PathBuf,
+    kind: FingerprintKind,
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum FingerprintKind {
+    File,
+    Directory,
+    Symlink,
 }
 
 pub fn validate_output_destination(source: &Path, destination: &Path) -> Result<(), String> {
@@ -30,8 +44,10 @@ pub fn snapshot_outputs(request: &ExportRequest) -> Result<Vec<OutputFingerprint
     let parent = Path::new(&request.source_path)
         .parent()
         .ok_or_else(|| "source has no parent directory".to_string())?;
-    collect_route_outputs(request, parent)
-        .map(|paths| paths.into_iter().map(|path| fingerprint(&path)).collect())
+    collect_route_outputs(request, parent)?
+        .into_iter()
+        .map(|path| fingerprint(&path))
+        .collect()
 }
 
 pub fn discover_artifacts_with_evidence(
@@ -47,16 +63,16 @@ pub fn discover_artifacts_with_evidence(
         .iter()
         .map(|item| (&item.path, item))
         .collect::<std::collections::HashMap<_, _>>();
-    let candidates = collect_route_outputs(request, parent)?
-        .into_iter()
-        .filter(|path| match before_map.get(path) {
+    let mut candidates = Vec::new();
+    for path in collect_route_outputs(request, parent)? {
+        let fresh = match before_map.get(&path) {
             None => true,
-            Some(previous) => {
-                let current = fingerprint(path);
-                current.len != previous.len || current.modified != previous.modified
-            }
-        })
-        .collect::<Vec<_>>();
+            Some(previous) => fingerprint(&path)?.entries != previous.entries,
+        };
+        if fresh {
+            candidates.push(path);
+        }
+    }
     if candidates.len() != 1 {
         return Err(format!(
             "{} export produced {} fresh artifacts; expected exactly one",
@@ -202,13 +218,52 @@ else:
     }
 }
 
-fn fingerprint(path: &Path) -> OutputFingerprint {
-    let metadata = std::fs::metadata(path).ok();
-    OutputFingerprint {
-        path: path.to_path_buf(),
-        len: metadata.as_ref().map(|meta| meta.len()).unwrap_or(0),
-        modified: metadata.and_then(|meta| meta.modified().ok()),
+fn fingerprint(path: &Path) -> Result<OutputFingerprint, String> {
+    fn visit(path: &Path, root: &Path, entries: &mut Vec<FingerprintEntry>) -> std::io::Result<()> {
+        let metadata = std::fs::symlink_metadata(path)?;
+        let file_type = metadata.file_type();
+        let kind = if file_type.is_symlink() {
+            FingerprintKind::Symlink
+        } else if file_type.is_dir() {
+            FingerprintKind::Directory
+        } else {
+            FingerprintKind::File
+        };
+        let relative_path = path.strip_prefix(root).unwrap_or(path);
+        let relative_path = if relative_path.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            relative_path.to_path_buf()
+        };
+        entries.push(FingerprintEntry {
+            relative_path,
+            kind: kind.clone(),
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+        });
+        if kind == FingerprintKind::Directory {
+            let mut children = std::fs::read_dir(path)?.collect::<Result<Vec<_>, _>>()?;
+            children.sort_by_key(|entry| entry.file_name());
+            for child in children {
+                visit(&child.path(), root, entries)?;
+            }
+        }
+        Ok(())
     }
+
+    let mut entries = Vec::new();
+    visit(path, path, &mut entries).map_err(|error| {
+        format!(
+            "failed to fingerprint artifact {}: {}",
+            path.display(),
+            error
+        )
+    })?;
+    entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok(OutputFingerprint {
+        path: path.to_path_buf(),
+        entries,
+    })
 }
 
 fn collect_route_outputs(request: &ExportRequest, parent: &Path) -> Result<Vec<PathBuf>, String> {
@@ -307,7 +362,7 @@ fn collect_route_outputs(request: &ExportRequest, parent: &Path) -> Result<Vec<P
             "paddle" => path.is_dir() && name.starts_with(stem) && name.contains("paddle_model"),
             "ncnn" => path.is_dir() && name.starts_with(stem) && name.contains("ncnn_model"),
             "rknn" => path.is_dir() && name.starts_with(stem) && name.contains("rknn"),
-            "imx" | "axelera" => path.is_dir() && name.starts_with(stem),
+            "imx" | "axelera" => path.is_dir() && name == format!("{}_{}_model", stem, route),
             "executorch" => {
                 path.is_dir() && name.starts_with(stem) && path.join("model.pte").is_file()
             }
@@ -799,8 +854,8 @@ mod tests {
             ("paddle", "best_paddle_model", "fp32", "paddle"),
             ("ncnn", "best_ncnn_model", "fp32", "ncnn"),
             ("rknn", "best_rknn_model", "int8", "rknn"),
-            ("imx", "best_imx", "int8", "imx"),
-            ("axelera", "best_axelera", "int8", "axelera"),
+            ("imx", "best_imx_model", "int8", "imx"),
+            ("axelera", "best_axelera_model", "int8", "axelera"),
             (
                 "executorch",
                 "best_executorch/model.pte",
@@ -860,6 +915,72 @@ mod tests {
         assert_eq!(descriptors.len(), 1);
         assert!(descriptors[0].source_path.ends_with("best.onnx"));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn discovery_detects_rewritten_child_inside_existing_bundle() {
+        let request = request_with_precision("ultralytics.pt.openvino", "fp32", None, "");
+        let source = PathBuf::from(&request.source_path);
+        let root = source.parent().expect("source parent");
+        let bundle = root.join("best_openvino_model");
+        fs::create_dir_all(&bundle).expect("create bundle");
+        fs::write(bundle.join("model.xml"), b"stale").expect("write stale child");
+        let before = snapshot_outputs(&request).expect("snapshot bundle");
+        fs::write(
+            bundle.join("model.xml"),
+            b"fresh-child-with-different-length",
+        )
+        .expect("rewrite child");
+
+        let descriptors = discover_artifacts_with_evidence(&request, &before, None)
+            .expect("discover rewritten bundle");
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(descriptors[0].source_path, bundle);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn discovery_detects_bundle_descendant_addition_and_removal() {
+        let request = request_with_precision("ultralytics.pt.rknn", "int8", None, "rk3588");
+        let source = PathBuf::from(&request.source_path);
+        let root = source.parent().expect("source parent");
+        let bundle = root.join("best_rknn_model");
+        fs::create_dir_all(&bundle).expect("create bundle");
+        fs::write(bundle.join("model.rknn"), b"artifact").expect("write child");
+        let before = snapshot_outputs(&request).expect("snapshot bundle");
+
+        fs::write(bundle.join("metadata.yaml"), b"metadata").expect("add child");
+        assert!(discover_artifacts_with_evidence(&request, &before, None).is_ok());
+
+        let after_addition = snapshot_outputs(&request).expect("snapshot added bundle");
+        fs::remove_file(bundle.join("metadata.yaml")).expect("remove child");
+        assert!(discover_artifacts_with_evidence(&request, &after_addition, None).is_ok());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn discovery_requires_exact_imx_and_axelera_bundle_names() {
+        for (route, exact_name, unrelated_name) in [
+            ("imx", "best_imx_model", "best_imx"),
+            ("axelera", "best_axelera_model", "best_axelera_extra"),
+        ] {
+            let request =
+                request_with_precision(&format!("ultralytics.pt.{}", route), "int8", None, "");
+            let source = PathBuf::from(&request.source_path);
+            let root = source.parent().expect("source parent");
+            let before = snapshot_outputs(&request).expect("snapshot route outputs");
+            let unrelated = root.join(unrelated_name);
+            fs::create_dir_all(&unrelated).expect("create unrelated bundle");
+            assert!(discover_artifacts_with_evidence(&request, &before, None).is_err());
+            fs::remove_dir_all(&unrelated).expect("remove unrelated bundle");
+
+            let exact = root.join(exact_name);
+            fs::create_dir_all(&exact).expect("create exact bundle");
+            let descriptors = discover_artifacts_with_evidence(&request, &before, None)
+                .expect("discover exact bundle");
+            assert_eq!(descriptors[0].source_path, exact);
+            let _ = fs::remove_dir_all(root);
+        }
     }
 
     #[test]
