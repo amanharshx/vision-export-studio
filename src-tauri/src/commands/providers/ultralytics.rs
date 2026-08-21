@@ -848,9 +848,13 @@ mod tests {
         let request = request_with_precision("ultralytics.pt.onnx", "fp16", None, "");
         let source = PathBuf::from(&request.source_path);
         let root = source.parent().expect("source parent");
-        fs::write(root.join("best.onnx"), b"old").expect("write stale artifact");
+        fs::write(root.join("best.onnx"), b"stale-artifact").expect("write stale artifact");
         let before = snapshot_outputs(&request).expect("snapshot stale artifact");
-        fs::write(root.join("best.onnx"), b"new").expect("write fresh artifact");
+        fs::write(
+            root.join("best.onnx"),
+            b"new-artifact-with-different-length",
+        )
+        .expect("write fresh artifact");
         let descriptors = discover_artifacts_with_evidence(&request, &before, None)
             .expect("discover fresh artifact");
         assert_eq!(descriptors.len(), 1);
