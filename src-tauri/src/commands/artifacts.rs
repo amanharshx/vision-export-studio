@@ -167,11 +167,14 @@ fn parse_family_run(
         if !without_extension.ends_with(&suffix) {
             continue;
         }
-        let run_part = without_extension
+        let remainder = without_extension
             .strip_prefix(family)?
-            .strip_suffix(&suffix)?
-            .strip_prefix('_')
-            .unwrap_or("");
+            .strip_suffix(&suffix)?;
+        let run_part = if remainder.is_empty() {
+            ""
+        } else {
+            remainder.strip_prefix('_')?
+        };
         return if run_part.is_empty() {
             Some(1)
         } else {
@@ -385,6 +388,41 @@ mod tests {
         });
         let publication = publish_artifacts(&source, &root, &descriptors).unwrap();
         assert_eq!(publication.run, 3);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scanner_rejects_malformed_set_run() {
+        let root = temp_dir("malformed-set-run");
+        let source = root.join("checkpoint.pth");
+        fs::write(&source, b"checkpoint").unwrap();
+        fs::write(root.join("checkpoint_tflite_int8junk_fp32.tflite"), b"bad").unwrap();
+        let first = root.join("fp32.tflite");
+        let second = root.join("fp16.tflite");
+        fs::write(&first, b"one").unwrap();
+        fs::write(&second, b"two").unwrap();
+        let descriptors = vec![
+            ArtifactDescriptor {
+                source_path: first,
+                kind: ArtifactKind::File,
+                format: "tflite".into(),
+                qualifier: None,
+                precision_or_profile: "int8".into(),
+                variant: Some("fp32".into()),
+                extension: Some("tflite".into()),
+            },
+            ArtifactDescriptor {
+                source_path: second,
+                kind: ArtifactKind::File,
+                format: "tflite".into(),
+                qualifier: None,
+                precision_or_profile: "int8".into(),
+                variant: Some("fp16".into()),
+                extension: Some("tflite".into()),
+            },
+        ];
+        let publication = publish_artifacts(&source, &root, &descriptors).unwrap();
+        assert_eq!(publication.run, 1);
         let _ = fs::remove_dir_all(root);
     }
 

@@ -63,7 +63,7 @@ pub fn discover_artifacts(
             candidates.len()
         ));
     }
-    validate_named_precision(&candidates[0], &request.route_id, &request.precision)?;
+    validate_named_precision(&candidates[0], &request.precision)?;
     let (format, kind, extension) = ultralytics_artifact_contract(&request.route_id)?;
     Ok(vec![ArtifactDescriptor {
         source_path: candidates[0].clone(),
@@ -80,7 +80,7 @@ pub fn discover_artifacts(
     }])
 }
 
-fn validate_named_precision(path: &Path, route_id: &str, requested: &str) -> Result<(), String> {
+fn validate_named_precision(path: &Path, requested: &str) -> Result<(), String> {
     let name = path
         .file_stem()
         .and_then(|value| value.to_str())
@@ -100,13 +100,6 @@ fn validate_named_precision(path: &Path, route_id: &str, requested: &str) -> Res
                 requested, produced
             ));
         }
-    } else if matches!(route_id, "ultralytics.pt.onnx" | "ultralytics.pt.engine")
-        && requested != "fp32"
-    {
-        return Err(format!(
-            "effective precision mismatch: requested {}, produced unknown",
-            requested
-        ));
     }
     Ok(())
 }
@@ -137,12 +130,13 @@ fn collect_route_outputs(request: &ExportRequest, parent: &Path) -> Result<Vec<P
         .collect::<Vec<_>>();
     let mut candidates = entries.clone();
     if route == "edgetpu" {
+        let saved_model = format!("{}_saved_model", stem);
         for directory in entries.iter().filter(|path| {
             path.is_dir()
                 && path
                     .file_name()
                     .and_then(|value| value.to_str())
-                    .is_some_and(|name| name.starts_with(stem) && name.contains("edgetpu"))
+                    .is_some_and(|name| name == saved_model)
         }) {
             candidates.extend(
                 std::fs::read_dir(directory)
@@ -199,7 +193,7 @@ fn collect_route_outputs(request: &ExportRequest, parent: &Path) -> Result<Vec<P
             "edgetpu" => {
                 path.is_file()
                     && path.extension().and_then(|value| value.to_str()) == Some("tflite")
-                    && name.contains("edgetpu")
+                    && name == format!("{}_full_integer_quant_edgetpu.tflite", stem)
             }
             "coreml" => {
                 path.is_dir()
@@ -690,13 +684,13 @@ mod tests {
     fn discovery_contract_covers_every_supported_ultralytics_route() {
         let cases = [
             ("torchscript", "best.torchscript", "fp32", "torchscript"),
-            ("onnx", "best.onnx", "fp32", "onnx"),
+            ("onnx", "best.onnx", "fp16", "onnx"),
             ("engine", "best.engine", "fp32", "engine"),
             ("litert", "best_int8.tflite", "int8", "litert"),
             ("pb", "best.pb", "fp32", "pb"),
             (
                 "edgetpu",
-                "best_edgetpu/nested_edgetpu.tflite",
+                "best_saved_model/best_full_integer_quant_edgetpu.tflite",
                 "int8",
                 "edgetpu",
             ),
@@ -757,11 +751,31 @@ mod tests {
         let root = source.parent().expect("source parent");
         fs::write(root.join("best.onnx"), b"old").expect("write stale artifact");
         let before = snapshot_outputs(&request).expect("snapshot stale artifact");
-        fs::write(root.join("best_fp16.onnx"), b"new").expect("write fresh artifact");
+        fs::write(root.join("best.onnx"), b"new").expect("write fresh artifact");
         let descriptors = discover_artifacts(&request, &before).expect("discover fresh artifact");
         assert_eq!(descriptors.len(), 1);
-        assert!(descriptors[0].source_path.ends_with("best_fp16.onnx"));
+        assert!(descriptors[0].source_path.ends_with("best.onnx"));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn discovery_accepts_precisionless_upstream_onnx_and_tensorrt_names() {
+        for (route, precision, filename) in [
+            ("onnx", "fp16", "best.onnx"),
+            ("engine", "fp16", "best.engine"),
+            ("engine", "int8", "best.engine"),
+        ] {
+            let request =
+                request_with_precision(&format!("ultralytics.pt.{}", route), precision, None, "");
+            let source = PathBuf::from(&request.source_path);
+            let root = source.parent().expect("source parent");
+            let before = snapshot_outputs(&request).expect("snapshot route outputs");
+            fs::write(root.join(filename), b"artifact").expect("write artifact");
+            let descriptors = discover_artifacts(&request, &before)
+                .expect("discover precisionless upstream artifact");
+            assert_eq!(descriptors[0].precision_or_profile, precision);
+            let _ = fs::remove_dir_all(root);
+        }
     }
 
     #[test]
