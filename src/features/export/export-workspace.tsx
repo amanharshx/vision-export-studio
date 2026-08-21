@@ -413,7 +413,9 @@ export function getUltralyticsGroupStatus(
 }
 
 export function getRfdetrGroupSummary(stacks: StackEnvironment[]): string {
-  const status = stacks.every((stack) => stack.python_version.status === "available")
+  const status = stacks.every((stack) =>
+    stack.python_version.status === "available" && stack.rfdetr_version.status === "available",
+  )
     ? "ready"
     : "error";
   return `${stacks.length} installed · ${status}`;
@@ -555,7 +557,9 @@ export function EnvironmentGroups({
       <ProviderGroup
         title="Roboflow RF-DETR"
         summary={rfdetrGroupSummary}
-        status={stacks.some((stack) => stack.python_version.status !== "available") ? "error" : "ready"}
+        status={stacks.some((stack) =>
+          stack.python_version.status !== "available" || stack.rfdetr_version.status !== "available",
+        ) ? "error" : "ready"}
         defaultExpanded={defaultExpanded}
       >
         {stacks.length > 0 ? (
@@ -635,19 +639,72 @@ export function EnvCard({
   );
 }
 
-export function StackEnvironmentCards({ stacks }: { stacks: StackEnvironment[] }) {
+export function StackEnvironmentCards({
+  stacks,
+  defaultExpanded = false,
+}: {
+  stacks: StackEnvironment[];
+  defaultExpanded?: boolean;
+}) {
   return (
     <>
       {stacks.map((stack) => (
-        <EnvCard
-          key={stack.key}
-          title={stack.display_name}
-          status={stack.python_version.status === "available" ? "ok" : "error"}
-          version={stack.python_version.status === "available" ? stack.python_version.version : "Unavailable"}
-          path={stack.python_path}
-        />
+        <StackEnvironmentRow key={stack.key} stack={stack} defaultExpanded={defaultExpanded} />
       ))}
     </>
+  );
+}
+
+export function StackEnvironmentRow({
+  stack,
+  defaultExpanded = false,
+}: {
+  stack: StackEnvironment;
+  defaultExpanded?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const pythonAvailable = stack.python_version.status === "available";
+  const packageAvailable = stack.rfdetr_version.status === "available";
+  const status = pythonAvailable && packageAvailable ? "ok" : "error";
+  const packageVersion = stack.rfdetr_version.status === "available"
+    ? stack.rfdetr_version.version
+    : "Unavailable";
+
+  return (
+    <div className="rounded-xl border border-zinc-200/80 bg-white p-2 shadow-sm">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-zinc-50"
+      >
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-semibold text-zinc-800">{stack.display_name}</span>
+          <span className={`block truncate font-mono text-[11px] ${status === "ok" ? "text-zinc-500" : "text-red-500"}`}>
+            rfdetr {packageVersion}
+          </span>
+        </span>
+        <ChevronDown className={`size-4 shrink-0 text-zinc-400 transition-transform ${expanded ? "rotate-180" : ""}`} aria-hidden="true" />
+      </button>
+      {expanded && (
+        <div className="space-y-2 px-1 pb-1 pt-2">
+          <EnvCard
+            title="Python"
+            status={pythonAvailable ? "ok" : "error"}
+            version={stack.python_version.status === "available" ? stack.python_version.version : "Unavailable"}
+            path={stack.python_path}
+          />
+          <EnvCard
+            title="RF-DETR package"
+            status={packageAvailable ? "ok" : "error"}
+            version={packageVersion}
+          />
+          <p className={`px-1 text-[11px] ${status === "ok" ? "text-emerald-600" : "text-red-600"}`}>
+            Status: {status === "ok" ? "Ready" : "Error"}
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 

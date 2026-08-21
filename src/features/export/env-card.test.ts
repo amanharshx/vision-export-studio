@@ -6,6 +6,7 @@ import {
   EnvCard,
   EnvironmentGroups,
   ProviderGroup,
+  StackEnvironmentRow,
   StackEnvironmentCards,
   getRfdetrGroupSummary,
   getUltralyticsGroupStatus,
@@ -54,14 +55,14 @@ describe("StackEnvironmentCards", () => {
       display_name: "RF-DETR",
       python_path: "/tmp/runtime/envs/rfdetr-default/.venv/bin/python",
       python_version: { status: "available", version: "3.12.12" },
+      rfdetr_version: { status: "available", version: "1.9.0" },
     },
   ];
 
   test("renders one card for each returned stack", () => {
     const html = renderToStaticMarkup(React.createElement(StackEnvironmentCards, { stacks }));
     expect(html).toContain("RF-DETR");
-    expect(html).toContain("3.12.12");
-    expect(html).toContain(stacks[0].python_path);
+    expect(html).toContain("rfdetr 1.9.0");
   });
 
   test("renders nothing when no stack environments exist", () => {
@@ -69,9 +70,31 @@ describe("StackEnvironmentCards", () => {
   });
 
   test("keeps paths visually truncated while exposing full path in title", () => {
-    const html = renderToStaticMarkup(React.createElement(StackEnvironmentCards, { stacks }));
+    const html = renderToStaticMarkup(React.createElement(StackEnvironmentCards, { stacks, defaultExpanded: true }));
     expect(html).toContain('title="/tmp/runtime/envs/rfdetr-default/.venv/bin/python"');
     expect(html).toContain("truncate");
+  });
+
+  test("child row starts collapsed and keeps details hidden", () => {
+    const html = renderToStaticMarkup(React.createElement(StackEnvironmentRow, { stack: stacks[0] }));
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain("RF-DETR");
+    expect(html).toContain("1.9.0");
+    expect(html).not.toContain("3.12.12");
+  });
+
+  test("expanded child shows Python, path, status, and package error state", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(StackEnvironmentRow, {
+        stack: { ...stacks[0], rfdetr_version: { status: "unavailable" } },
+        defaultExpanded: true,
+      }),
+    );
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain("3.12.12");
+    expect(html).toContain(stacks[0].python_path);
+    expect(html).toContain("Unavailable");
+    expect(html).toContain("Error");
   });
 });
 
@@ -148,9 +171,12 @@ describe("provider groups", () => {
       display_name: "RF-DETR",
       python_path: "/tmp/python",
       python_version: { status: "available", version: "3.12.12" },
+      rfdetr_version: { status: "available", version: "1.9.0" },
     };
     expect(getRfdetrGroupSummary([stack])).toBe("1 installed · ready");
     expect(getRfdetrGroupSummary([{ ...stack, python_version: { status: "unavailable" } }]))
+      .toBe("1 installed · error");
+    expect(getRfdetrGroupSummary([{ ...stack, rfdetr_version: { status: "unavailable" } }]))
       .toBe("1 installed · error");
   });
 });
