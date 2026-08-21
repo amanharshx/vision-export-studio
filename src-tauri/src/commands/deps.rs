@@ -689,13 +689,13 @@ fn probe_failure_results(
     if route_id == "rfdetr.pth.executorch" {
         return vec![
             probe_failure_result(definition, reason.clone()),
-            missing_torch_probe_result(reason),
+            missing_torch_result(reason),
         ];
     }
     vec![probe_failure_result(definition, reason)]
 }
 
-fn missing_torch_probe_result(reason: String) -> DepCheckResult {
+fn missing_torch_result(reason: String) -> DepCheckResult {
     DepCheckResult {
         item: "torch>=2.13".to_string(),
         status: "missing_package".to_string(),
@@ -705,12 +705,7 @@ fn missing_torch_probe_result(reason: String) -> DepCheckResult {
     }
 }
 
-fn parse_rfdetr_probe_output(
-    route_id: &str,
-    raw: &str,
-    install_hint: &str,
-    _install_package: &str,
-) -> Vec<DepCheckResult> {
+fn parse_rfdetr_probe_output(route_id: &str, raw: &str) -> Vec<DepCheckResult> {
     let definition = rfdetr_probe(route_id);
     let fail = |reason: String| probe_failure_results(route_id, definition, reason);
     let output: RfDetrProbeOutput = match serde_json::from_str(raw) {
@@ -783,7 +778,7 @@ fn parse_rfdetr_probe_output(
         let torch = if module_present("torch") {
             versioned_rfdetr_result(&definition.distributions[1], installed("torch"))
         } else {
-            missing_torch_module_result()
+            missing_torch_result("module 'torch' is not available".to_string())
         };
         return vec![rfdetr, torch];
     }
@@ -795,7 +790,7 @@ fn parse_rfdetr_probe_output(
             item: definition.item.to_string(),
             status: "ready".to_string(),
             reason: String::new(),
-            install_hint: install_hint.to_string(),
+            install_hint: definition.install_hint.to_string(),
             install_package: None,
         }];
     }
@@ -812,16 +807,6 @@ fn missing_rfdetr_module_result(module: &str) -> DepCheckResult {
         reason: format!("module '{}' is not available", module),
         install_hint: "pip install \"rfdetr[executorch]>=1.9.0\"".to_string(),
         install_package: Some("rfdetr[executorch]>=1.9.0".to_string()),
-    }
-}
-
-fn missing_torch_module_result() -> DepCheckResult {
-    DepCheckResult {
-        item: "torch>=2.13".to_string(),
-        status: "missing_package".to_string(),
-        reason: "module 'torch' is not available".to_string(),
-        install_hint: "pip install \"torch>=2.13\"".to_string(),
-        install_package: Some("torch>=2.13".to_string()),
     }
 }
 
@@ -872,12 +857,7 @@ fn check_rfdetr_probe_dep(python: &str, route_id: &str) -> Vec<DepCheckResult> {
     let definition = rfdetr_probe(route_id);
     let code = rfdetr_probe_code(route_id);
     match probe(python, &code) {
-        Ok(output) => parse_rfdetr_probe_output(
-            route_id,
-            &output,
-            definition.install_hint,
-            definition.install_package,
-        ),
+        Ok(output) => parse_rfdetr_probe_output(route_id, &output),
         Err(error) => {
             probe_failure_results(route_id, definition, format!("probe failed: {}", error))
         }
@@ -1556,9 +1536,7 @@ mod tests {
 
     #[test]
     fn probe_does_not_import_framework_packages() {
-        let Some(python) = available_test_python() else {
-            return;
-        };
+        let python = available_test_python().expect("python3 or python required");
         let code = rfdetr_probe_code("rfdetr.pth.executorch");
         let code = format!(
             "exec({code:?})\nassert 'executorch' not in __import__('sys').modules\nassert 'torch' not in __import__('sys').modules\nassert 'rfdetr' not in __import__('sys').modules",
@@ -1574,12 +1552,7 @@ mod tests {
             r#"{"modules":[{"name":"rfdetr","present":true},{"name":"rfdetr","present":true}],"distributions":[]}"#,
             r#"{"modules":[{"name":"rfdetr","present":true}],"distributions":[]}"#,
         ] {
-            let result = parse_rfdetr_probe_output(
-                "rfdetr.pth.onnx",
-                output,
-                "pip install \"rfdetr[onnx]\"",
-                "rfdetr[onnx]",
-            );
+            let result = parse_rfdetr_probe_output("rfdetr.pth.onnx", output);
             assert!(
                 result.iter().all(|row| row.status != "ready"),
                 "output unexpectedly ready: {output}"
@@ -1590,12 +1563,7 @@ mod tests {
 
     #[test]
     fn malformed_executorch_probe_returns_two_installable_rows() {
-        let result = parse_rfdetr_probe_output(
-            "rfdetr.pth.executorch",
-            "not json",
-            "pip install \"rfdetr[executorch]>=1.9.0\"",
-            "rfdetr[executorch]>=1.9.0",
-        );
+        let result = parse_rfdetr_probe_output("rfdetr.pth.executorch", "not json");
         assert_eq!(result.len(), 2);
         assert!(result.iter().all(|row| row.status == "missing_package"));
         assert_eq!(result[0].item, "rfdetr[executorch]>=1.9.0");
@@ -1609,8 +1577,6 @@ mod tests {
         let result = parse_rfdetr_probe_output(
             "rfdetr.pth.engine",
             r#"{"modules":[{"name":"rfdetr","present":true},{"name":"tensorrt","present":false}],"distributions":[]}"#,
-            "pip install \"rfdetr[tensorrt]\"",
-            "rfdetr[tensorrt]",
         );
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].status, "missing_package");
@@ -2008,8 +1974,6 @@ mod tests {
                 &format!(
                     r#"{{"modules":{modules},"distributions":[{{"name":"rfdetr","version":"{rfdetr}"}},{{"name":"torch","version":"{torch}"}}]}}"#
                 ),
-                "pip install \"rfdetr[executorch]>=1.9.0\"",
-                "rfdetr[executorch]>=1.9.0",
             )
         };
 
@@ -2025,8 +1989,6 @@ mod tests {
             &format!(
                 r#"{{"modules":{modules},"distributions":[{{"name":"rfdetr","version":"1.9.0"}},{{"name":"torch","version":null}}]}}"#
             ),
-            "pip install \"rfdetr[executorch]>=1.9.0\"",
-            "rfdetr[executorch]>=1.9.0",
         );
         assert_eq!(missing_torch.len(), 2);
         assert_eq!(missing_torch[0].status, "ready");
@@ -2040,8 +2002,6 @@ mod tests {
         let missing_torch_module = parse_rfdetr_probe_output(
             "rfdetr.pth.executorch",
             r#"{"modules":[{"name":"rfdetr","present":true},{"name":"executorch.exir","present":true},{"name":"torch","present":false}],"distributions":[{"name":"rfdetr","version":"1.9.0"},{"name":"torch","version":"2.13"}]}"#,
-            "pip install \"rfdetr[executorch]>=1.9.0\"",
-            "rfdetr[executorch]>=1.9.0",
         );
         assert_eq!(missing_torch_module.len(), 2);
         assert_eq!(missing_torch_module[0].status, "ready");
@@ -2059,8 +2019,6 @@ mod tests {
         let missing_executorch_module = parse_rfdetr_probe_output(
             "rfdetr.pth.executorch",
             r#"{"modules":[{"name":"rfdetr","present":true},{"name":"executorch.exir","present":false},{"name":"torch","present":true}],"distributions":[{"name":"rfdetr","version":"1.9.0"},{"name":"torch","version":"2.13"}]}"#,
-            "pip install \"rfdetr[executorch]>=1.9.0\"",
-            "rfdetr[executorch]>=1.9.0",
         );
         assert_eq!(missing_executorch_module.len(), 2);
         assert_eq!(missing_executorch_module[0].status, "missing_package");
