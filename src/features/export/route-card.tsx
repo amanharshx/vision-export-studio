@@ -1,7 +1,7 @@
 import { formatIconMap } from "@/components/format-icons";
 import { formats } from "@/lib/routes";
-import { architectureMatters, isCompatible, type AppPlatform, UNKNOWN_ARCH } from "@/lib/platform";
 import type { RouteSpec } from "@/lib/types";
+import type { HostSupportResult } from "@/lib/tauri/app";
 import { cn } from "@/lib/utils";
 import { ChevronRight, Cpu, Layers, Zap } from "lucide-react";
 
@@ -27,32 +27,34 @@ export function categoryBg(category: string) {
 
 interface RouteRowProps {
   route: RouteSpec;
-  platform: AppPlatform;
-  platformResolved: boolean;
+  hostStatus: HostSupportResult["status"] | "checking";
   onSelect: () => void;
   disabled?: boolean;
   disabledReason?: string;
 }
 
-export function RouteRow({ route, platform, platformResolved, onSelect, disabled = false, disabledReason }: RouteRowProps) {
+export function RouteRow({ route, hostStatus, onSelect, disabled = false, disabledReason }: RouteRowProps) {
   const format = formats[route.targetFormat];
   const formatIcon = formatIconMap[format.id];
   const Icon = formatIcon ?? categoryIcon(format.category);
   const bg = formatIcon ? "bg-white text-zinc-800" : categoryBg(format.category);
-  const compatible = !platformResolved
-    || (platform.arch === UNKNOWN_ARCH && architectureMatters(route.platformLock, platform.os))
-    || isCompatible(route.platformLock, platform.os, platform.arch);
+  const compatible = hostStatus === "supported" || hostStatus === "checking";
+  const hostUnavailable = hostStatus === "checking" || hostStatus === "error";
+  const rowDisabled = disabled || hostUnavailable;
+  const rowDisabledReason = disabledReason
+    ?? (hostStatus === "checking" ? "Checking host compatibility" : undefined)
+    ?? (hostStatus === "error" ? "Host compatibility unavailable" : undefined);
 
   return (
     <button
       type="button"
-      onClick={disabled ? undefined : onSelect}
-      disabled={disabled}
-      title={disabledReason}
+      onClick={rowDisabled ? undefined : onSelect}
+      disabled={rowDisabled}
+      title={rowDisabledReason}
       className={cn(
         "flex w-full items-center gap-4 rounded-lg border border-zinc-900/10 bg-white px-4 py-3 text-left transition-colors hover:bg-zinc-50",
         !compatible && "opacity-50",
-        disabled && "cursor-not-allowed opacity-45 hover:bg-white",
+        rowDisabled && "cursor-not-allowed opacity-45 hover:bg-white",
       )}
     >
       <ChevronRight className="h-4 w-4 shrink-0 text-zinc-300" />

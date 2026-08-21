@@ -1,26 +1,30 @@
 import type { RouteSpec } from "@/lib/types";
-import { architectureMatters, isCompatible, platformLabel, type AppPlatform, UNKNOWN_ARCH } from "@/lib/platform";
+import { platformLabel, type AppPlatform } from "@/lib/platform";
 import { RouteRow } from "./route-card";
+import { getHostSupportResult } from "./host-support";
+import type { HostSupportResult } from "@/lib/tauri/app";
 
 interface RouteGridProps {
   routes: RouteSpec[];
   platform: AppPlatform;
-  platformResolved: boolean;
+  hostSupportResults: HostSupportResult[];
   onSelectRoute: (routeId: string) => void;
   disabled?: boolean;
   disabledReason?: string;
 }
 
-export function RouteGrid({ routes, platform, platformResolved, onSelectRoute, disabled = false, disabledReason }: RouteGridProps) {
-  const defersToRust = (route: RouteSpec) => !platformResolved
-    || (platform.arch === UNKNOWN_ARCH && architectureMatters(route.platformLock, platform.os));
+export function RouteGrid({ routes, platform, hostSupportResults, onSelectRoute, disabled = false, disabledReason }: RouteGridProps) {
+  const hostStatus = (route: RouteSpec) => getHostSupportResult(hostSupportResults, route.id)?.status ?? "checking";
   const compatible = routes.filter(
-    (route) => defersToRust(route) || isCompatible(route.platformLock, platform.os, platform.arch),
+    (route) => hostStatus(route) === "supported" || hostStatus(route) === "checking",
   );
   const incompatible = routes.filter(
-    (route) => !defersToRust(route) && !isCompatible(route.platformLock, platform.os, platform.arch),
+    (route) => hostStatus(route) === "unsupported",
   );
-  const hasDeferredRoutes = routes.some(defersToRust);
+  const unavailable = routes.filter(
+    (route) => hostStatus(route) === "error",
+  );
+  const hasDeferredRoutes = routes.some((route) => hostStatus(route) === "checking");
 
   return (
     <div className="space-y-2">
@@ -28,16 +32,15 @@ export function RouteGrid({ routes, platform, platformResolved, onSelectRoute, d
         <RouteRow
           key={route.id}
           route={route}
-          platform={platform}
-          platformResolved={platformResolved}
+          hostStatus={hostStatus(route)}
           onSelect={() => onSelectRoute(route.id)}
           disabled={disabled}
           disabledReason={disabledReason}
         />
       ))}
-      {platformResolved && platform.arch === UNKNOWN_ARCH && hasDeferredRoutes && (
+      {hasDeferredRoutes && (
         <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          Architecture unavailable; compatibility is checked before export.
+          Host compatibility is being checked before export.
         </p>
       )}
       {incompatible.length > 0 && (
@@ -49,8 +52,24 @@ export function RouteGrid({ routes, platform, platformResolved, onSelectRoute, d
             <RouteRow
               key={route.id}
               route={route}
-              platform={platform}
-              platformResolved={platformResolved}
+              hostStatus={hostStatus(route)}
+              onSelect={() => onSelectRoute(route.id)}
+              disabled={disabled}
+              disabledReason={disabledReason}
+            />
+          ))}
+        </>
+      )}
+      {unavailable.length > 0 && (
+        <>
+          <p className="pt-2 text-sm font-medium text-zinc-400">
+            Unavailable
+          </p>
+          {unavailable.map((route) => (
+            <RouteRow
+              key={route.id}
+              route={route}
+              hostStatus={hostStatus(route)}
               onSelect={() => onSelectRoute(route.id)}
               disabled={disabled}
               disabledReason={disabledReason}

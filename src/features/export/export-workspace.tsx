@@ -6,7 +6,7 @@ import { cancelExport, openExportFolder, startExport } from "@/lib/tauri/export"
 import { defaultRouteForProvider, findRoute, hasAllowedSourceExtension, providers, providerList, routesForProvider } from "@/lib/providers";
 import { inspectRfDetrCheckpoint } from "@/lib/tauri/rfdetr";
 import { architectureMatters, type AppOS, type AppPlatform, getOS, incompatibleReason, isCompatible, UNKNOWN_ARCH } from "@/lib/platform";
-import { getAppTelemetryContext } from "@/lib/tauri/app";
+import { getAppTelemetryContext, getRoutePlatformSupport, type HostSupportResult } from "@/lib/tauri/app";
 import { createListenerGroup, type ListenerGroup } from "@/lib/tauri/listener-group";
 import type {
   DepCheckResult,
@@ -64,6 +64,7 @@ import type { UpdaterController } from "@/features/updater/use-updater-controlle
 import { DropZone } from "./drop-zone";
 import { ExportModal } from "./export-modal";
 import { RouteGrid } from "./route-grid";
+import { getEffectiveHostSupportResult, getHostSupportResult } from "./host-support";
 import { normalizeOptionsForRoute } from "./options/normalize";
 
 type WorkspaceView = "drop" | "formats";
@@ -498,10 +499,17 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const [view, setView] = useState<WorkspaceView>("drop");
   const [infoOpen, setInfoOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [hostSupportResults, setHostSupportResults] = useState<HostSupportResult[] | null>(null);
 
   const [selectedProviderId, setSelectedProviderId] = useState<ProviderId>("ultralytics");
   const selectedProvider = providers[selectedProviderId];
   const currentRoutes = useMemo(() => routesForProvider(selectedProviderId), [selectedProviderId]);
+  const effectiveHostSupportResults = useMemo(
+    () => currentRoutes
+      .map((route) => getEffectiveHostSupportResult(route, appPlatform, platformResolved, hostSupportResults))
+      .filter((result): result is HostSupportResult => result !== null),
+    [appPlatform, currentRoutes, hostSupportResults, platformResolved],
+  );
   const [selectedRouteId, setSelectedRouteId] = useState(defaultRouteForProvider("ultralytics").id);
   const selectedRoute = useMemo(
     () => currentRoutes.find((route) => route.id === selectedRouteId) ?? defaultRouteForProvider(selectedProviderId),
@@ -567,6 +575,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const depRefreshRequestRef = useRef(0);
   const routeOptionsRef = useRef<Record<string, RouteOptionsState>>({});
   const activeInstallListenerGroupRef = useRef<ListenerGroup | null>(null);
+  const hostSupportRequestRef = useRef(0);
 
   useEffect(() => {
     return () => {
@@ -646,6 +655,24 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     void getManagedRuntimeRebuildEligibility().then(setManagedRuntimeUpgrade).catch(() => setManagedRuntimeUpgrade(null));
     void refreshStackEnvironmentCards();
   }, [refreshStackEnvironmentCards]);
+
+  useEffect(() => {
+    const requestId = hostSupportRequestRef.current + 1;
+    hostSupportRequestRef.current = requestId;
+    setHostSupportResults(null);
+    void getRoutePlatformSupport(currentRoutes.map((route) => route.id))
+      .then((results) => {
+        if (hostSupportRequestRef.current === requestId) setHostSupportResults(results);
+      })
+      .catch((error: unknown) => {
+        if (hostSupportRequestRef.current !== requestId) return;
+        setHostSupportResults(currentRoutes.map((route) => ({
+          route_id: route.id,
+          status: "error" as const,
+          reason: `Host compatibility check failed: ${String(error)}`,
+        })));
+      });
+  }, [currentRoutes]);
 
   const refreshRouteDependencies = useCallback(async (routeId: string | null, pythonPath: string | null) => {
     const requestId = depRefreshRequestRef.current + 1;
@@ -1915,7 +1942,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
             <RouteGrid
               routes={currentRoutes}
               platform={appPlatform}
-              platformResolved={platformResolved}
+              hostSupportResults={effectiveHostSupportResults}
               onSelectRoute={handleActivateRoute}
               disabled={routeGridDisabled}
               disabledReason={routeGridDisabledReason}
@@ -1935,8 +1962,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         }}
         provider={selectedProvider}
         route={selectedRoute}
-        platform={appPlatform}
-        platformResolved={platformResolved}
+        hostSupportResult={getHostSupportResult(effectiveHostSupportResults, selectedRoute.id)}
         sourcePath={sourcePath}
         exportStatus={exportStatus}
         logLines={logLines}
