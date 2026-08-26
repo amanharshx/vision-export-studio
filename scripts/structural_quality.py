@@ -33,6 +33,14 @@ class Finding:
     parameters: int
 
 
+@dataclass(frozen=True)
+class FileResult:
+    file: str
+    supported: bool
+    analyzed: bool
+    findings: tuple
+
+
 def parse_changed_ranges(diff):
     ranges = []
     for line in diff.splitlines():
@@ -94,23 +102,35 @@ def annotation(name, file, start, end, function):
 
 
 def metric_text(finding):
-    labels = {"nloc": f"{finding.nloc} NLOC", "complexity": f"complexity {finding.complexity}", "parameters": f"{finding.parameters} parameters"}
-    return ", ".join(labels[name] for name in finding.exceeded)
+    labels = {
+        "nloc": f"Function length: **{finding.nloc} NLOC**, limit **50**",
+        "complexity": f"Cyclomatic complexity: **{finding.complexity}**, limit **10**",
+        "parameters": f"Parameter count: **{finding.parameters}**, limit **5**",
+    }
+    return [labels[name] for name in finding.exceeded]
 
 
-def summary(analyzed, files, findings, skipped=0):
+def summary(results):
+    clean = sum(result.supported and result.analyzed and not result.findings for result in results)
+    warning = sum(bool(result.findings) for result in results)
+    not_analyzed = len(results) - clean - warning
     lines = ["## Structural code quality", ""]
-    if analyzed == 0:
-        lines.append("✅ No supported changed functions analyzed.")
-    elif findings:
-        count = len(findings)
-        lines.extend([f"Analyzed {analyzed} changed function{'s' if analyzed != 1 else ''} across {files} file{'s' if files != 1 else ''}.", "", f"⚠️ {count} structural warning{'s' if count != 1 else ''}", ""])
-        lines.extend(f"- `{item.file}:{item.start_line}` — `{item.name}`: {metric_text(item)}" for item in findings)
-    else:
-        lines.append(f"✅ Analyzed {analyzed} changed function{'s' if analyzed != 1 else ''}. No structural threshold findings.")
-    lines.extend(["", "Informational only. This check does not block merging.", "", MARKER, ""])
-    if skipped:
-        lines.insert(-2, f"Skipped {skipped} unsupported changed file{'s' if skipped != 1 else ''}.")
+    lines.append(f"✅ {clean} files clean · ⚠️ {warning} file{'s' if warning != 1 else ''} needs attention · ➖ {not_analyzed} not analyzed")
+    lines.append("")
+    for result in results:
+        if result.findings:
+            lines.extend(["<details open>", f"<summary>⚠️ <code>{result.file}</code> — {len(result.findings)} finding{'s' if len(result.findings) != 1 else ''}</summary>", ""])
+            for finding in result.findings:
+                lines.extend([f"### `{finding.name}` — lines {finding.start_line}–{finding.end_line}", ""])
+                lines.extend(f"- {metric}" for metric in metric_text(finding))
+                lines.append("")
+        elif result.supported and result.analyzed:
+            lines.extend(["<details>", f"<summary>✅ <code>{result.file}</code></summary>", "", "No structural threshold findings.", ""])
+        else:
+            reason = "unsupported file type" if not result.supported else "no changed function to analyze"
+            lines.extend(["<details>", f"<summary>➖ <code>{result.file}</code></summary>", "", f"Not analyzed: {reason}.", ""])
+        lines.extend(["</details>", ""])
+    lines.extend(["Informational only. This check does not block merging.", "", MARKER, ""])
     return "\n".join(lines)
 
 
@@ -122,18 +142,17 @@ def lizard_functions(path):
 def run_analysis(repo, base, head):
     comparison_base = merge_base(repo, base, head)
     files = _changed_files(repo, comparison_base, head)
-    findings, analyzed, skipped = [], 0, 0
+    results = []
     for relative in files:
         if not supported_extension(relative):
-            skipped += 1
+            results.append(FileResult(str(relative), False, False, ()))
             continue
         diff = subprocess.run(["git", "diff", "--unified=0", "--no-color", comparison_base, head, "--", str(relative)], cwd=repo, check=True, capture_output=True, text=True).stdout
         functions = lizard_functions(repo / relative)
         ranges = parse_changed_ranges(diff)
-        analyzed += sum(1 for function in functions if any(function.start_line <= end and function.end_line >= start for start, end in ranges))
-        findings.extend(findings_for_functions(str(relative), ranges, functions))
-    unique = {(item.file, item.name, item.start_line): item for item in findings}
-    return analyzed, len(files) - skipped, skipped, sorted(unique.values(), key=lambda item: (-len(item.exceeded), item.file, item.start_line, item.name))
+        analyzed = any(function.start_line <= end and function.end_line >= start for function in functions for start, end in ranges)
+        results.append(FileResult(str(relative), True, analyzed, tuple(findings_for_functions(str(relative), ranges, functions))))
+    return sorted(results, key=lambda item: item.file)
 
 
 def main(argv=None):
@@ -143,10 +162,12 @@ def main(argv=None):
     parser.add_argument("--summary", required=True)
     args = parser.parse_args(argv)
     try:
-        analyzed, files, skipped, findings = run_analysis(Path.cwd(), args.base, args.head)
-        Path(args.summary).write_text(summary(analyzed, files, findings, skipped), encoding="utf-8")
-        for finding in findings:
-            print(annotation(metric_text(finding), finding.file, finding.start_line, finding.end_line, finding.name))
+        results = run_analysis(Path.cwd(), args.base, args.head)
+        Path(args.summary).write_text(summary(results), encoding="utf-8")
+        for result in results:
+            for finding in result.findings:
+                plain_metrics = ", ".join(metric.replace("**", "").split(": ", 1)[1] for metric in metric_text(finding))
+                print(annotation(plain_metrics, finding.file, finding.start_line, finding.end_line, finding.name))
         return 0
     except (OSError, subprocess.CalledProcessError, ImportError, ValueError) as error:
         print(f"structural quality analyzer failed: {error}", file=sys.stderr)

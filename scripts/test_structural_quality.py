@@ -85,19 +85,21 @@ class StructuralQualityTests(unittest.TestCase):
         self.assertEqual(output, "::warning file=x%2Cy%3Afile,line=2,endLine=4,title=Structural quality::bad%25name%0A [fn:one]")
 
     def test_summaries_include_marker_and_wording(self):
-        clean = quality.summary(6, 4, [])
-        empty = quality.summary(0, 0, [])
-        warning = quality.summary(6, 4, [quality.Finding("x.py", "fn", 2, 3, ("nloc",), 51, 1, 1)])
-        self.assertIn("✅ Analyzed 6 changed functions.", clean)
-        self.assertIn("No supported changed functions", empty)
-        self.assertIn("⚠️ 1 structural warning", warning)
-        for text in (clean, empty, warning):
-            self.assertIn("<!-- structural-code-quality -->", text)
+        finding = quality.Finding("x.py", "fn", 2, 3, ("nloc",), 51, 1, 1)
+        results = [quality.FileResult("clean.py", True, True, ()), quality.FileResult("x.py", True, True, (finding,)), quality.FileResult("skip.xyz", False, False, ())]
+        text = quality.summary(results)
+        self.assertIn("✅ 1 files clean · ⚠️ 1 file needs attention · ➖ 1 not analyzed", text)
+        self.assertIn("<summary>⚠️ <code>x.py</code> — 1 finding</summary>", text)
+        self.assertIn("### `fn` — lines 2–3", text)
+        self.assertIn("Function length: **51 NLOC**, limit **50**", text)
+        self.assertIn("Not analyzed: unsupported file type.", text)
+        self.assertNotIn("changed functions", text)
+        self.assertIn("<!-- structural-code-quality -->", text)
 
     def test_threshold_findings_exit_zero(self):
         finding = quality.Finding("x.py", "fn", 2, 3, ("nloc",), 51, 1, 1)
         with tempfile.NamedTemporaryFile() as summary:
-            with patch.object(quality, "run_analysis", return_value=(1, 0, 0, [finding])):
+            with patch.object(quality, "run_analysis", return_value=[quality.FileResult("x.py", True, True, (finding,))]):
                 self.assertEqual(quality.main(["--base", "base", "--head", "head", "--summary", summary.name]), 0)
 
 
