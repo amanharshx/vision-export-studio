@@ -92,7 +92,6 @@ class StructuralQualityTests(unittest.TestCase):
         finding = quality.Finding("x.py", "fn", 2, 3, ("nloc",), 51, 1, 1)
         results = [quality.FileResult("clean.py", True, True, ()), quality.FileResult("x.py", True, True, (finding,)), quality.FileResult("skip.xyz", False, False, ())]
         text = quality.summary(results)
-        self.assertIn("⚠️ 1 needs attention · ✅ 1 clean · ➖ 1 not analyzed", text)
         self.assertIn("<summary>⚠️ Needs attention — 1 file</summary>", text)
         self.assertIn("- `x.py`\n  - `fn` · lines 2–3", text)
         self.assertIn("Function length: **51 NLOC** · limit: **50**", text)
@@ -102,12 +101,6 @@ class StructuralQualityTests(unittest.TestCase):
         commit_text = quality.summary(results, "1b680b590bee1a0b2d863ed5cb43f40812af6b13", "amanharshx/vision-export-studio")
         self.assertIn("Results for commit [`1b680b5`](https://github.com/amanharshx/vision-export-studio/commit/1b680b590bee1a0b2d863ed5cb43f40812af6b13)", commit_text)
         self.assertEqual(commit_text.count("Results for commit"), 1)
-
-    def test_clean_only_summary_omits_empty_statuses(self):
-        clean = quality.summary([quality.FileResult("clean.py", True, True, ())])
-        self.assertIn("✅ 1 clean", clean)
-        self.assertNotIn("⚠️", clean)
-        self.assertNotIn("➖", clean)
 
     def test_threshold_findings_exit_zero(self):
         finding = quality.Finding("x.py", "fn", 2, 3, ("nloc",), 51, 1, 1)
