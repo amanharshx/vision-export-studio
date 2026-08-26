@@ -1,4 +1,3 @@
-import os
 import subprocess
 import sys
 import tempfile
@@ -44,6 +43,28 @@ class StructuralQualityTests(unittest.TestCase):
             files = quality.changed_files(repo, base, head)
             self.assertEqual({path.name for path in files}, {"new.py", "renamed.py", "skip.xyz"})
 
+    def test_changed_files_uses_merge_base_when_branch_is_behind(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+            (repo / "base.py").write_text("base = 1\n")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+            base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+            subprocess.run(["git", "checkout", "-qb", "feature"], cwd=repo, check=True)
+            (repo / "feature.py").write_text("feature = 1\n")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "feature"], cwd=repo, check=True)
+            head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+            subprocess.run(["git", "checkout", "-qb", "mainline", base], cwd=repo, check=True)
+            (repo / "base-only.py").write_text("base_only = 1\n")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "base-only"], cwd=repo, check=True)
+            later_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+            self.assertEqual({path.name for path in quality.changed_files(repo, later_base, head)}, {"feature.py"})
+
     def test_analyze_only_overlapping_functions_and_aggregate_deduplicate_order(self):
         functions = [
             quality.Function("z", 30, 30, 60, 11, 6),
@@ -61,7 +82,7 @@ class StructuralQualityTests(unittest.TestCase):
 
     def test_annotation_escapes_properties_and_message(self):
         output = quality.annotation("bad%name\n", "x,y:file", 2, 4, "fn:one")
-        self.assertEqual(output, "::warning file=x%2Cy%3Afile,line=2,endLine=4,title=Structural%20quality::bad%25name%0A%20%5Bfn%3Aone%5D")
+        self.assertEqual(output, "::warning file=x%2Cy%3Afile,line=2,endLine=4,title=Structural quality::bad%25name%0A [fn:one]")
 
     def test_summaries_include_marker_and_wording(self):
         clean = quality.summary(6, 4, [])

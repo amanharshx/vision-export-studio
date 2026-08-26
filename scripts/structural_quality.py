@@ -1,7 +1,6 @@
 """Diff-scoped structural quality coordinator."""
 
 import argparse
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -48,9 +47,18 @@ def parse_changed_ranges(diff):
     return ranges
 
 
-def changed_files(repo, base, head):
+def merge_base(repo, base, head):
+    result = subprocess.run(["git", "merge-base", base, head], cwd=repo, check=True, capture_output=True, text=True)
+    return result.stdout.strip()
+
+
+def _changed_files(repo, base, head):
     result = subprocess.run(["git", "diff", "--name-only", "--diff-filter=ACMR", "-z", base, head], cwd=repo, check=True, capture_output=True)
     return [Path(name) for name in result.stdout.decode().split("\0") if name]
+
+
+def changed_files(repo, base, head):
+    return _changed_files(repo, merge_base(repo, base, head), head)
 
 
 def supported_extension(path):
@@ -78,9 +86,11 @@ def findings_for_functions(file, ranges, functions):
 
 
 def annotation(name, file, start, end, function):
-    def escape(value):
+    def escape_property(value):
         return str(value).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A").replace(":", "%3A").replace(",", "%2C")
-    return f"::warning file={escape(file)},line={start},endLine={end},title=Structural%20quality::{escape(name)}%20%5B{escape(function)}%5D"
+    def escape_message(value):
+        return str(value).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return f"::warning file={escape_property(file)},line={start},endLine={end},title=Structural quality::{escape_message(name)} [{escape_message(function)}]"
 
 
 def metric_text(finding):
@@ -110,13 +120,14 @@ def lizard_functions(path):
 
 
 def run_analysis(repo, base, head):
-    files = changed_files(repo, base, head)
+    comparison_base = merge_base(repo, base, head)
+    files = _changed_files(repo, comparison_base, head)
     findings, analyzed, skipped = [], 0, 0
     for relative in files:
         if not supported_extension(relative):
             skipped += 1
             continue
-        diff = subprocess.run(["git", "diff", "--unified=0", "--no-color", base, head, "--", str(relative)], cwd=repo, check=True, capture_output=True, text=True).stdout
+        diff = subprocess.run(["git", "diff", "--unified=0", "--no-color", comparison_base, head, "--", str(relative)], cwd=repo, check=True, capture_output=True, text=True).stdout
         functions = lizard_functions(repo / relative)
         ranges = parse_changed_ranges(diff)
         analyzed += sum(1 for function in functions if any(function.start_line <= end and function.end_line >= start for start, end in ranges))
