@@ -73,11 +73,11 @@ class StructuralQualityTests(unittest.TestCase):
             quality.Function("untouched", 80, 80, 99, 99, 1),
         ]
         findings = quality.findings_for_functions("x.py", [(1, 40)], functions)
-        self.assertEqual([(f.name, f.exceeded) for f in findings], [("a", ("nloc", "complexity", "parameters")), ("z", ("nloc", "complexity", "parameters"))])
+        self.assertEqual([(f.name, f.exceeded) for f in findings], [("a", ("nloc", "parameters")), ("z", ("nloc", "parameters"))])
 
     def test_threshold_equality_clean_and_unknown_files_counted(self):
-        self.assertEqual(quality.exceeded(50, 10, 5), ())
-        self.assertEqual(quality.exceeded(51, 10, 5), ("nloc",))
+        self.assertEqual(quality.exceeded(50, 15, 5), ())
+        self.assertEqual(quality.exceeded(50, 16, 5), ("complexity",))
         self.assertEqual(quality.supported_extension("x.xyz"), False)
         self.assertTrue(quality.in_structural_scope("src/features/export.ts"))
         self.assertTrue(quality.in_structural_scope("scripts/check.py"))

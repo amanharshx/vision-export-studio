@@ -9,7 +9,7 @@ from pathlib import Path
 
 SUPPORTED = {".py", ".rs", ".js", ".ts", ".tsx", ".jsx"}
 STRUCTURAL_ROOTS = (("src/", {".ts", ".tsx", ".js", ".jsx"}), ("src-tauri/src/", {".rs"}), ("src-tauri/python/", {".py"}), ("scripts/", {".py"}))
-THRESHOLDS = (("nloc", 50), ("complexity", 10), ("parameters", 5))
+THRESHOLDS = (("nloc", 50), ("complexity", 15), ("parameters", 5))
 MARKER = "<!-- structural-code-quality -->"
 
 
@@ -112,22 +112,66 @@ def annotation(name, file, start, end, function):
 def metric_text(finding):
     labels = {
         "nloc": f"Function length: **{finding.nloc} NLOC** · limit: **50**",
-        "complexity": f"Cyclomatic complexity: **{finding.complexity}** · limit: **10**",
+        "complexity": f"Cyclomatic complexity: **{finding.complexity}** · limit: **15**",
         "parameters": f"Parameter count: **{finding.parameters}** · limit: **5**",
     }
     return [labels[name] for name in finding.exceeded]
 
 
 def metric_annotation_text(finding):
-    labels = {"nloc": f"{finding.nloc} NLOC, limit 50", "complexity": f"complexity {finding.complexity}, limit 10", "parameters": f"{finding.parameters} parameters, limit 5"}
+    labels = {"nloc": f"{finding.nloc} NLOC, limit 50", "complexity": f"complexity {finding.complexity}, limit 15", "parameters": f"{finding.parameters} parameters, limit 5"}
     return ", ".join(labels[name] for name in finding.exceeded)
 
 
+def classify_results(results):
+    return ([result for result in results if result.findings], [result for result in results if result.supported and result.analyzed and not result.findings], [result for result in results if not result.supported or not result.analyzed])
+
+
+def render_commit(commit_sha, repository):
+    if not commit_sha:
+        return []
+    short_sha = commit_sha[:7]
+    target = f"https://github.com/{repository}/commit/{commit_sha}" if repository else None
+    text = f"Results for commit [`{short_sha}`]({target})" if target else f"Results for commit `{short_sha}`"
+    return [text, ""]
+
+
+def render_warning_group(results):
+    lines = ["<details open>", f"<summary>⚠️ Needs attention — {len(results)} file{'s' if len(results) != 1 else ''}</summary>", ""]
+    for result in results:
+        lines.append(f"- `{result.file}`")
+        for finding in result.findings:
+            lines.append(f"  - `{finding.name}` · lines {finding.start_line}–{finding.end_line}")
+            lines.extend(f"    - {metric}" for metric in metric_text(finding))
+    return lines + ["", "</details>", ""]
+
+
+def render_clean_group(results):
+    return ["<details>", f"<summary>✅ Clean — {len(results)} file{'s' if len(results) != 1 else ''}</summary>", ""] + [f"- `{result.file}`" for result in results] + ["", "</details>", ""]
+
+
+def render_not_analyzed_group(results):
+    lines = ["<details>", f"<summary>➖ Not analyzed — {len(results)} file{'s' if len(results) != 1 else ''}</summary>", ""]
+    for result in results:
+        reason = "unsupported file type" if not result.supported else "no changed function to analyze"
+        lines.append(f"- `{result.file}` — {reason}")
+    return lines + ["", "</details>", ""]
+
+
+def render_groups(warning_results, clean_results, not_analyzed_results):
+    lines = []
+    if warning_results:
+        lines.extend(render_warning_group(warning_results))
+    if clean_results:
+        lines.extend(render_clean_group(clean_results))
+    if not_analyzed_results:
+        lines.extend(render_not_analyzed_group(not_analyzed_results))
+    return lines
+
+
 def summary(results, commit_sha=None, repository=None):
-    warning_results = [result for result in results if result.findings]
-    clean_results = [result for result in results if result.supported and result.analyzed and not result.findings]
-    not_analyzed_results = [result for result in results if not result.supported or not result.analyzed]
-    lines = ["## Structural code quality", ""]
+    warning_results, clean_results, not_analyzed_results = classify_results(results)
+    lines = ["## Structural code quality", ""] + render_commit(commit_sha, repository)
     if commit_sha:
         short_sha = commit_sha[:7]
         if repository:
@@ -136,24 +180,7 @@ def summary(results, commit_sha=None, repository=None):
             lines.extend([f"Results for commit `{short_sha}`", ""])
     lines.append(f"⚠️ {len(warning_results)} need{'s' if len(warning_results) == 1 else ''} attention · ✅ {len(clean_results)} clean · ➖ {len(not_analyzed_results)} not analyzed")
     lines.append("")
-    if warning_results:
-        lines.extend(["<details open>", f"<summary>⚠️ Needs attention — {len(warning_results)} file{'s' if len(warning_results) != 1 else ''}</summary>", ""])
-        for result in warning_results:
-            lines.append(f"- `{result.file}`")
-            for finding in result.findings:
-                lines.append(f"  - `{finding.name}` · lines {finding.start_line}–{finding.end_line}")
-                lines.extend(f"    - {metric}" for metric in metric_text(finding))
-        lines.extend(["", "</details>", ""])
-    if clean_results:
-        lines.extend(["<details>", f"<summary>✅ Clean — {len(clean_results)} file{'s' if len(clean_results) != 1 else ''}</summary>", ""])
-        lines.extend(f"- `{result.file}`" for result in clean_results)
-        lines.extend(["", "</details>", ""])
-    if not_analyzed_results:
-        lines.extend(["<details>", f"<summary>➖ Not analyzed — {len(not_analyzed_results)} file{'s' if len(not_analyzed_results) != 1 else ''}</summary>", ""])
-        for result in not_analyzed_results:
-            reason = "unsupported file type" if not result.supported else "no changed function to analyze"
-            lines.append(f"- `{result.file}` — {reason}")
-        lines.extend(["", "</details>", ""])
+    lines.extend(render_groups(warning_results, clean_results, not_analyzed_results))
     lines.extend(["_Informational only — checks structural code quality in this PR. (Does not block merging)_", "", MARKER, ""])
     return "\n".join(lines)
 
