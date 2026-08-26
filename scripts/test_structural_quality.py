@@ -1,0 +1,84 @@
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).parent))
+import structural_quality as quality
+
+
+class StructuralQualityTests(unittest.TestCase):
+    def test_parse_added_and_modified_hunks_and_ignore_deletions(self):
+        diff = """@@ -1,0 +1 @@
++one
+@@ -4,2 +4,3 @@
+-old
++new
++more
+@@ -9,2 +9,0 @@
+-gone
+-also gone
+"""
+        self.assertEqual(quality.parse_changed_ranges(diff), [(1, 1), (4, 6)])
+
+    def test_changed_files_handles_added_modified_and_renamed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+            (repo / "old.py").write_text("def old():\n    return 1\n")
+            (repo / "skip.xyz").write_text("changed\n")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+            base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+            (repo / "new.py").write_text("def new():\n    return 2\n")
+            (repo / "old.py").rename(repo / "renamed.py")
+            (repo / "skip.xyz").write_text("changed again\n")
+            subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "head"], cwd=repo, check=True)
+            head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+            files = quality.changed_files(repo, base, head)
+            self.assertEqual({path.name for path in files}, {"new.py", "renamed.py", "skip.xyz"})
+
+    def test_analyze_only_overlapping_functions_and_aggregate_deduplicate_order(self):
+        functions = [
+            quality.Function("z", 30, 30, 60, 11, 6),
+            quality.Function("a", 2, 2, 51, 11, 6),
+            quality.Function("a", 2, 2, 51, 11, 6),
+            quality.Function("untouched", 80, 80, 99, 99, 1),
+        ]
+        findings = quality.findings_for_functions("x.py", [(1, 40)], functions)
+        self.assertEqual([(f.name, f.exceeded) for f in findings], [("a", ("nloc", "complexity", "parameters")), ("z", ("nloc", "complexity", "parameters"))])
+
+    def test_threshold_equality_clean_and_unknown_files_counted(self):
+        self.assertEqual(quality.exceeded(50, 10, 5), ())
+        self.assertEqual(quality.exceeded(51, 10, 5), ("nloc",))
+        self.assertEqual(quality.supported_extension("x.xyz"), False)
+
+    def test_annotation_escapes_properties_and_message(self):
+        output = quality.annotation("bad%name\n", "x,y:file", 2, 4, "fn:one")
+        self.assertEqual(output, "::warning file=x%2Cy%3Afile,line=2,endLine=4,title=Structural%20quality::bad%25name%0A%20%5Bfn%3Aone%5D")
+
+    def test_summaries_include_marker_and_wording(self):
+        clean = quality.summary(6, 4, [])
+        empty = quality.summary(0, 0, [])
+        warning = quality.summary(6, 4, [quality.Finding("x.py", "fn", 2, 3, ("nloc",), 51, 1, 1)])
+        self.assertIn("✅ Analyzed 6 changed functions.", clean)
+        self.assertIn("No supported changed functions", empty)
+        self.assertIn("⚠️ 1 structural warning", warning)
+        for text in (clean, empty, warning):
+            self.assertIn("<!-- structural-code-quality -->", text)
+
+    def test_threshold_findings_exit_zero(self):
+        finding = quality.Finding("x.py", "fn", 2, 3, ("nloc",), 51, 1, 1)
+        with tempfile.NamedTemporaryFile() as summary:
+            with patch.object(quality, "run_analysis", return_value=(1, 0, 0, [finding])):
+                self.assertEqual(quality.main(["--base", "base", "--head", "head", "--summary", summary.name]), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
