@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SUPPORTED = {".py", ".rs", ".js", ".ts", ".tsx", ".jsx"}
+STRUCTURAL_ROOTS = (("src/", {".ts", ".tsx", ".js", ".jsx"}), ("src-tauri/src/", {".rs"}), ("src-tauri/python/", {".py"}), ("scripts/", {".py"}))
 THRESHOLDS = (("nloc", 50), ("complexity", 10), ("parameters", 5))
 MARKER = "<!-- structural-code-quality -->"
 
@@ -71,6 +72,12 @@ def changed_files(repo, base, head):
 
 def supported_extension(path):
     return Path(path).suffix.lower() in SUPPORTED
+
+
+def in_structural_scope(path):
+    normalized = str(path).replace("\\", "/")
+    suffix = Path(normalized).suffix.lower()
+    return any(normalized.startswith(root) and suffix in extensions for root, extensions in STRUCTURAL_ROOTS)
 
 
 def exceeded(nloc, complexity, parameters):
@@ -151,10 +158,10 @@ def lizard_functions(path):
 
 def run_analysis(repo, base, head):
     comparison_base = merge_base(repo, base, head)
-    files = _changed_files(repo, comparison_base, head)
+    files = [path for path in _changed_files(repo, comparison_base, head) if in_structural_scope(path)]
     results = []
     for relative in files:
-        if not supported_extension(relative):
+        if not in_structural_scope(relative) or not supported_extension(relative):
             results.append(FileResult(str(relative), False, False, ()))
             continue
         diff = subprocess.run(["git", "diff", "--unified=0", "--no-color", comparison_base, head, "--", str(relative)], cwd=repo, check=True, capture_output=True, text=True).stdout

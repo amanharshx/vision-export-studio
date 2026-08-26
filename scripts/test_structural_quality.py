@@ -79,6 +79,10 @@ class StructuralQualityTests(unittest.TestCase):
         self.assertEqual(quality.exceeded(50, 10, 5), ())
         self.assertEqual(quality.exceeded(51, 10, 5), ("nloc",))
         self.assertEqual(quality.supported_extension("x.xyz"), False)
+        self.assertTrue(quality.in_structural_scope("src/features/export.ts"))
+        self.assertTrue(quality.in_structural_scope("scripts/check.py"))
+        self.assertFalse(quality.in_structural_scope(".github/workflows/ci.yml"))
+        self.assertFalse(quality.in_structural_scope("src/assets/icon.json"))
 
     def test_annotation_escapes_properties_and_message(self):
         output = quality.annotation("bad%name\n", "x,y:file", 2, 4, "fn:one")

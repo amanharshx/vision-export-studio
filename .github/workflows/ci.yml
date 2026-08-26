@@ -25,6 +25,7 @@ jobs:
     outputs:
       frontend: ${{ steps.filter.outputs.frontend }}
       rust: ${{ steps.filter.outputs.rust }}
+      structural: ${{ steps.filter.outputs.structural }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +43,15 @@ jobs:
 
             rust:
               - 'src-tauri/**'
+
+            structural:
+              - 'src/**/*.ts'
+              - 'src/**/*.tsx'
+              - 'src/**/*.js'
+              - 'src/**/*.jsx'
+              - 'src-tauri/src/**/*.rs'
+              - 'src-tauri/python/**/*.py'
+              - 'scripts/**/*.py'
 
   no-dist-changes:
     name: Block dist/ changes
@@ -140,6 +150,8 @@ jobs:
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      STRUCTURAL_PATHS_MATCHED: ${{ needs.changes.outputs.structural }}
+    needs: changes
     steps:
       - uses: actions/checkout@v4
         with:
@@ -154,7 +166,21 @@ jobs:
         run: python -m pip install lizard==1.24.0
 
       - name: Analyze changed functions
+        if: needs.changes.outputs.structural == 'true'
         run: python scripts/structural_quality.py --base "$BASE_SHA" --head "$HEAD_SHA" --summary structural-quality.md
+
+      - name: Report no matching source paths
+        if: needs.changes.outputs.structural != 'true'
+        run: |
+          cat > structural-quality.md <<'EOF'
+          ## Structural code quality
+
+          ➖ No matching source paths. Analysis skipped.
+
+          Informational only. Does not block merging.
+
+          <!-- structural-code-quality -->
+          EOF
 
       - name: Add job summary
         if: always()
@@ -171,6 +197,12 @@ jobs:
             const issue_number = context.issue.number;
             const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
             const existing = comments.find(comment => comment.user?.login === 'github-actions[bot]' && comment.body?.includes('<!-- structural-code-quality -->'));
+            if (process.env.STRUCTURAL_PATHS_MATCHED !== 'true') {
+              if (existing) {
+                await github.rest.issues.deleteComment({ owner, repo, comment_id: existing.id });
+              }
+              return;
+            }
             if (existing) {
               await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
             } else {
