@@ -169,16 +169,22 @@ def render_groups(warning_results, clean_results, not_analyzed_results):
     return lines
 
 
+def render_status(warning_results, clean_results, not_analyzed_results):
+    segments = []
+    if warning_results:
+        count = len(warning_results)
+        segments.append(f"⚠️ {count} needs attention")
+    if clean_results:
+        segments.append(f"✅ {len(clean_results)} clean")
+    if not_analyzed_results:
+        segments.append(f"➖ {len(not_analyzed_results)} not analyzed")
+    return " · ".join(segments)
+
+
 def summary(results, commit_sha=None, repository=None):
     warning_results, clean_results, not_analyzed_results = classify_results(results)
     lines = ["## Structural code quality", ""] + render_commit(commit_sha, repository)
-    if commit_sha:
-        short_sha = commit_sha[:7]
-        if repository:
-            lines.extend([f"Results for commit [`{short_sha}`](https://github.com/{repository}/commit/{commit_sha})", ""])
-        else:
-            lines.extend([f"Results for commit `{short_sha}`", ""])
-    lines.append(f"⚠️ {len(warning_results)} need{'s' if len(warning_results) == 1 else ''} attention · ✅ {len(clean_results)} clean · ➖ {len(not_analyzed_results)} not analyzed")
+    lines.append(render_status(warning_results, clean_results, not_analyzed_results))
     lines.append("")
     lines.extend(render_groups(warning_results, clean_results, not_analyzed_results))
     lines.extend(["_Informational only — checks structural code quality in this PR. (Does not block merging)_", "", MARKER, ""])
