@@ -1,6 +1,7 @@
 """Diff-scoped structural quality coordinator."""
 
 import argparse
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -122,11 +123,17 @@ def metric_annotation_text(finding):
     return ", ".join(labels[name] for name in finding.exceeded)
 
 
-def summary(results):
+def summary(results, commit_sha=None, repository=None):
     warning_results = [result for result in results if result.findings]
     clean_results = [result for result in results if result.supported and result.analyzed and not result.findings]
     not_analyzed_results = [result for result in results if not result.supported or not result.analyzed]
     lines = ["## Structural code quality", ""]
+    if commit_sha:
+        short_sha = commit_sha[:7]
+        if repository:
+            lines.extend([f"Results for commit [`{short_sha}`](https://github.com/{repository}/commit/{commit_sha})", ""])
+        else:
+            lines.extend([f"Results for commit `{short_sha}`", ""])
     lines.append(f"⚠️ {len(warning_results)} need{'s' if len(warning_results) == 1 else ''} attention · ✅ {len(clean_results)} clean · ➖ {len(not_analyzed_results)} not analyzed")
     lines.append("")
     if warning_results:
@@ -180,7 +187,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         results = run_analysis(Path.cwd(), args.base, args.head)
-        Path(args.summary).write_text(summary(results), encoding="utf-8")
+        Path(args.summary).write_text(summary(results, os.environ.get("HEAD_SHA"), os.environ.get("GITHUB_REPOSITORY")), encoding="utf-8")
         for result in results:
             for finding in result.findings:
                 print(annotation(metric_annotation_text(finding), finding.file, finding.start_line, finding.end_line, finding.name))

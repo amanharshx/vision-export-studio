@@ -99,6 +99,8 @@ class StructuralQualityTests(unittest.TestCase):
         self.assertIn("- `skip.xyz` — unsupported file type", text)
         self.assertNotIn("changed functions", text)
         self.assertIn("<!-- structural-code-quality -->", text)
+        commit_text = quality.summary(results, "1b680b590bee1a0b2d863ed5cb43f40812af6b13", "amanharshx/vision-export-studio")
+        self.assertIn("Results for commit [`1b680b5`](https://github.com/amanharshx/vision-export-studio/commit/1b680b590bee1a0b2d863ed5cb43f40812af6b13)", commit_text)
 
     def test_threshold_findings_exit_zero(self):
         finding = quality.Finding("x.py", "fn", 2, 3, ("nloc",), 51, 1, 1)
