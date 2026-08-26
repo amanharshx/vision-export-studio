@@ -154,7 +154,7 @@ def summary(results, commit_sha=None, repository=None):
             reason = "unsupported file type" if not result.supported else "no changed function to analyze"
             lines.append(f"- `{result.file}` — {reason}")
         lines.extend(["", "</details>", ""])
-    lines.extend(["Informational only. Does not block merging.", "", MARKER, ""])
+    lines.extend(["_Informational only — checks structural code quality in this PR. (Does not block merging)_", "", MARKER, ""])
     return "\n".join(lines)
 
 

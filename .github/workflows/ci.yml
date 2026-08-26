@@ -179,7 +179,7 @@ jobs:
 
           ➖ No matching source paths. Analysis skipped.
 
-          Informational only. Does not block merging.
+          _Informational only — checks structural code quality in this PR. (Does not block merging)_
 
           <!-- structural-code-quality -->
           EOF
