@@ -103,34 +103,44 @@ def annotation(name, file, start, end, function):
 
 def metric_text(finding):
     labels = {
-        "nloc": f"Function length: **{finding.nloc} NLOC**, limit **50**",
-        "complexity": f"Cyclomatic complexity: **{finding.complexity}**, limit **10**",
-        "parameters": f"Parameter count: **{finding.parameters}**, limit **5**",
+        "nloc": f"Function length: **{finding.nloc} NLOC** · limit: **50**",
+        "complexity": f"Cyclomatic complexity: **{finding.complexity}** · limit: **10**",
+        "parameters": f"Parameter count: **{finding.parameters}** · limit: **5**",
     }
     return [labels[name] for name in finding.exceeded]
 
 
+def metric_annotation_text(finding):
+    labels = {"nloc": f"{finding.nloc} NLOC, limit 50", "complexity": f"complexity {finding.complexity}, limit 10", "parameters": f"{finding.parameters} parameters, limit 5"}
+    return ", ".join(labels[name] for name in finding.exceeded)
+
+
 def summary(results):
-    clean = sum(result.supported and result.analyzed and not result.findings for result in results)
-    warning = sum(bool(result.findings) for result in results)
-    not_analyzed = len(results) - clean - warning
+    warning_results = [result for result in results if result.findings]
+    clean_results = [result for result in results if result.supported and result.analyzed and not result.findings]
+    not_analyzed_results = [result for result in results if not result.supported or not result.analyzed]
     lines = ["## Structural code quality", ""]
-    lines.append(f"✅ {clean} files clean · ⚠️ {warning} file{'s' if warning != 1 else ''} needs attention · ➖ {not_analyzed} not analyzed")
+    lines.append(f"⚠️ {len(warning_results)} need{'s' if len(warning_results) == 1 else ''} attention · ✅ {len(clean_results)} clean · ➖ {len(not_analyzed_results)} not analyzed")
     lines.append("")
-    for result in results:
-        if result.findings:
-            lines.extend(["<details open>", f"<summary>⚠️ <code>{result.file}</code> — {len(result.findings)} finding{'s' if len(result.findings) != 1 else ''}</summary>", ""])
+    if warning_results:
+        lines.extend(["<details open>", f"<summary>⚠️ Needs attention — {len(warning_results)} file{'s' if len(warning_results) != 1 else ''}</summary>", ""])
+        for result in warning_results:
+            lines.append(f"- `{result.file}`")
             for finding in result.findings:
-                lines.extend([f"### `{finding.name}` — lines {finding.start_line}–{finding.end_line}", ""])
-                lines.extend(f"- {metric}" for metric in metric_text(finding))
-                lines.append("")
-        elif result.supported and result.analyzed:
-            lines.extend(["<details>", f"<summary>✅ <code>{result.file}</code></summary>", "", "No structural threshold findings.", ""])
-        else:
+                lines.append(f"  - `{finding.name}` · lines {finding.start_line}–{finding.end_line}")
+                lines.extend(f"    - {metric}" for metric in metric_text(finding))
+        lines.extend(["", "</details>", ""])
+    if clean_results:
+        lines.extend(["<details>", f"<summary>✅ Clean — {len(clean_results)} file{'s' if len(clean_results) != 1 else ''}</summary>", ""])
+        lines.extend(f"- `{result.file}`" for result in clean_results)
+        lines.extend(["", "</details>", ""])
+    if not_analyzed_results:
+        lines.extend(["<details>", f"<summary>➖ Not analyzed — {len(not_analyzed_results)} file{'s' if len(not_analyzed_results) != 1 else ''}</summary>", ""])
+        for result in not_analyzed_results:
             reason = "unsupported file type" if not result.supported else "no changed function to analyze"
-            lines.extend(["<details>", f"<summary>➖ <code>{result.file}</code></summary>", "", f"Not analyzed: {reason}.", ""])
-        lines.extend(["</details>", ""])
-    lines.extend(["Informational only. This check does not block merging.", "", MARKER, ""])
+            lines.append(f"- `{result.file}` — {reason}")
+        lines.extend(["", "</details>", ""])
+    lines.extend(["Informational only. Does not block merging.", "", MARKER, ""])
     return "\n".join(lines)
 
 
@@ -166,8 +176,7 @@ def main(argv=None):
         Path(args.summary).write_text(summary(results), encoding="utf-8")
         for result in results:
             for finding in result.findings:
-                plain_metrics = ", ".join(metric.replace("**", "").split(": ", 1)[1] for metric in metric_text(finding))
-                print(annotation(plain_metrics, finding.file, finding.start_line, finding.end_line, finding.name))
+                print(annotation(metric_annotation_text(finding), finding.file, finding.start_line, finding.end_line, finding.name))
         return 0
     except (OSError, subprocess.CalledProcessError, ImportError, ValueError) as error:
         print(f"structural quality analyzer failed: {error}", file=sys.stderr)

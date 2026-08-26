@@ -88,11 +88,11 @@ class StructuralQualityTests(unittest.TestCase):
         finding = quality.Finding("x.py", "fn", 2, 3, ("nloc",), 51, 1, 1)
         results = [quality.FileResult("clean.py", True, True, ()), quality.FileResult("x.py", True, True, (finding,)), quality.FileResult("skip.xyz", False, False, ())]
         text = quality.summary(results)
-        self.assertIn("✅ 1 files clean · ⚠️ 1 file needs attention · ➖ 1 not analyzed", text)
-        self.assertIn("<summary>⚠️ <code>x.py</code> — 1 finding</summary>", text)
-        self.assertIn("### `fn` — lines 2–3", text)
-        self.assertIn("Function length: **51 NLOC**, limit **50**", text)
-        self.assertIn("Not analyzed: unsupported file type.", text)
+        self.assertIn("⚠️ 1 needs attention · ✅ 1 clean · ➖ 1 not analyzed", text)
+        self.assertIn("<summary>⚠️ Needs attention — 1 file</summary>", text)
+        self.assertIn("- `x.py`\n  - `fn` · lines 2–3", text)
+        self.assertIn("Function length: **51 NLOC** · limit: **50**", text)
+        self.assertIn("- `skip.xyz` — unsupported file type", text)
         self.assertNotIn("changed functions", text)
         self.assertIn("<!-- structural-code-quality -->", text)
 
