@@ -49,13 +49,30 @@ pub(crate) fn stack_for_route(route_id: &str) -> Option<&'static StackEnvironmen
         .find(|stack| stack.route_ids.contains(&route_id))
 }
 
+pub(crate) fn stack_venv_dir_for_key(runtime_dir: &Path, stack_key: &str) -> Option<PathBuf> {
+    known_stacks()
+        .iter()
+        .find(|stack| stack.key == stack_key)
+        .map(|stack| runtime_dir.join("envs").join(stack.key).join(".venv"))
+}
+
+#[test]
+fn stack_key_resolves_exact_known_venv() {
+    let root = Path::new("/tmp/runtime");
+    assert_eq!(
+        stack_venv_dir_for_key(root, "rfdetr-default").unwrap(),
+        root.join("envs/rfdetr-default/.venv")
+    );
+}
+
+#[test]
+fn unknown_stack_key_has_no_path() {
+    assert!(stack_venv_dir_for_key(Path::new("/tmp/runtime"), "rfdetr-default-backup").is_none());
+}
+
 pub(crate) fn stack_venv_dir(runtime_dir: &str, route_id: &str) -> Option<PathBuf> {
-    stack_for_route(route_id).map(|stack| {
-        Path::new(runtime_dir)
-            .join("envs")
-            .join(stack.key)
-            .join(".venv")
-    })
+    stack_for_route(route_id)
+        .and_then(|stack| stack_venv_dir_for_key(Path::new(runtime_dir), stack.key))
 }
 
 pub(crate) fn stack_python(runtime_dir: &str, route_id: &str) -> Option<String> {
@@ -80,6 +97,7 @@ pub enum PackageVersion {
 pub struct StackEnvironmentInfo {
     pub key: String,
     pub display_name: String,
+    pub route_ids: Vec<String>,
     pub python_path: String,
     pub python_version: PythonVersion,
     pub rfdetr_version: PackageVersion,
@@ -89,17 +107,18 @@ pub(crate) fn list_stack_environments_for_runtime(runtime_dir: &str) -> Vec<Stac
     known_stacks()
         .iter()
         .filter_map(|stack| {
-            let python_path = venv_python_at(
-                &Path::new(runtime_dir)
-                    .join("envs")
-                    .join(stack.key)
-                    .join(".venv"),
-            );
+            let python_path =
+                venv_python_at(&stack_venv_dir_for_key(Path::new(runtime_dir), stack.key)?);
             Path::new(&python_path)
                 .exists()
                 .then(|| StackEnvironmentInfo {
                     key: stack.key.to_string(),
                     display_name: stack.display_name.to_string(),
+                    route_ids: stack
+                        .route_ids
+                        .iter()
+                        .map(|route_id| (*route_id).to_string())
+                        .collect(),
                     python_version: probe_python_version(&python_path)
                         .map(|version| PythonVersion::Available { version })
                         .unwrap_or(PythonVersion::Unavailable),
