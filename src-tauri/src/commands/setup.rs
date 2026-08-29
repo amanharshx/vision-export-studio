@@ -2,6 +2,7 @@ use crate::commands::environment::{
     discover_managed_runtime_python, discover_managed_runtime_python_candidate,
     resolve_managed_runtime_base, resolve_python,
 };
+use crate::commands::managed_environments::{ManagedEnvironments, ULTRALYTICS_MANAGED_KEY};
 use crate::commands::providers::rfdetr::RFDETR_STAGING_PARENT;
 use crate::commands::runtime_operations::{
     emit_after_operation_released, RuntimeOperation, RuntimeOperationCoordinator,
@@ -367,6 +368,8 @@ fn spawn_and_stream(
     sessions: Arc<Mutex<HashMap<String, Child>>>,
     mut cmd: Command,
     operation_guard: RuntimeOperationGuard,
+    runtime_root: PathBuf,
+    managed_environments: ManagedEnvironments,
 ) -> Result<String, String> {
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -443,6 +446,7 @@ fn spawn_and_stream(
         let mut operation_guard = Some(operation_guard);
         let _ = stdout_handle.join();
         let _ = stderr_handle.join();
+        managed_environments.invalidate(&runtime_root, [ULTRALYTICS_MANAGED_KEY]);
 
         let child_opt = {
             let mut map = match sessions_arc.lock() {
@@ -516,6 +520,7 @@ fn spawn_and_stream_rebuild(
     commands: Vec<Command>,
     runtime_dir: PathBuf,
     operation_guard: RuntimeOperationGuard,
+    managed_environments: ManagedEnvironments,
 ) -> Result<String, String> {
     let session_id = Uuid::new_v4().to_string();
     let sid_thread = session_id.clone();
@@ -594,6 +599,7 @@ fn spawn_and_stream_rebuild(
         let result = complete_managed_runtime_rebuild(&runtime_dir, result);
         match result {
             Ok(()) => {
+                managed_environments.invalidate(&runtime_dir, [ULTRALYTICS_MANAGED_KEY]);
                 emit_after_operation_released(operation_guard, || {
                     let _ = app_handle.emit(
                         "setup:finished",
@@ -685,6 +691,7 @@ pub async fn create_runtime_venv(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, SetupState>,
     runtime_operations: tauri::State<'_, RuntimeOperationCoordinator>,
+    managed_environments: tauri::State<'_, ManagedEnvironments>,
     runtime_dir: String,
 ) -> Result<String, String> {
     let managed_runtime_dir = ensure_managed_runtime_dir(&app_handle, &runtime_dir)?;
@@ -704,7 +711,14 @@ pub async fn create_runtime_venv(
 
     let sessions = Arc::clone(&state.sessions);
     let operation_guard = runtime_operations.acquire(RuntimeOperation::Setup)?;
-    spawn_and_stream(app_handle, sessions, cmd, operation_guard)
+    spawn_and_stream(
+        app_handle,
+        sessions,
+        cmd,
+        operation_guard,
+        PathBuf::from(&managed_runtime_dir),
+        managed_environments.inner().clone(),
+    )
 }
 
 #[tauri::command]
@@ -712,6 +726,7 @@ pub async fn rebuild_managed_runtime(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, SetupState>,
     runtime_operations: tauri::State<'_, RuntimeOperationCoordinator>,
+    managed_environments: tauri::State<'_, ManagedEnvironments>,
     python_path: Option<String>,
 ) -> Result<String, String> {
     let settings = load_settings(app_handle.clone())?;
@@ -734,6 +749,7 @@ pub async fn rebuild_managed_runtime(
         build_managed_runtime_rebuild_commands(&base_python, &managed_runtime_dir),
         runtime_path,
         operation_guard,
+        managed_environments.inner().clone(),
     )
 }
 
