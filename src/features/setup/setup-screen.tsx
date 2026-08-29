@@ -42,6 +42,7 @@ interface SetupScreenProps {
   onComplete: () => void;
   updatesEnabled: boolean;
   updater: UpdaterController;
+  initialErrorMessage?: string | null;
 }
 
 function captureSetupFailed(failureStage: string, failureKind: string) {
@@ -61,6 +62,7 @@ export function SetupScreen({
   onComplete,
   updatesEnabled,
   updater,
+  initialErrorMessage,
 }: SetupScreenProps) {
   const [phase, setPhase] = useState<SetupPhase>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -252,6 +254,12 @@ export function SetupScreen({
             Vision Export Studio creates this environment automatically. Provider runtimes and export target dependencies install on demand when needed.
           </p>
         </div>
+
+        {initialErrorMessage && (
+          <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+            {initialErrorMessage}
+          </p>
+        )}
 
         {phase === "done" && countdown !== null ? (
           <div className="flex w-full items-center justify-center gap-2 rounded-md bg-emerald-50 py-3 text-sm font-medium text-emerald-700">

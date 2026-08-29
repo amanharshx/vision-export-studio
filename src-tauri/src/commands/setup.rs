@@ -97,16 +97,25 @@ fn settings_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir.join("vision-export-studio-settings.json"))
 }
 
-fn write_settings(app_handle: &tauri::AppHandle, settings: &AppSettings) -> Result<(), String> {
-    let path = settings_path(app_handle)?;
+fn write_settings_file(path: &Path, settings: &AppSettings) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create settings dir: {}", e))?;
     }
     let json = serde_json::to_string_pretty(settings)
         .map_err(|e| format!("failed to serialize settings: {}", e))?;
-    std::fs::write(&path, json).map_err(|e| format!("failed to write settings: {}", e))?;
+    std::fs::write(path, json).map_err(|e| format!("failed to write settings: {}", e))?;
     Ok(())
+}
+
+fn read_settings_file(path: &Path) -> Result<AppSettings, String> {
+    let raw =
+        std::fs::read_to_string(path).map_err(|e| format!("failed to read settings: {}", e))?;
+    serde_json::from_str(&raw).map_err(|e| format!("failed to parse settings: {}", e))
+}
+
+fn write_settings(app_handle: &tauri::AppHandle, settings: &AppSettings) -> Result<(), String> {
+    write_settings_file(&settings_path(app_handle)?, settings)
 }
 
 fn default_runtime_dir_from_home(home_dir: &str) -> Result<String, String> {
@@ -181,6 +190,47 @@ fn normalize_python_override(python_path_override: Option<String>) -> Option<Str
 
 fn managed_runtime_is_ready(runtime_dir: &str) -> bool {
     Path::new(&venv_python(runtime_dir)).exists()
+}
+
+pub(crate) fn setup_complete_after_managed_runtime_cleanup(
+    managed_runtime_ready: bool,
+    python_path_override: Option<&str>,
+) -> bool {
+    managed_runtime_ready || has_python_override(python_path_override)
+}
+
+fn update_settings_at_path<F>(path: &Path, state: &SettingsState, f: F) -> Result<(), String>
+where
+    F: FnOnce(&mut AppSettings),
+{
+    let _guard = state
+        .lock
+        .lock()
+        .map_err(|_| "settings lock poisoned".to_string())?;
+    let mut settings = read_settings_file(path)?;
+    f(&mut settings);
+    write_settings_file(path, &settings)?;
+    Ok(())
+}
+
+fn normalize_setup_after_managed_runtime_cleanup_at_path(
+    path: &Path,
+    state: &SettingsState,
+) -> Result<bool, String> {
+    update_settings_at_path(path, state, |settings| {
+        settings.setup_complete = setup_complete_after_managed_runtime_cleanup(
+            managed_runtime_is_ready(&settings.runtime_dir),
+            settings.python_path_override.as_deref(),
+        );
+    })?;
+    Ok(read_settings_file(path)?.setup_complete)
+}
+
+pub(crate) fn normalize_setup_after_managed_runtime_cleanup(
+    app_handle: &tauri::AppHandle,
+    state: &SettingsState,
+) -> Result<bool, String> {
+    normalize_setup_after_managed_runtime_cleanup_at_path(&settings_path(app_handle)?, state)
 }
 
 fn normalize_loaded_settings(
@@ -446,7 +496,6 @@ fn spawn_and_stream(
         let mut operation_guard = Some(operation_guard);
         let _ = stdout_handle.join();
         let _ = stderr_handle.join();
-        managed_environments.invalidate(&runtime_root, [ULTRALYTICS_MANAGED_KEY]);
 
         let child_opt = {
             let mut map = match sessions_arc.lock() {
@@ -474,6 +523,7 @@ fn spawn_and_stream(
             Some(mut child) => match child.wait() {
                 Ok(status) => {
                     if status.success() {
+                        managed_environments.invalidate(&runtime_root, [ULTRALYTICS_MANAGED_KEY]);
                         emit_after_operation_released(operation_guard.take().unwrap(), || {
                             let _ = ah_wait.emit(
                                 "setup:finished",
@@ -649,10 +699,7 @@ pub fn load_settings(app_handle: tauri::AppHandle) -> Result<AppSettings, String
         return Ok(settings);
     }
 
-    let raw =
-        std::fs::read_to_string(&path).map_err(|e| format!("failed to read settings: {}", e))?;
-    let settings: AppSettings =
-        serde_json::from_str(&raw).map_err(|e| format!("failed to parse settings: {}", e))?;
+    let settings = read_settings_file(&path)?;
     let (normalized, changed) =
         normalize_loaded_settings(settings, &managed_runtime_dir, managed_runtime_ready);
     if changed {
@@ -1004,6 +1051,45 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_reset_settings_round_trip_preserves_overrides_and_setup_state() {
+        let path =
+            PathBuf::from(test_runtime_dir("cleanup-settings-round-trip")).join("settings.json");
+        let mut settings = AppSettings {
+            runtime_dir: "/tmp/managed-runtime".to_string(),
+            setup_complete: true,
+            python_path_override: None,
+            output_dir_override: Some("/tmp/exports".to_string()),
+        };
+
+        let state = SettingsState::default();
+        write_settings_file(&path, &settings).unwrap();
+        assert!(!normalize_setup_after_managed_runtime_cleanup_at_path(&path, &state).unwrap());
+        let without_override = read_settings_file(&path).unwrap();
+        assert!(!without_override.setup_complete);
+        assert_eq!(without_override.python_path_override, None);
+        assert_eq!(
+            without_override.output_dir_override.as_deref(),
+            Some("/tmp/exports")
+        );
+
+        settings.python_path_override = Some("/custom/python".to_string());
+        write_settings_file(&path, &settings).unwrap();
+        assert!(normalize_setup_after_managed_runtime_cleanup_at_path(&path, &state).unwrap());
+        let with_override = read_settings_file(&path).unwrap();
+        assert!(with_override.setup_complete);
+        assert_eq!(
+            with_override.python_path_override.as_deref(),
+            Some("/custom/python")
+        );
+        assert_eq!(
+            with_override.output_dir_override.as_deref(),
+            Some("/tmp/exports")
+        );
+
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
     fn managed_runtime_is_ready_when_venv_python_exists_and_yolo_missing() {
         let runtime_dir = test_runtime_dir("managed-runtime-ready");
         let python_path = venv_python(&runtime_dir);
@@ -1099,5 +1185,15 @@ mod tests {
 
         assert!(changed);
         assert!(!normalized.setup_complete);
+    }
+
+    #[test]
+    fn cleanup_state_is_complete_only_when_runtime_or_override_remains() {
+        assert!(!setup_complete_after_managed_runtime_cleanup(false, None));
+        assert!(setup_complete_after_managed_runtime_cleanup(
+            false,
+            Some("/custom/python")
+        ));
+        assert!(setup_complete_after_managed_runtime_cleanup(true, None));
     }
 }

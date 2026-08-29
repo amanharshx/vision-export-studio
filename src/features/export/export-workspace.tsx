@@ -5,7 +5,7 @@ import { checkDependencies, installDependencies } from "@/lib/tauri/deps";
 import { cancelExport, openExportFolder, startExport } from "@/lib/tauri/export";
 import { defaultRouteForProvider, findRoute, hasAllowedSourceExtension, providers, providerList, routesForProvider } from "@/lib/providers";
 import { inspectRfDetrCheckpoint } from "@/lib/tauri/rfdetr";
-import { useManagedEnvironmentInventory } from "./use-managed-environment-inventory";
+import { cleanupManagedEnvironments, scanManagedEnvironments } from "@/lib/tauri/managed-environments";
 import { architectureMatters, type AppOS, type AppPlatform, getOS, incompatibleReason, isCompatible, UNKNOWN_ARCH } from "@/lib/platform";
 import { getAppTelemetryContext, getRoutePlatformSupport, type HostSupportResult } from "@/lib/tauri/app";
 import { createListenerGroup, type ListenerGroup } from "@/lib/tauri/listener-group";
@@ -23,6 +23,10 @@ import type {
   InstallFinishedPayload,
   InstallLinePayload,
   InstallPhase,
+  ManagedEnvironmentCleanupReport,
+  ManagedEnvironmentCleanupResult,
+  ManagedEnvironmentKey,
+  ManagedEnvironmentScanResult,
   ProviderId,
   RfDetrInspectResult,
   RfDetrInspectStatus,
@@ -30,8 +34,6 @@ import type {
   RouteOptionsState,
   RouteSpec,
   StackEnvironment,
-  ManagedEnvironmentScanResult,
-  ManagedEnvironmentKey,
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -220,6 +222,218 @@ export function withRfDetrDetectedDefaults(
   return { ...base, imgsz: inspect.recommended_imgsz };
 }
 
+export function formatManagedEnvironmentSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let value = bytes;
+  let unit = "B";
+  for (const nextUnit of units) {
+    value /= 1024;
+    unit = nextUnit;
+    if (value < 1024 || nextUnit === units[units.length - 1]) break;
+  }
+  return `${value.toFixed(value >= 10 || Number.isInteger(value) ? 0 : 1)} ${unit}`;
+}
+
+export function isManagedEnvironmentCleanupAllowed(
+  result: ManagedEnvironmentScanResult | undefined,
+): boolean {
+  return result?.status === "available" || result?.status === "unavailable";
+}
+
+export function mergeManagedEnvironmentScanResults(
+  existing: Record<string, ManagedEnvironmentScanResult>,
+  incoming: ManagedEnvironmentScanResult[],
+): Record<string, ManagedEnvironmentScanResult> {
+  const next = { ...existing };
+  for (const result of incoming) {
+    const previous = next[result.key];
+    if (previous?.status === "available" && result.status === "calculating") continue;
+    next[result.key] = result;
+  }
+  return next;
+}
+
+export function invalidateManagedEnvironmentSizes(
+  existing: Record<string, ManagedEnvironmentScanResult>,
+  keys?: ManagedEnvironmentKey[],
+): Record<string, ManagedEnvironmentScanResult> {
+  if (!keys) return {};
+  const next = { ...existing };
+  for (const key of keys) delete next[key];
+  return next;
+}
+
+/**
+ * Drops rows that are still stuck in the transient `calculating` state for the
+ * given keys. Used to recover after a command-level scan failure so affected
+ * cards do not remain stuck on "Calculating…".
+ */
+export function clearCalculatingManagedEnvironmentScan(
+  existing: Record<string, ManagedEnvironmentScanResult>,
+  keys: (ManagedEnvironmentKey | string)[],
+): Record<string, ManagedEnvironmentScanResult> {
+  const next = { ...existing };
+  for (const key of keys) {
+    if (next[key]?.status === "calculating") delete next[key];
+  }
+  return next;
+}
+
+/**
+ * Expands the requested cleanup keys into the concrete size-cache keys that
+ * must be invalidated after a deletion. `rfdetr-all` is a virtual selector, so
+ * it fans out to every known stack key alongside the direct keys.
+ */
+export function managedEnvironmentCacheKeysForCleanup(
+  keys: ManagedEnvironmentKey[],
+  stackKeys: string[],
+): ManagedEnvironmentKey[] {
+  const result = new Set<string>(keys);
+  if (keys.includes("rfdetr-all")) {
+    for (const stackKey of stackKeys) result.add(stackKey);
+  }
+  return [...result] as ManagedEnvironmentKey[];
+}
+
+export interface ManagedEnvironmentScanCacheState {
+  generation: number;
+  sizes: Record<string, ManagedEnvironmentScanResult>;
+}
+
+/**
+ * Single mutation-invalidation reducer shared by every flow that changes an
+ * environment on disk (dependency/runtime install, managed runtime rebuild,
+ * and environment deletion). Bumping the generation makes any in-flight scan
+ * result stale, and dropping the affected keys forces a fresh size scan.
+ */
+export function applyManagedEnvironmentSizeMutation(
+  state: ManagedEnvironmentScanCacheState,
+  keys?: ManagedEnvironmentKey[],
+): ManagedEnvironmentScanCacheState {
+  const next = invalidateManagedEnvironmentSizes(state.sizes, keys);
+  for (const [key, result] of Object.entries(next)) {
+    if (result.status === "calculating") delete next[key];
+  }
+  return {
+    generation: state.generation + 1,
+    sizes: next,
+  };
+}
+
+export function managedEnvironmentKeysForProvider(
+  providerId: ProviderId,
+  singleKey?: ManagedEnvironmentKey,
+): ManagedEnvironmentKey[] {
+  if (providerId === "ultralytics") return ["ultralytics-managed"];
+  return [singleKey ?? "rfdetr-all"];
+}
+
+export function getManagedEnvironmentCleanupState({
+  providerId,
+  singleKey,
+  ultralyticsExists,
+  rfdetrCount,
+  hasPythonOverride,
+}: {
+  providerId: ProviderId;
+  singleKey?: ManagedEnvironmentKey;
+  ultralyticsExists: boolean | null;
+  rfdetrCount: number;
+  hasPythonOverride: boolean;
+}) {
+  const isBulkCleanup = providerId === "rfdetr" && !singleKey;
+  const removesLastManagedRuntime = providerId === "ultralytics"
+    ? rfdetrCount === 0
+    : ultralyticsExists === false && (isBulkCleanup ? rfdetrCount > 0 : rfdetrCount === 1);
+  return {
+    removesLastManagedRuntime,
+    willReturnToSetup: providerId === "ultralytics" && !hasPythonOverride,
+    hasPythonOverride,
+    isBulkCleanup,
+  };
+}
+
+/**
+ * Builds the user-facing cleanup error, combining per-environment deletion
+ * failures with a separate setup-state persistence failure. Returns null when
+ * the cleanup fully succeeded.
+ */
+export function managedEnvironmentCleanupErrorMessage(
+  report: ManagedEnvironmentCleanupReport,
+): string | null {
+  const parts: string[] = [];
+  const failures = report.results
+    .filter((result): result is Extract<ManagedEnvironmentCleanupResult, { status: "failed" }> => result.status === "failed")
+    .map((result) => `${result.key}: ${result.error}`);
+  if (failures.length > 0) parts.push(`Some environments could not be removed: ${failures.join("; ")}`);
+  if (report.setup_error) parts.push(`Environment removed, but saving setup state failed: ${report.setup_error}`);
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
+/** True when the report confirms the given key's environment was deleted. */
+export function managedEnvironmentDeletionSucceeded(
+  report: ManagedEnvironmentCleanupReport,
+  key: ManagedEnvironmentKey,
+): boolean {
+  return report.results.some((result) => result.status === "succeeded" && result.key === key);
+}
+
+export function getManagedEnvironmentCleanupSetupAction(
+  report: ManagedEnvironmentCleanupReport,
+): { setupComplete: boolean; redetect: boolean } | null {
+  if (!managedEnvironmentDeletionSucceeded(report, "ultralytics-managed")) return null;
+  if (report.setup_complete === false) return { setupComplete: false, redetect: false };
+  if (report.setup_complete === true) return { setupComplete: true, redetect: true };
+  if (report.setup_complete === null) return { setupComplete: false, redetect: false };
+  return null;
+}
+
+export function applyManagedEnvironmentCleanupSetup(
+  report: ManagedEnvironmentCleanupReport,
+  onSetupCompleteChange?: (complete: boolean, errorMessage?: string) => void,
+): { setupComplete: boolean; redetect: boolean } | null {
+  const action = getManagedEnvironmentCleanupSetupAction(report);
+  if (action) onSetupCompleteChange?.(action.setupComplete, report.setup_error ?? undefined);
+  return action;
+}
+export function shouldSkipEnvironmentRedetection(
+  cleanupBusy: boolean,
+  allowDuringCleanup = false,
+): boolean {
+  return cleanupBusy && !allowDuringCleanup;
+}
+
+export function shouldApplyManagedEnvironmentScan(
+  scanGeneration: number,
+  currentGeneration: number,
+): boolean {
+  return scanGeneration === currentGeneration;
+}
+
+export function isManagedEnvironmentCleanupBlocked({
+  cleanupBusy,
+  exportStatus,
+  installPhase,
+  runtimeInstallPhase,
+  managedRuntimeRebuilding,
+  redetecting,
+}: {
+  cleanupBusy: boolean;
+  exportStatus: ExportStatus;
+  installPhase: InstallPhase;
+  runtimeInstallPhase: RuntimeInstallPhase;
+  managedRuntimeRebuilding: boolean;
+  redetecting: boolean;
+}): boolean {
+  return cleanupBusy
+    || exportStatus === "running"
+    || exportStatus === "starting"
+    || installPhase === "installing"
+    || runtimeInstallPhase === "installing"
+    || managedRuntimeRebuilding
+    || redetecting;
+}
 export function getRouteOptionsForOpen(
   saved: RouteOptionsState | null,
   routeId: string,
@@ -443,6 +657,13 @@ function providerGroupIconColor(status: ProviderGroupStatus): string {
   }
 }
 
+function managedEnvironmentSizeLabel(result: ManagedEnvironmentScanResult | undefined): string {
+  if (!result) return "Size not scanned";
+  if (result.status === "calculating") return "Calculating size…";
+  if (result.status === "unavailable" || result.estimated_logical_bytes === null) return "Size unavailable";
+  return `Approx. size: ${formatManagedEnvironmentSize(result.estimated_logical_bytes)}`;
+}
+
 export function ProviderGroup({
   title,
   summary,
@@ -459,13 +680,23 @@ export function ProviderGroup({
   onExpandedChange?: (expanded: boolean) => void;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
+  useEffect(() => {
+    if (defaultExpanded) onExpandedChange?.(true);
+  }, [defaultExpanded, onExpandedChange]);
   const Icon = providerGroupIcon(status);
+  const toggleExpanded = () => {
+    setExpanded((value) => {
+      const next = !value;
+      onExpandedChange?.(next);
+      return next;
+    });
+  };
   return (
     <section className="rounded-xl border border-zinc-200/80 bg-zinc-100/50 p-2">
       <button
         type="button"
         aria-expanded={expanded}
-        onClick={() => setExpanded((value) => { const next = !value; onExpandedChange?.(next); return next; })}
+        onClick={toggleExpanded}
         className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-white/70"
       >
         <Icon className={`size-4 shrink-0 ${providerGroupIconColor(status)}`} aria-hidden="true" />
@@ -480,26 +711,6 @@ export function ProviderGroup({
   );
 }
 
-function formatManagedEnvironmentSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KiB", "MiB", "GiB", "TiB"];
-  let value = bytes;
-  let unit = "B";
-  for (const next of units) {
-    value /= 1024;
-    unit = next;
-    if (value < 1024 || next === units[units.length - 1]) break;
-  }
-  return `${value.toFixed(value >= 10 || Number.isInteger(value) ? 0 : 1)} ${unit}`;
-}
-
-function managedEnvironmentSizeLabel(result: ManagedEnvironmentScanResult | undefined): string {
-  if (!result) return "Size not scanned";
-  if (result.status === "calculating") return "Calculating size…";
-  if (result.status === "unavailable" || result.estimated_logical_bytes === null) return "Size unavailable";
-  return `Approx. size: ${formatManagedEnvironmentSize(result.estimated_logical_bytes)}`;
-}
-
 export function EnvironmentGroups({
   envInfo,
   envError,
@@ -508,10 +719,13 @@ export function EnvironmentGroups({
   openManagedRuntimeUpgrade,
   mayStartRuntimeUpgrade,
   stacks,
-  managedEnvironmentSizes = {},
   defaultExpanded = false,
+  managedEnvironmentSizes = {},
   onProviderExpanded,
-  inventoryError,
+  onCleanupUltralytics,
+  onCleanupRfDetr,
+  onCleanupRfDetrChild,
+  cleanupDisabled = false,
 }: {
   envInfo: EnvironmentInfo | null;
   envError: string | null;
@@ -520,16 +734,34 @@ export function EnvironmentGroups({
   openManagedRuntimeUpgrade: () => void;
   mayStartRuntimeUpgrade: boolean;
   stacks: StackEnvironment[];
-  managedEnvironmentSizes?: Record<string, ManagedEnvironmentScanResult>;
   defaultExpanded?: boolean;
+  managedEnvironmentSizes?: Record<string, ManagedEnvironmentScanResult>;
   onProviderExpanded?: (providerId: ProviderId) => void;
-  inventoryError?: string | null;
+  onCleanupUltralytics?: () => void;
+  onCleanupRfDetr?: () => void;
+  onCleanupRfDetrChild?: (key: string) => void;
+  cleanupDisabled?: boolean;
 }) {
   const ultralyticsGroupStatus = getUltralyticsGroupStatus(envInfo, envError, redetecting);
   const ultralyticsGroupSummary = ultralyticsGroupStatus[0].toUpperCase() + ultralyticsGroupStatus.slice(1);
   const rfdetrGroupStatus = getRfdetrGroupStatus(stacks);
   const rfdetrGroupSummary = `${stacks.length} installed · ${rfdetrGroupStatus}`;
   const ultralyticsSize = managedEnvironmentSizes["ultralytics-managed"];
+  const stackSizes = stacks.map((stack) => managedEnvironmentSizes[stack.key]);
+  const rfdetrSize = managedEnvironmentSizes["rfdetr-all"] ?? (
+    stackSizes.some((size) => size?.status === "calculating")
+      ? { key: "rfdetr-all", status: "calculating" as const, estimated_logical_bytes: null, size_error: null }
+      : stackSizes.length > 0 && stackSizes.every((size) => size?.status === "available" && size.estimated_logical_bytes !== null)
+        ? {
+            key: "rfdetr-all",
+            status: "available" as const,
+            estimated_logical_bytes: stackSizes.reduce((total, size) => total + (size?.estimated_logical_bytes ?? 0), 0),
+            size_error: null,
+          }
+        : stackSizes.some((size) => size?.status === "unavailable" || (size?.status === "available" && size.estimated_logical_bytes === null))
+          ? { key: "rfdetr-all", status: "unavailable" as const, estimated_logical_bytes: null, size_error: stackSizes.find((size) => size?.size_error)?.size_error ?? "size scan failed" }
+          : undefined
+  );
 
   return (
     <>
@@ -538,7 +770,7 @@ export function EnvironmentGroups({
         summary={ultralyticsGroupSummary}
         status={ultralyticsGroupStatus}
         defaultExpanded={defaultExpanded}
-        onExpandedChange={(expanded) => { if (expanded) onProviderExpanded?.("ultralytics"); }}
+        onExpandedChange={(expanded) => expanded && onProviderExpanded?.("ultralytics")}
       >
         <EnvCard
           title="Python"
@@ -585,21 +817,47 @@ export function EnvironmentGroups({
           version={envInfo?.ultralytics_version || (redetecting ? "..." : "Not found")}
           path={envInfo?.yolo_path || undefined}
         />
-        <p className="px-1 text-[11px] text-zinc-500">{ultralyticsSize?.exists === false ? "Managed runtime not installed" : managedEnvironmentSizeLabel(ultralyticsSize)}</p>
+        <div className="flex items-center justify-between gap-3 rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
+          <span>{ultralyticsSize?.exists === false ? "Managed runtime not installed" : managedEnvironmentSizeLabel(ultralyticsSize)}</span>
+          {onCleanupUltralytics && ultralyticsSize?.exists !== false && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="shrink-0"
+              onClick={onCleanupUltralytics}
+              disabled={cleanupDisabled}
+            >
+              Reset runtime
+            </Button>
+          )}
+        </div>
+        {ultralyticsSize?.exists !== false && ultralyticsSize?.status === "unavailable" && (
+          <p className="px-1 text-[11px] text-amber-700">Cleanup size scan failed: {ultralyticsSize.size_error}</p>
+        )}
       </ProviderGroup>
-      {inventoryError && <p className="px-1 text-[11px] text-amber-700">Managed environment size scan failed: {inventoryError}</p>}
 
       <ProviderGroup
         title="Roboflow RF-DETR"
         summary={rfdetrGroupSummary}
         status={rfdetrGroupStatus}
         defaultExpanded={defaultExpanded}
-        onExpandedChange={(expanded) => {
-          if (expanded) onProviderExpanded?.("rfdetr");
-        }}
+        onExpandedChange={(expanded) => expanded && onProviderExpanded?.("rfdetr")}
       >
         {stacks.length > 0 ? (
-          <StackEnvironmentCards stacks={stacks} sizes={managedEnvironmentSizes} />
+          <>
+            <div className="flex flex-col gap-2 rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-600 sm:flex-row sm:items-center sm:justify-between">
+              <span>{managedEnvironmentSizeLabel(rfdetrSize)}</span>
+              {onCleanupRfDetr && (
+                <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={onCleanupRfDetr} disabled={cleanupDisabled}>
+                  Remove all
+                </Button>
+              )}
+            </div>
+            {rfdetrSize?.status === "unavailable" && (
+              <p className="px-1 text-[11px] text-amber-700">Cleanup size scan failed: {rfdetrSize.size_error}</p>
+            )}
+            <StackEnvironmentCards stacks={stacks} sizes={managedEnvironmentSizes} onRemove={onCleanupRfDetrChild} cleanupDisabled={cleanupDisabled} />
+          </>
         ) : (
           <p className="rounded-xl border border-dashed border-zinc-300 bg-white/60 px-4 py-3 text-xs text-zinc-500">
             No RF-DETR environments installed
@@ -677,17 +935,21 @@ export function EnvCard({
 
 export function StackEnvironmentCards({
   stacks,
-  sizes = {},
   defaultExpanded = false,
+  sizes = {},
+  onRemove,
+  cleanupDisabled = false,
 }: {
   stacks: StackEnvironment[];
-  sizes?: Record<string, ManagedEnvironmentScanResult>;
   defaultExpanded?: boolean;
+  sizes?: Record<string, ManagedEnvironmentScanResult>;
+  onRemove?: (key: string) => void;
+  cleanupDisabled?: boolean;
 }) {
   return (
     <>
       {stacks.map((stack) => (
-        <StackEnvironmentRow key={stack.key} stack={stack} defaultExpanded={defaultExpanded} size={sizes[stack.key]} />
+        <StackEnvironmentRow key={stack.key} stack={stack} defaultExpanded={defaultExpanded} size={sizes[stack.key]} onRemove={onRemove} cleanupDisabled={cleanupDisabled} />
       ))}
     </>
   );
@@ -695,12 +957,16 @@ export function StackEnvironmentCards({
 
 export function StackEnvironmentRow({
   stack,
-  size,
   defaultExpanded = false,
+  size,
+  onRemove,
+  cleanupDisabled = false,
 }: {
   stack: StackEnvironment;
-  size?: ManagedEnvironmentScanResult;
   defaultExpanded?: boolean;
+  size?: ManagedEnvironmentScanResult;
+  onRemove?: (key: string) => void;
+  cleanupDisabled?: boolean;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const pythonAvailable = stack.python_version.status === "available";
@@ -723,10 +989,10 @@ export function StackEnvironmentRow({
           <span className={`block truncate font-mono text-[11px] ${status === "ok" ? "text-zinc-500" : "text-red-500"}`}>
             RF-DETR {packageVersion}
           </span>
+          <span className="block truncate text-[11px] text-zinc-400">{managedEnvironmentSizeLabel(size)}</span>
         </span>
         <ChevronDown className={`size-4 shrink-0 text-zinc-400 transition-transform ${expanded ? "rotate-180" : ""}`} aria-hidden="true" />
       </button>
-      <p className="px-2 pb-1 text-[11px] text-zinc-500">{managedEnvironmentSizeLabel(size)}</p>
       {expanded && (
         <div className="space-y-2 px-1 pb-1 pt-2">
           <EnvCard
@@ -738,6 +1004,11 @@ export function StackEnvironmentRow({
           <p className={`px-1 text-[11px] ${status === "ok" ? "text-emerald-600" : "text-red-600"}`}>
             Status: {status === "ok" ? "Ready" : "Error"}
           </p>
+          {onRemove && (
+            <Button size="sm" variant="outline" onClick={() => onRemove(stack.key)} disabled={cleanupDisabled}>
+              Remove
+            </Button>
+          )}
         </div>
       )}
     </div>
@@ -759,9 +1030,10 @@ interface ExportWorkspaceProps {
   onBack: () => void;
   updatesEnabled: boolean;
   updater: UpdaterController;
+  onSetupCompleteChange?: (complete: boolean, errorMessage?: string) => void;
 }
 
-export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorkspaceProps) {
+export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupCompleteChange }: ExportWorkspaceProps) {
   const [appPlatform, setAppPlatform] = useState<AppPlatform>({ os: getOS(), arch: UNKNOWN_ARCH });
   const [platformResolved, setPlatformResolved] = useState(false);
   const [view, setView] = useState<WorkspaceView>("drop");
@@ -779,6 +1051,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     [appPlatform, currentRoutes, hostSupportResults, platformResolved],
   );
   const [selectedRouteId, setSelectedRouteId] = useState(defaultRouteForProvider("ultralytics").id);
+
   const selectedRoute = useMemo(
     () => currentRoutes.find((route) => route.id === selectedRouteId) ?? defaultRouteForProvider(selectedProviderId),
     [currentRoutes, selectedProviderId, selectedRouteId],
@@ -790,20 +1063,87 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const [pythonOverride, setPythonOverride] = useState("");
   const [redetecting, setRedetecting] = useState(false);
   const [stackEnvironments, setStackEnvironments] = useState<StackEnvironment[]>([]);
-  const managedEnvironmentInventory = useManagedEnvironmentInventory();
-  const [inventoryError, setInventoryError] = useState<string | null>(null);
-  const invalidateEnvironmentForRoute = useCallback((routeId: string | null) => {
-    if (selectedProviderId === "ultralytics") {
-      managedEnvironmentInventory.invalidate(["ultralytics-managed"]);
-      return;
-    }
-    const stack = stackEnvironments.find((item) => item.route_ids.includes(routeId ?? ""));
-    managedEnvironmentInventory.invalidate(stack ? [stack.key as ManagedEnvironmentKey] : ["rfdetr-all"]);
-  }, [managedEnvironmentInventory.invalidate, selectedProviderId, stackEnvironments]);
   const refreshStackEnvironmentCards = useCallback(
     () => refreshStackEnvironments(setStackEnvironments),
     [],
   );
+
+  const [managedEnvironmentSizes, setManagedEnvironmentSizes] = useState<Record<string, ManagedEnvironmentScanResult>>({});
+  const managedScanPromisesRef = useRef(new Map<string, Promise<ManagedEnvironmentScanResult[]>>());
+  const [cleanupBusy, setCleanupBusy] = useState(false);
+  const managedScanGenerationRef = useRef(0);
+  const invalidateManagedEnvironmentSizesForMutation = useCallback((keys?: ManagedEnvironmentKey[]) => {
+    managedScanPromisesRef.current.clear();
+    setManagedEnvironmentSizes((current) => {
+      const mutated = applyManagedEnvironmentSizeMutation(
+        { generation: managedScanGenerationRef.current, sizes: current },
+        keys,
+      );
+      managedScanGenerationRef.current = mutated.generation;
+      return mutated.sizes;
+    });
+  }, []);
+  const [cleanupError, setCleanupError] = useState<string | null>(null);
+  const [cleanupConfirmation, setCleanupConfirmation] = useState<{
+    keys: ManagedEnvironmentKey[];
+    provider: string;
+    environments: string[];
+    routeIds: string[];
+    estimatedLogicalBytes: number | null;
+    sizeError: string | null;
+    cleanupAllowed: boolean;
+    hasPythonOverride: boolean;
+    removesLastManagedRuntime: boolean;
+    willReturnToSetup: boolean;
+    isBulkCleanup: boolean;
+  } | null>(null);
+
+  const scanProviderEnvironments = useCallback(async (providerId: ProviderId, singleKey?: ManagedEnvironmentKey): Promise<ManagedEnvironmentScanResult[]> => {
+    const keys = managedEnvironmentKeysForProvider(providerId, singleKey);
+    const cacheKeys = providerId === "rfdetr" && !singleKey
+      ? stackEnvironments.map((stack) => stack.key as ManagedEnvironmentKey)
+      : keys;
+    if (keys.length === 0 || (providerId === "rfdetr" && !singleKey && cacheKeys.length === 0)) return [];
+    const requestKey = `${providerId}:${keys.join(",")}`;
+    const existingPromise = managedScanPromisesRef.current.get(requestKey);
+    if (existingPromise) return existingPromise;
+    const cached = cacheKeys.map((key) => managedEnvironmentSizes[key]).filter((result): result is ManagedEnvironmentScanResult => Boolean(result));
+    if (cacheKeys.length > 0 && cacheKeys.every((key) => managedEnvironmentSizes[key]?.status === "available")) return cached;
+
+    setManagedEnvironmentSizes((current) => {
+      const next = { ...current };
+      for (const key of cacheKeys) {
+        if (next[key]?.status !== "available") {
+          next[key] = { key, status: "calculating", estimated_logical_bytes: null, size_error: null, exists: null };
+        }
+      }
+      return next;
+    });
+    const scanGeneration = managedScanGenerationRef.current;
+    const pending = scanManagedEnvironments(keys)
+      .then((results) => {
+        if (shouldApplyManagedEnvironmentScan(scanGeneration, managedScanGenerationRef.current)) {
+          setManagedEnvironmentSizes((current) => mergeManagedEnvironmentScanResults(current, results));
+        }
+        return results;
+      })
+      .catch((error: unknown) => {
+        // A command-level scan failure leaves the affected rows stuck on
+        // "Calculating…". Clear those transient rows before propagating so the
+        // caller's error surfaces without stranding the cards.
+        if (shouldApplyManagedEnvironmentScan(scanGeneration, managedScanGenerationRef.current)) {
+          setManagedEnvironmentSizes((current) => clearCalculatingManagedEnvironmentScan(current, cacheKeys));
+        }
+        throw error;
+      })
+      .finally(() => {
+        if (managedScanPromisesRef.current.get(requestKey) === pending) {
+          managedScanPromisesRef.current.delete(requestKey);
+        }
+      });
+    managedScanPromisesRef.current.set(requestKey, pending);
+    return pending;
+  }, [managedEnvironmentSizes, stackEnvironments]);
 
   // Output directory
   const [outputDirOverride, setOutputDirOverride] = useState("");
@@ -886,12 +1226,20 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const ultralyticsRuntimeInstalling = runtimeInstallPhase === "installing";
   const ultralyticsRuntimeBlocking =
     selectedProviderId === "ultralytics" && (!ultralyticsRuntimeReady || ultralyticsRuntimeInstalling);
-  const routeActivationAllowed = mayActivateRoute(exportStatus, installPhase);
+  const routeActivationAllowed = !cleanupBusy && mayActivateRoute(exportStatus, installPhase);
+  const cleanupActionsDisabled = isManagedEnvironmentCleanupBlocked({
+    cleanupBusy,
+    exportStatus,
+    installPhase,
+    runtimeInstallPhase,
+    managedRuntimeRebuilding,
+    redetecting,
+  });
   const routeGridDisabled = ultralyticsRuntimeBlocking || !routeActivationAllowed;
   const routeGridDisabledReason = !routeActivationAllowed
     ? (installPhase === "installing" ? "Dependency installation in progress" : "Export in progress")
     : getUltralyticsRuntimeDisabledReason(runtimeInstallPhase);
-  const mayStartRuntimeUpgrade = mayStartManagedRuntimeUpgrade(
+  const mayStartRuntimeUpgrade = !cleanupBusy && mayStartManagedRuntimeUpgrade(
     exportStatus,
     installPhase,
     runtimeInstallPhase,
@@ -1158,7 +1506,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
 
   const handleInstallUltralyticsRuntime = useCallback(async () => {
     const pythonPath = envInfo?.python_path;
-    if (!pythonPath || ultralyticsRuntimeInstalling) return;
+    if (!pythonPath || ultralyticsRuntimeInstalling || cleanupBusy) return;
 
     setRuntimeInstallPhase("installing");
     setRuntimeInstallLines([]);
@@ -1172,6 +1520,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       const result = await streamDependencyInstall(null, ["ultralytics"], pythonPath, (line) => {
         setRuntimeInstallLines((prev) => [...prev, line]);
       });
+      invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
 
       if (result !== "ok") {
         setRuntimeInstallPhase("failed");
@@ -1179,6 +1528,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         return;
       }
 
+      invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
       const freshEnv = await detectEnvironment(pythonPath);
       setEnvInfo(freshEnv);
 
@@ -1199,13 +1549,13 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       setRuntimeInstalledThisSession(true);
       setRuntimeInstallPhase("ready");
     } catch (error) {
+      invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
       setRuntimeInstallPhase("failed");
       setRuntimeInstallError(String(error));
     } finally {
-      managedEnvironmentInventory.invalidate(["ultralytics-managed"]);
       setDepCheckLoading(false);
     }
-  }, [envInfo?.python_path, managedEnvironmentInventory.invalidate, refreshRouteDependencies, selectedRoute.id, streamDependencyInstall, ultralyticsRuntimeInstalling]);
+  }, [cleanupBusy, envInfo?.python_path, invalidateManagedEnvironmentSizesForMutation, refreshRouteDependencies, selectedRoute.id, streamDependencyInstall, ultralyticsRuntimeInstalling]);
 
   const failExportStart = useCallback((message: string) => {
     setInstallPhase("idle");
@@ -1308,7 +1658,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
 
   // Export handler — gates on missing deps before starting
   const handleExport = async () => {
-    if (!sourcePath || !envInfo?.python_path || exportStatus === "running" || exportStatus === "starting") return;
+    if (cleanupBusy || !sourcePath || !envInfo?.python_path || exportStatus === "running" || exportStatus === "starting") return;
     const incompatibleMessage = getIncompatibleExportMessage(
       selectedRoute,
       appPlatform.os,
@@ -1357,7 +1707,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
 
   // Install missing deps then auto-start export
   const handleInstallAndExport = async () => {
-    if (!mayActivateRoute(exportStatus, installPhase)) {
+    if (cleanupBusy || !mayActivateRoute(exportStatus, installPhase)) {
       setInvokeError("Another runtime operation is in progress. Wait for it to finish before installing dependencies.");
       return;
     }
@@ -1402,7 +1752,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       const result = await streamDependencyInstall(exportRoute.routeId, missingPkgs, pythonPath, (line) => {
         setLogLines((prev) => [...prev, line]);
       });
-      invalidateEnvironmentForRoute(exportRoute.routeId);
+      invalidateManagedEnvironmentSizesForMutation();
 
       if (result !== "ok") {
         captureAnalyticsEvent("export_failed", {
@@ -1422,7 +1772,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         setInvokeError(outcome.message);
         return;
       }
-      invalidateEnvironmentForRoute(exportRoute.routeId);
+      invalidateManagedEnvironmentSizesForMutation();
       captureAnalyticsEvent("export_failed", {
         route_id: exportRoute.routeId,
         export_format: exportRoute.exportFormat,
@@ -1653,7 +2003,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
 
   // Route row clicked — open modal for that route
   const handleActivateRoute = (routeId: string) => {
-    if (!mayActivateRoute(exportStatus, installPhase)) return;
+    if (cleanupActionsDisabled || !mayActivateRoute(exportStatus, installPhase)) return;
     setSelectedRouteId(routeId);
 
     const saved = routeOptionsRef.current[routeId] ?? null;
@@ -1687,7 +2037,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   };
 
   // Re-detect environment with current override
-  const handleRedetect = useCallback(async (overridePath?: string) => {
+  const handleRedetect = useCallback(async (overridePath?: string, allowDuringCleanup = false) => {
+    if (shouldSkipEnvironmentRedetection(cleanupBusy, allowDuringCleanup)) return;
     const trimmedOverride = overridePath?.trim();
     setRedetecting(true);
     setEnvInfo(null);
@@ -1708,9 +2059,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     } finally {
       setRedetecting(false);
     }
-  }, [invalidateEnvironmentForRoute, refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId]);
+  }, [cleanupBusy, refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId]);
 
   const handleRebuildManagedRuntime = useCallback(async () => {
+    if (!mayStartRuntimeUpgrade) return;
     setManagedRuntimeRebuilding(true);
     setManagedRuntimeRebuildError(null);
     setManagedRuntimeRebuildLines([]);
@@ -1746,7 +2098,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         setManagedRuntimeRebuildError(getManagedRuntimeRebuildFailureMessage(result));
         return;
       }
-      managedEnvironmentInventory.invalidate(["ultralytics-managed"]);
+      invalidateManagedEnvironmentSizesForMutation();
       setManagedRuntimeUpgradeOpen(false);
       await handleRedetect();
     } catch (error) {
@@ -1755,7 +2107,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     } finally {
       setManagedRuntimeRebuilding(false);
     }
-  }, [handleRedetect, managedEnvironmentInventory.invalidate]);
+  }, [handleRedetect, invalidateManagedEnvironmentSizesForMutation, mayStartRuntimeUpgrade]);
 
   const openManagedRuntimeUpgrade = useCallback(() => {
     if (mayStartRuntimeUpgrade) setManagedRuntimeUpgradeOpen(true);
@@ -1763,10 +2115,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
 
   // Save python path override and re-detect
   const handleSaveAndRedetect = useCallback(async () => {
+    if (cleanupBusy) return;
     const val = pythonOverride.trim();
     await savePythonOverride(val || null);
     handleRedetect(val);
-  }, [pythonOverride, handleRedetect]);
+  }, [cleanupBusy, pythonOverride, handleRedetect]);
 
   // Browse for python executable
   const handleBrowsePython = useCallback(async () => {
@@ -1776,17 +2129,122 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
 
   // Clear python override
   const handleClearOverride = useCallback(async () => {
+    if (cleanupBusy) return;
     setPythonOverride("");
     await savePythonOverride(null);
     handleRedetect();
-  }, [handleRedetect]);
+  }, [cleanupBusy, handleRedetect]);
+
+  const prepareCleanup = useCallback(async (providerId: ProviderId, singleKey?: ManagedEnvironmentKey) => {
+    if (cleanupActionsDisabled) return;
+    setCleanupError(null);
+    let scanned: ManagedEnvironmentScanResult[];
+    try {
+      scanned = await scanProviderEnvironments(providerId, singleKey);
+    } catch (error: unknown) {
+      setCleanupConfirmation(null);
+      setCleanupError(String(error));
+      return;
+    }
+    const scannedByKey = Object.fromEntries(scanned.map((row) => [row.key, row]));
+    const isUltralytics = providerId === "ultralytics";
+    const ultralyticsPresence = isUltralytics
+      ? scannedByKey["ultralytics-managed"]?.exists ?? null
+      : managedEnvironmentSizes["ultralytics-managed"]?.exists ?? null;
+    if (!isUltralytics && ultralyticsPresence === null) {
+      const ultralyticsScan = await scanProviderEnvironments("ultralytics").catch(() => []);
+      const result = ultralyticsScan.find((row) => row.key === "ultralytics-managed");
+      if (result) scannedByKey[result.key] = result;
+    }
+    const rows = isUltralytics
+      ? [scannedByKey["ultralytics-managed"] ?? managedEnvironmentSizes["ultralytics-managed"]]
+      : scanned.filter((row) => row.key !== "rfdetr-all");
+    const cleanupAllowed = rows.length > 0 && rows.every((row) => isManagedEnvironmentCleanupAllowed(row));
+    const estimatedLogicalBytes = cleanupAllowed && rows.every((row) => row?.status === "available")
+      ? rows.reduce((total, row) => total + (row?.estimated_logical_bytes ?? 0), 0)
+      : null;
+    const sizeError = rows.find((row) => row?.status === "unavailable")?.size_error ?? null;
+    const displayName = (key: string) => stackEnvironments.find((stack) => stack.key === key)?.display_name ?? key;
+    const selectedKeys = managedEnvironmentKeysForProvider(providerId, singleKey);
+    const cleanupState = getManagedEnvironmentCleanupState({
+      providerId,
+      singleKey,
+      ultralyticsExists: scannedByKey["ultralytics-managed"]?.exists ?? ultralyticsPresence,
+      rfdetrCount: stackEnvironments.length,
+      hasPythonOverride: Boolean(pythonOverride.trim()),
+    });
+    setCleanupConfirmation({
+      keys: selectedKeys,
+      provider: isUltralytics ? "Ultralytics YOLO" : "Roboflow RF-DETR",
+      environments: isUltralytics ? ["Ultralytics managed runtime"] : rows.map((row) => displayName(row.key)),
+      routeIds: isUltralytics
+        ? routesForProvider("ultralytics").map((route) => route.id)
+        : rows.flatMap((row) => {
+            const stack = stackEnvironments.find((item) => item.key === row.key);
+            return stack?.route_ids ?? [];
+          }),
+      estimatedLogicalBytes,
+      sizeError,
+      cleanupAllowed,
+      ...cleanupState,
+    });
+  }, [cleanupActionsDisabled, managedEnvironmentSizes, pythonOverride, scanProviderEnvironments, stackEnvironments]);
+
+  const confirmCleanup = useCallback(async () => {
+    if (!cleanupConfirmation || !cleanupConfirmation.cleanupAllowed || cleanupBusy) return;
+    const confirmation = cleanupConfirmation;
+    setCleanupBusy(true);
+    setCleanupError(null);
+    try {
+      const report: ManagedEnvironmentCleanupReport = await cleanupManagedEnvironments(confirmation.keys);
+      const cleanupMessage = managedEnvironmentCleanupErrorMessage(report);
+      if (cleanupMessage) setCleanupError(cleanupMessage);
+      setCleanupConfirmation(null);
+      invalidateManagedEnvironmentSizesForMutation(
+        managedEnvironmentCacheKeysForCleanup(confirmation.keys, stackEnvironments.map((stack) => stack.key)),
+      );
+      if (confirmation.keys.includes("ultralytics-managed")) {
+        // Deletion succeeds independently of setup-state persistence, so refresh
+        // the managed runtime card whenever the .venv was actually removed, even
+        // if saving setup state failed (surfaced via cleanupMessage above).
+        if (managedEnvironmentDeletionSucceeded(report, "ultralytics-managed")) {
+          managedScanPromisesRef.current.delete("ultralytics:ultralytics-managed");
+          setManagedEnvironmentSizes((current) => ({
+            ...current,
+            "ultralytics-managed": {
+              key: "ultralytics-managed",
+              status: "available",
+              estimated_logical_bytes: 0,
+              size_error: null,
+              exists: false,
+            },
+          }));
+          setEnvInfo(null);
+          const setupAction = applyManagedEnvironmentCleanupSetup(report, onSetupCompleteChange);
+          if (setupAction?.redetect) {
+            const settings = await loadSettings();
+            await handleRedetect(settings.python_path_override || undefined, true);
+          }
+        }
+      } else {
+        await refreshStackEnvironmentCards();
+        await refreshRouteDependencies(selectedRouteId, envInfo?.python_path ?? null).catch(() => {});
+      }
+    } catch (error: unknown) {
+      setCleanupError((current) => current ? `${current} ${String(error)}` : String(error));
+    } finally {
+      setCleanupBusy(false);
+    }
+  }, [cleanupBusy, cleanupConfirmation, envInfo?.python_path, handleRedetect, invalidateManagedEnvironmentSizesForMutation, onSetupCompleteChange, pythonOverride, refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId, stackEnvironments]);
 
   // Save output dir override
   const handleSaveOutputDir = useCallback(async () => {
+    if (cleanupBusy) return;
+
     const val = outputDirInput.trim();
     setOutputDirOverride(val);
     await saveOutputDirOverride(val || null);
-  }, [outputDirInput]);
+  }, [cleanupBusy, outputDirInput]);
 
   // Browse for output directory
   const handleBrowseOutputDir = useCallback(async () => {
@@ -1796,12 +2254,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
 
   // Clear output dir override
   const handleClearOutputDir = useCallback(async () => {
+    if (cleanupBusy) return;
     setOutputDirOverride("");
     setOutputDirInput("");
     await saveOutputDirOverride(null);
-  }, []);
-
-  // Back button per view
+  }, [cleanupBusy]);
   const handleBack = () => {
     if (view === "drop") onBack();
     else handleClearFile();
@@ -1846,7 +2303,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
             <button
               type="button"
               onClick={() => handleRedetect(pythonOverride.trim())}
-              disabled={redetecting}
+              disabled={redetecting || cleanupBusy}
               className="rounded-lg p-1.5 text-zinc-400 transition-colors hover:bg-zinc-200/60 hover:text-zinc-700 disabled:opacity-50"
               title="Re-detect environment"
             >
@@ -1869,16 +2326,16 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                 openManagedRuntimeUpgrade={openManagedRuntimeUpgrade}
                 mayStartRuntimeUpgrade={mayStartRuntimeUpgrade}
                 stacks={stackEnvironments}
-                managedEnvironmentSizes={managedEnvironmentInventory.sizes}
-                inventoryError={inventoryError}
+                managedEnvironmentSizes={managedEnvironmentSizes}
                 onProviderExpanded={(providerId) => {
-                  setInventoryError(null);
-                  const scans = providerId === "rfdetr"
-                    ? stackEnvironments.map((stack) => managedEnvironmentInventory.scanProvider("rfdetr", stack.key as ManagedEnvironmentKey))
-                    : [managedEnvironmentInventory.scanProvider(providerId)];
-                  void Promise.all(scans).catch((error: unknown) => setInventoryError(String(error)));
+                  void scanProviderEnvironments(providerId).catch((error: unknown) => setCleanupError(String(error)));
                 }}
+                onCleanupUltralytics={() => { void prepareCleanup("ultralytics"); }}
+                onCleanupRfDetr={() => { void prepareCleanup("rfdetr"); }}
+                onCleanupRfDetrChild={(key) => { void prepareCleanup("rfdetr", key as ManagedEnvironmentKey); }}
+                cleanupDisabled={cleanupActionsDisabled}
               />
+              {cleanupError && <p className="text-xs text-red-700">{cleanupError}</p>}
             </div>
 
             {/* Configuration */}
@@ -2026,6 +2483,41 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     />
   );
 
+  const cleanupDialog = cleanupConfirmation ? (
+    <Dialog open onOpenChange={(open) => { if (!open && !cleanupBusy) setCleanupConfirmation(null); }}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{cleanupConfirmation.provider === "Ultralytics YOLO" ? "Reset Ultralytics runtime?" : cleanupConfirmation.keys.includes("rfdetr-all") ? "Remove RF-DETR environments?" : "Remove RF-DETR environment?"}</DialogTitle>
+          <DialogDescription>
+            {cleanupConfirmation.provider === "Ultralytics YOLO"
+              ? "This removes the local environment used for Ultralytics exports."
+              : cleanupConfirmation.keys.includes("rfdetr-all")
+                ? `This removes ${cleanupConfirmation.environments.length} local RF-DETR environments.`
+                : `This removes the local environment used for ${cleanupConfirmation.routeIds.map((id) => findRoute(id)?.title ?? id).join(", ")} exports.`}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm">
+          <div><p className="font-medium">What will be removed</p><p className="text-zinc-600">{cleanupConfirmation.environments.join(", ")}</p></div>
+          <div><p className="font-medium">Approx. size</p><p className="text-zinc-600">{cleanupConfirmation.estimatedLogicalBytes === null ? "Unavailable" : formatManagedEnvironmentSize(cleanupConfirmation.estimatedLogicalBytes)}</p></div>
+          <div><p className="font-medium">What happens next</p><p className="text-zinc-600">{cleanupConfirmation.removesLastManagedRuntime && <><strong>This is your last managed runtime.</strong> </>}{cleanupConfirmation.willReturnToSetup ? "Vision Export Studio will return to Setup. You must set up an environment before exporting again." : cleanupConfirmation.removesLastManagedRuntime && cleanupConfirmation.hasPythonOverride ? "Your Python override will stay active. You can continue exporting with it." : cleanupConfirmation.provider === "Ultralytics YOLO" ? "Your Python override will stay active. You can continue exporting with it." : cleanupConfirmation.isBulkCleanup ? "These environments will be set up again when needed." : "This environment will be set up again when needed."}</p></div>
+          <div><p className="font-medium">What stays safe</p><p className="text-zinc-600">Your models, exported files, and settings will not be deleted.</p></div>
+          <details>
+            <summary className="cursor-pointer font-medium">Affected export formats ({cleanupConfirmation.routeIds.length})</summary>
+            <div className="mt-2 max-h-24 overflow-y-auto text-zinc-600">{cleanupConfirmation.routeIds.map((routeId) => findRoute(routeId)?.title ?? routeId).join(", ")}</div>
+          </details>
+          {cleanupConfirmation.estimatedLogicalBytes === null && cleanupConfirmation.sizeError && <p className="text-amber-700">We could not calculate this environment’s size. You can still remove it.</p>}
+        </div>
+        <p className="text-xs text-zinc-500">Estimate; actual free-space change may differ.</p>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setCleanupConfirmation(null)} disabled={cleanupBusy}>Cancel</Button>
+          <Button variant="destructive" onClick={() => void confirmCleanup()} disabled={cleanupBusy || !cleanupConfirmation.cleanupAllowed}>
+            {cleanupBusy ? "Removing…" : cleanupConfirmation.provider === "Ultralytics YOLO" ? "Reset runtime" : cleanupConfirmation.keys.includes("rfdetr-all") ? "Remove all" : "Remove"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  ) : null;
+
   if (view === "drop") {
     return (
       <div className="flex min-h-screen flex-col">
@@ -2061,6 +2553,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
           </div>
         </main>
         {managedRuntimeUpgradeDialog}
+        {cleanupDialog}
       </div>
     );
   }
@@ -2164,7 +2657,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                 </div>
               )}
               <div>
-                <Button size="sm" onClick={handleInstallUltralyticsRuntime} disabled={!envInfo?.python_path}>
+                <Button size="sm" onClick={handleInstallUltralyticsRuntime} disabled={!envInfo?.python_path || cleanupBusy}>
                   Install Runtime
                 </Button>
               </div>
@@ -2182,7 +2675,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                 <p className="font-medium">Ultralytics runtime required</p>
                 <p className="mt-1">Install once to enable YOLO exports on this machine.</p>
               </div>
-              <Button size="sm" onClick={handleInstallUltralyticsRuntime} disabled={!envInfo?.python_path}>
+              <Button size="sm" onClick={handleInstallUltralyticsRuntime} disabled={!envInfo?.python_path || cleanupBusy}>
                 Install Runtime
               </Button>
             </div>
@@ -2249,6 +2742,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       />
 
       {managedRuntimeUpgradeDialog}
+      {cleanupDialog}
     </div>
   );
 }

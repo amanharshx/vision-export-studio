@@ -36,6 +36,7 @@ function App() {
   const [appState, setAppState] = useState<AppState>("landing");
   const [runtimeDir, setRuntimeDir] = useState<string>("");
   const [setupComplete, setSetupComplete] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
   const [settingsReady, setSettingsReady] = useState(false);
   const [hasCheckedForUpdateThisLaunch, setHasCheckedForUpdateThisLaunch] = useState(false);
   const appOpenedSentRef = useRef(false);
@@ -124,7 +125,9 @@ function App() {
         defaultRuntimeDir={runtimeDir}
         updatesEnabled={updatesEnabled}
         updater={updater}
+        initialErrorMessage={setupError}
         onComplete={() => {
+          setSetupError(null);
           setSetupComplete(true);
           setAppState("export");
         }}
@@ -136,6 +139,11 @@ function App() {
         updatesEnabled={updatesEnabled}
         updater={updater}
         onBack={() => setAppState("landing")}
+        onSetupCompleteChange={(complete, errorMessage) => {
+          setSetupComplete(complete);
+          setSetupError(errorMessage ?? null);
+          if (!complete) setAppState("setup");
+        }}
       />
     );
   }
