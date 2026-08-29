@@ -90,6 +90,7 @@ export type PackageVersion =
 export interface StackEnvironment {
   key: string;
   display_name: string;
+  route_ids: string[];
   python_path: string;
   python_version: PythonVersion;
   rfdetr_version: PackageVersion;
@@ -221,4 +222,15 @@ export interface InstallFinishedPayload {
 export interface InstallFailedPayload {
   session_id: string;
   error: string;
+}
+export type ManagedEnvironmentKey = "ultralytics-managed" | "rfdetr-all" | "rfdetr-default" | "rfdetr-tensorrt" | "rfdetr-coreml" | "rfdetr-tflite";
+
+export type ManagedEnvironmentScanStatus = "calculating" | "available" | "unavailable";
+
+export interface ManagedEnvironmentScanResult {
+  key: ManagedEnvironmentKey | string;
+  status: ManagedEnvironmentScanStatus;
+  estimated_logical_bytes: number | null;
+  size_error: string | null;
+  exists?: boolean | null;
 }

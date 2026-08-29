@@ -5,6 +5,7 @@ import { checkDependencies, installDependencies } from "@/lib/tauri/deps";
 import { cancelExport, openExportFolder, startExport } from "@/lib/tauri/export";
 import { defaultRouteForProvider, findRoute, hasAllowedSourceExtension, providers, providerList, routesForProvider } from "@/lib/providers";
 import { inspectRfDetrCheckpoint } from "@/lib/tauri/rfdetr";
+import { useManagedEnvironmentInventory } from "./use-managed-environment-inventory";
 import { architectureMatters, type AppOS, type AppPlatform, getOS, incompatibleReason, isCompatible, UNKNOWN_ARCH } from "@/lib/platform";
 import { getAppTelemetryContext, getRoutePlatformSupport, type HostSupportResult } from "@/lib/tauri/app";
 import { createListenerGroup, type ListenerGroup } from "@/lib/tauri/listener-group";
@@ -29,6 +30,7 @@ import type {
   RouteOptionsState,
   RouteSpec,
   StackEnvironment,
+  ManagedEnvironmentScanResult,
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -475,6 +477,26 @@ export function ProviderGroup({
   );
 }
 
+function formatManagedEnvironmentSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let value = bytes;
+  let unit = "B";
+  for (const next of units) {
+    value /= 1024;
+    unit = next;
+    if (value < 1024 || next === units[units.length - 1]) break;
+  }
+  return `${value.toFixed(value >= 10 || Number.isInteger(value) ? 0 : 1)} ${unit}`;
+}
+
+function managedEnvironmentSizeLabel(result: ManagedEnvironmentScanResult | undefined): string {
+  if (!result) return "Size not scanned";
+  if (result.status === "calculating") return "Calculating size…";
+  if (result.status === "unavailable" || result.estimated_logical_bytes === null) return "Size unavailable";
+  return `Approx. size: ${formatManagedEnvironmentSize(result.estimated_logical_bytes)}`;
+}
+
 export function EnvironmentGroups({
   envInfo,
   envError,
@@ -483,6 +505,7 @@ export function EnvironmentGroups({
   openManagedRuntimeUpgrade,
   mayStartRuntimeUpgrade,
   stacks,
+  managedEnvironmentSizes = {},
   defaultExpanded = false,
 }: {
   envInfo: EnvironmentInfo | null;
@@ -492,12 +515,14 @@ export function EnvironmentGroups({
   openManagedRuntimeUpgrade: () => void;
   mayStartRuntimeUpgrade: boolean;
   stacks: StackEnvironment[];
+  managedEnvironmentSizes?: Record<string, ManagedEnvironmentScanResult>;
   defaultExpanded?: boolean;
 }) {
   const ultralyticsGroupStatus = getUltralyticsGroupStatus(envInfo, envError, redetecting);
   const ultralyticsGroupSummary = ultralyticsGroupStatus[0].toUpperCase() + ultralyticsGroupStatus.slice(1);
   const rfdetrGroupStatus = getRfdetrGroupStatus(stacks);
   const rfdetrGroupSummary = `${stacks.length} installed · ${rfdetrGroupStatus}`;
+  const ultralyticsSize = managedEnvironmentSizes["ultralytics-managed"];
 
   return (
     <>
@@ -552,6 +577,7 @@ export function EnvironmentGroups({
           version={envInfo?.ultralytics_version || (redetecting ? "..." : "Not found")}
           path={envInfo?.yolo_path || undefined}
         />
+        <p className="px-1 text-[11px] text-zinc-500">{envInfo ? managedEnvironmentSizeLabel(ultralyticsSize) : "Managed runtime not installed"}</p>
       </ProviderGroup>
 
       <ProviderGroup
@@ -561,7 +587,7 @@ export function EnvironmentGroups({
         defaultExpanded={defaultExpanded}
       >
         {stacks.length > 0 ? (
-          <StackEnvironmentCards stacks={stacks} />
+          <StackEnvironmentCards stacks={stacks} sizes={managedEnvironmentSizes} />
         ) : (
           <p className="rounded-xl border border-dashed border-zinc-300 bg-white/60 px-4 py-3 text-xs text-zinc-500">
             No RF-DETR environments installed
@@ -639,15 +665,17 @@ export function EnvCard({
 
 export function StackEnvironmentCards({
   stacks,
+  sizes = {},
   defaultExpanded = false,
 }: {
   stacks: StackEnvironment[];
+  sizes?: Record<string, ManagedEnvironmentScanResult>;
   defaultExpanded?: boolean;
 }) {
   return (
     <>
       {stacks.map((stack) => (
-        <StackEnvironmentRow key={stack.key} stack={stack} defaultExpanded={defaultExpanded} />
+        <StackEnvironmentRow key={stack.key} stack={stack} defaultExpanded={defaultExpanded} size={sizes[stack.key]} />
       ))}
     </>
   );
@@ -655,9 +683,11 @@ export function StackEnvironmentCards({
 
 export function StackEnvironmentRow({
   stack,
+  size,
   defaultExpanded = false,
 }: {
   stack: StackEnvironment;
+  size?: ManagedEnvironmentScanResult;
   defaultExpanded?: boolean;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -684,6 +714,7 @@ export function StackEnvironmentRow({
         </span>
         <ChevronDown className={`size-4 shrink-0 text-zinc-400 transition-transform ${expanded ? "rotate-180" : ""}`} aria-hidden="true" />
       </button>
+      <p className="px-2 pb-1 text-[11px] text-zinc-500">{managedEnvironmentSizeLabel(size)}</p>
       {expanded && (
         <div className="space-y-2 px-1 pb-1 pt-2">
           <EnvCard
@@ -747,6 +778,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const [pythonOverride, setPythonOverride] = useState("");
   const [redetecting, setRedetecting] = useState(false);
   const [stackEnvironments, setStackEnvironments] = useState<StackEnvironment[]>([]);
+  const managedEnvironmentInventory = useManagedEnvironmentInventory();
   const refreshStackEnvironmentCards = useCallback(
     () => refreshStackEnvironments(setStackEnvironments),
     [],
@@ -879,6 +911,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     void getManagedRuntimeRebuildEligibility().then(setManagedRuntimeUpgrade).catch(() => setManagedRuntimeUpgrade(null));
     void refreshStackEnvironmentCards();
   }, [refreshStackEnvironmentCards]);
+
+  useEffect(() => {
+    if (!infoOpen) return;
+    void managedEnvironmentInventory.scanProvider(selectedProviderId).catch(() => {});
+  }, [infoOpen, managedEnvironmentInventory.scanProvider, selectedProviderId]);
 
   useEffect(() => {
     const requestId = hostSupportRequestRef.current + 1;
@@ -1812,6 +1849,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                 openManagedRuntimeUpgrade={openManagedRuntimeUpgrade}
                 mayStartRuntimeUpgrade={mayStartRuntimeUpgrade}
                 stacks={stackEnvironments}
+                managedEnvironmentSizes={managedEnvironmentInventory.sizes}
               />
             </div>
 
