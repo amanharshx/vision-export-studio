@@ -7,6 +7,7 @@ use pep440_rs::Version;
 use tauri::Emitter;
 use uuid::Uuid;
 
+use crate::commands::managed_environments::{ManagedEnvironments, ULTRALYTICS_MANAGED_KEY};
 use crate::commands::provider_registry::{
     current_host_context, validate_route_platform, HostContext,
 };
@@ -1184,6 +1185,7 @@ fn validate_package_name(name: &str) -> Result<(), String> {
 pub async fn install_dependencies(
     app_handle: tauri::AppHandle,
     runtime_operations: tauri::State<'_, RuntimeOperationCoordinator>,
+    managed_environments: tauri::State<'_, ManagedEnvironments>,
     route_id: Option<String>,
     packages: Vec<String>,
     python_path: String,
@@ -1214,15 +1216,24 @@ pub async fn install_dependencies(
     for pkg in &packages {
         validate_package_name(pkg)?;
     }
+    let runtime_root = load_settings(app_handle.clone())?.runtime_dir;
+    let invalidation_key = route_id
+        .as_deref()
+        .and_then(stack_for_route)
+        .map(|stack| stack.key.to_string())
+        .unwrap_or_else(|| ULTRALYTICS_MANAGED_KEY.to_string());
+    let managed_environments = managed_environments.inner().clone();
     let operation_guard = runtime_operations.acquire(RuntimeOperation::Install)?;
 
     let install_python = if let Some(route_id) = route_id.as_deref() {
         if let Some((stack_venv, stack_python)) = stack_paths_from_settings(&app_handle, route_id)?
         {
             if !Path::new(&stack_python).exists() {
-                let status = build_venv_command(&python_path, &stack_venv)
-                    .status()
-                    .map_err(|e| format!("failed to create RF-DETR environment: {}", e))?;
+                let status = build_venv_command(&python_path, &stack_venv).status();
+                managed_environments
+                    .invalidate(Path::new(&runtime_root), [invalidation_key.as_str()]);
+                let status =
+                    status.map_err(|e| format!("failed to create RF-DETR environment: {}", e))?;
                 if !status.success() {
                     return Err(format!(
                         "failed to create RF-DETR environment: exit code {:?}",
@@ -1307,6 +1318,7 @@ pub async fn install_dependencies(
         let operation_guard = operation_guard;
         let _ = stdout_handle.join();
         let _ = stderr_handle.join();
+        managed_environments.invalidate(Path::new(&runtime_root), [invalidation_key.as_str()]);
 
         match child.wait() {
             Ok(status) => {

@@ -228,6 +228,7 @@ describe("stack environment refresh", () => {
     const stacks: StackEnvironment[] = [{
       key: "rfdetr-default",
       display_name: "RF-DETR",
+      route_ids: ["rfdetr.pth.onnx", "rfdetr.pth.executorch"],
       python_path: "/tmp/runtime/envs/rfdetr-default/.venv/bin/python",
       python_version: { status: "available", version: "3.12.12" },
       rfdetr_version: { status: "available", version: "1.9.0" },

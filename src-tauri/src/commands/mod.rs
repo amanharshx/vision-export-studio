@@ -4,6 +4,7 @@ pub mod deps;
 pub mod environment;
 pub mod export;
 pub mod gpu;
+pub mod managed_environments;
 pub mod provider_registry;
 pub mod providers;
 pub mod rfdetr;

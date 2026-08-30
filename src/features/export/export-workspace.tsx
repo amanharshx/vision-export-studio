@@ -5,6 +5,7 @@ import { checkDependencies, installDependencies } from "@/lib/tauri/deps";
 import { cancelExport, openExportFolder, startExport } from "@/lib/tauri/export";
 import { defaultRouteForProvider, findRoute, hasAllowedSourceExtension, providers, providerList, routesForProvider } from "@/lib/providers";
 import { inspectRfDetrCheckpoint } from "@/lib/tauri/rfdetr";
+import { useManagedEnvironmentInventory } from "./use-managed-environment-inventory";
 import { architectureMatters, type AppOS, type AppPlatform, getOS, incompatibleReason, isCompatible, UNKNOWN_ARCH } from "@/lib/platform";
 import { getAppTelemetryContext, getRoutePlatformSupport, type HostSupportResult } from "@/lib/tauri/app";
 import { createListenerGroup, type ListenerGroup } from "@/lib/tauri/listener-group";
@@ -29,6 +30,8 @@ import type {
   RouteOptionsState,
   RouteSpec,
   StackEnvironment,
+  ManagedEnvironmentScanResult,
+  ManagedEnvironmentKey,
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -446,12 +449,14 @@ export function ProviderGroup({
   status,
   children,
   defaultExpanded = false,
+  onExpandedChange,
 }: {
   title: string;
   summary: string;
   status: ProviderGroupStatus;
   children?: React.ReactNode;
   defaultExpanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const Icon = providerGroupIcon(status);
@@ -460,7 +465,7 @@ export function ProviderGroup({
       <button
         type="button"
         aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
+        onClick={() => setExpanded((value) => { const next = !value; onExpandedChange?.(next); return next; })}
         className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-white/70"
       >
         <Icon className={`size-4 shrink-0 ${providerGroupIconColor(status)}`} aria-hidden="true" />
@@ -475,6 +480,26 @@ export function ProviderGroup({
   );
 }
 
+function formatManagedEnvironmentSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let value = bytes;
+  let unit = "B";
+  for (const next of units) {
+    value /= 1024;
+    unit = next;
+    if (value < 1024 || next === units[units.length - 1]) break;
+  }
+  return `${value.toFixed(value >= 10 || Number.isInteger(value) ? 0 : 1)} ${unit}`;
+}
+
+function managedEnvironmentSizeLabel(result: ManagedEnvironmentScanResult | undefined): string {
+  if (!result) return "Size not scanned";
+  if (result.status === "calculating") return "Calculating size…";
+  if (result.status === "unavailable" || result.estimated_logical_bytes === null) return "Size unavailable";
+  return `Approx. size: ${formatManagedEnvironmentSize(result.estimated_logical_bytes)}`;
+}
+
 export function EnvironmentGroups({
   envInfo,
   envError,
@@ -483,7 +508,10 @@ export function EnvironmentGroups({
   openManagedRuntimeUpgrade,
   mayStartRuntimeUpgrade,
   stacks,
+  managedEnvironmentSizes = {},
   defaultExpanded = false,
+  onProviderExpanded,
+  inventoryError,
 }: {
   envInfo: EnvironmentInfo | null;
   envError: string | null;
@@ -492,12 +520,16 @@ export function EnvironmentGroups({
   openManagedRuntimeUpgrade: () => void;
   mayStartRuntimeUpgrade: boolean;
   stacks: StackEnvironment[];
+  managedEnvironmentSizes?: Record<string, ManagedEnvironmentScanResult>;
   defaultExpanded?: boolean;
+  onProviderExpanded?: (providerId: ProviderId) => void;
+  inventoryError?: string | null;
 }) {
   const ultralyticsGroupStatus = getUltralyticsGroupStatus(envInfo, envError, redetecting);
   const ultralyticsGroupSummary = ultralyticsGroupStatus[0].toUpperCase() + ultralyticsGroupStatus.slice(1);
   const rfdetrGroupStatus = getRfdetrGroupStatus(stacks);
   const rfdetrGroupSummary = `${stacks.length} installed · ${rfdetrGroupStatus}`;
+  const ultralyticsSize = managedEnvironmentSizes["ultralytics-managed"];
 
   return (
     <>
@@ -506,6 +538,7 @@ export function EnvironmentGroups({
         summary={ultralyticsGroupSummary}
         status={ultralyticsGroupStatus}
         defaultExpanded={defaultExpanded}
+        onExpandedChange={(expanded) => { if (expanded) onProviderExpanded?.("ultralytics"); }}
       >
         <EnvCard
           title="Python"
@@ -552,16 +585,21 @@ export function EnvironmentGroups({
           version={envInfo?.ultralytics_version || (redetecting ? "..." : "Not found")}
           path={envInfo?.yolo_path || undefined}
         />
+        <p className="px-1 text-[11px] text-zinc-500">{ultralyticsSize?.exists === false ? "Managed runtime not installed" : managedEnvironmentSizeLabel(ultralyticsSize)}</p>
       </ProviderGroup>
+      {inventoryError && <p className="px-1 text-[11px] text-amber-700">Managed environment size scan failed: {inventoryError}</p>}
 
       <ProviderGroup
         title="Roboflow RF-DETR"
         summary={rfdetrGroupSummary}
         status={rfdetrGroupStatus}
         defaultExpanded={defaultExpanded}
+        onExpandedChange={(expanded) => {
+          if (expanded) onProviderExpanded?.("rfdetr");
+        }}
       >
         {stacks.length > 0 ? (
-          <StackEnvironmentCards stacks={stacks} />
+          <StackEnvironmentCards stacks={stacks} sizes={managedEnvironmentSizes} />
         ) : (
           <p className="rounded-xl border border-dashed border-zinc-300 bg-white/60 px-4 py-3 text-xs text-zinc-500">
             No RF-DETR environments installed
@@ -639,15 +677,17 @@ export function EnvCard({
 
 export function StackEnvironmentCards({
   stacks,
+  sizes = {},
   defaultExpanded = false,
 }: {
   stacks: StackEnvironment[];
+  sizes?: Record<string, ManagedEnvironmentScanResult>;
   defaultExpanded?: boolean;
 }) {
   return (
     <>
       {stacks.map((stack) => (
-        <StackEnvironmentRow key={stack.key} stack={stack} defaultExpanded={defaultExpanded} />
+        <StackEnvironmentRow key={stack.key} stack={stack} defaultExpanded={defaultExpanded} size={sizes[stack.key]} />
       ))}
     </>
   );
@@ -655,9 +695,11 @@ export function StackEnvironmentCards({
 
 export function StackEnvironmentRow({
   stack,
+  size,
   defaultExpanded = false,
 }: {
   stack: StackEnvironment;
+  size?: ManagedEnvironmentScanResult;
   defaultExpanded?: boolean;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -684,6 +726,7 @@ export function StackEnvironmentRow({
         </span>
         <ChevronDown className={`size-4 shrink-0 text-zinc-400 transition-transform ${expanded ? "rotate-180" : ""}`} aria-hidden="true" />
       </button>
+      <p className="px-2 pb-1 text-[11px] text-zinc-500">{managedEnvironmentSizeLabel(size)}</p>
       {expanded && (
         <div className="space-y-2 px-1 pb-1 pt-2">
           <EnvCard
@@ -747,6 +790,16 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const [pythonOverride, setPythonOverride] = useState("");
   const [redetecting, setRedetecting] = useState(false);
   const [stackEnvironments, setStackEnvironments] = useState<StackEnvironment[]>([]);
+  const managedEnvironmentInventory = useManagedEnvironmentInventory();
+  const [inventoryError, setInventoryError] = useState<string | null>(null);
+  const invalidateEnvironmentForRoute = useCallback((routeId: string | null) => {
+    if (selectedProviderId === "ultralytics") {
+      managedEnvironmentInventory.invalidate(["ultralytics-managed"]);
+      return;
+    }
+    const stack = stackEnvironments.find((item) => item.route_ids.includes(routeId ?? ""));
+    managedEnvironmentInventory.invalidate(stack ? [stack.key as ManagedEnvironmentKey] : ["rfdetr-all"]);
+  }, [managedEnvironmentInventory.invalidate, selectedProviderId, stackEnvironments]);
   const refreshStackEnvironmentCards = useCallback(
     () => refreshStackEnvironments(setStackEnvironments),
     [],
@@ -1149,9 +1202,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       setRuntimeInstallPhase("failed");
       setRuntimeInstallError(String(error));
     } finally {
+      managedEnvironmentInventory.invalidate(["ultralytics-managed"]);
       setDepCheckLoading(false);
     }
-  }, [envInfo?.python_path, refreshRouteDependencies, selectedRoute.id, streamDependencyInstall, ultralyticsRuntimeInstalling]);
+  }, [envInfo?.python_path, managedEnvironmentInventory.invalidate, refreshRouteDependencies, selectedRoute.id, streamDependencyInstall, ultralyticsRuntimeInstalling]);
 
   const failExportStart = useCallback((message: string) => {
     setInstallPhase("idle");
@@ -1348,6 +1402,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       const result = await streamDependencyInstall(exportRoute.routeId, missingPkgs, pythonPath, (line) => {
         setLogLines((prev) => [...prev, line]);
       });
+      invalidateEnvironmentForRoute(exportRoute.routeId);
 
       if (result !== "ok") {
         captureAnalyticsEvent("export_failed", {
@@ -1367,6 +1422,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         setInvokeError(outcome.message);
         return;
       }
+      invalidateEnvironmentForRoute(exportRoute.routeId);
       captureAnalyticsEvent("export_failed", {
         route_id: exportRoute.routeId,
         export_format: exportRoute.exportFormat,
@@ -1652,7 +1708,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     } finally {
       setRedetecting(false);
     }
-  }, [refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId]);
+  }, [invalidateEnvironmentForRoute, refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId]);
 
   const handleRebuildManagedRuntime = useCallback(async () => {
     setManagedRuntimeRebuilding(true);
@@ -1690,6 +1746,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         setManagedRuntimeRebuildError(getManagedRuntimeRebuildFailureMessage(result));
         return;
       }
+      managedEnvironmentInventory.invalidate(["ultralytics-managed"]);
       setManagedRuntimeUpgradeOpen(false);
       await handleRedetect();
     } catch (error) {
@@ -1698,7 +1755,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     } finally {
       setManagedRuntimeRebuilding(false);
     }
-  }, [handleRedetect]);
+  }, [handleRedetect, managedEnvironmentInventory.invalidate]);
 
   const openManagedRuntimeUpgrade = useCallback(() => {
     if (mayStartRuntimeUpgrade) setManagedRuntimeUpgradeOpen(true);
@@ -1812,6 +1869,15 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                 openManagedRuntimeUpgrade={openManagedRuntimeUpgrade}
                 mayStartRuntimeUpgrade={mayStartRuntimeUpgrade}
                 stacks={stackEnvironments}
+                managedEnvironmentSizes={managedEnvironmentInventory.sizes}
+                inventoryError={inventoryError}
+                onProviderExpanded={(providerId) => {
+                  setInventoryError(null);
+                  const scans = providerId === "rfdetr"
+                    ? stackEnvironments.map((stack) => managedEnvironmentInventory.scanProvider("rfdetr", stack.key as ManagedEnvironmentKey))
+                    : [managedEnvironmentInventory.scanProvider(providerId)];
+                  void Promise.all(scans).catch((error: unknown) => setInventoryError(String(error)));
+                }}
               />
             </div>
 

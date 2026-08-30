@@ -1,6 +1,7 @@
 mod commands;
 
 use crate::commands::export::ExportState;
+use crate::commands::managed_environments::ManagedEnvironments;
 use crate::commands::runtime_operations::RuntimeOperationCoordinator;
 use crate::commands::setup::{
     default_runtime_dir, sweep_rfdetr_staging, sweep_runtime_rebuild_artifacts, SettingsState,
@@ -12,6 +13,7 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .manage(ExportState::default())
+        .manage(ManagedEnvironments::default())
         .manage(SetupState::default())
         .manage(SettingsState::default())
         .manage(RuntimeOperationCoordinator::default())
@@ -48,6 +50,7 @@ pub fn run() {
             commands::deps::install_dependencies,
             commands::environment::detect_environment,
             commands::stack_environments::list_stack_environments,
+            commands::managed_environments::scan_managed_environments,
             commands::export::start_export,
             commands::export::cancel_export,
             commands::export::open_export_folder,
