@@ -511,6 +511,7 @@ export function EnvironmentGroups({
   managedEnvironmentSizes = {},
   defaultExpanded = false,
   onProviderExpanded,
+  inventoryError,
 }: {
   envInfo: EnvironmentInfo | null;
   envError: string | null;
@@ -522,6 +523,7 @@ export function EnvironmentGroups({
   managedEnvironmentSizes?: Record<string, ManagedEnvironmentScanResult>;
   defaultExpanded?: boolean;
   onProviderExpanded?: (providerId: ProviderId) => void;
+  inventoryError?: string | null;
 }) {
   const ultralyticsGroupStatus = getUltralyticsGroupStatus(envInfo, envError, redetecting);
   const ultralyticsGroupSummary = ultralyticsGroupStatus[0].toUpperCase() + ultralyticsGroupStatus.slice(1);
@@ -585,6 +587,7 @@ export function EnvironmentGroups({
         />
         <p className="px-1 text-[11px] text-zinc-500">{ultralyticsSize?.exists === false ? "Managed runtime not installed" : managedEnvironmentSizeLabel(ultralyticsSize)}</p>
       </ProviderGroup>
+      {inventoryError && <p className="px-1 text-[11px] text-amber-700">Managed environment size scan failed: {inventoryError}</p>}
 
       <ProviderGroup
         title="Roboflow RF-DETR"
@@ -788,6 +791,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const [redetecting, setRedetecting] = useState(false);
   const [stackEnvironments, setStackEnvironments] = useState<StackEnvironment[]>([]);
   const managedEnvironmentInventory = useManagedEnvironmentInventory();
+  const [inventoryError, setInventoryError] = useState<string | null>(null);
   const invalidateEnvironmentForRoute = useCallback((routeId: string | null) => {
     if (selectedProviderId === "ultralytics") {
       managedEnvironmentInventory.invalidate(["ultralytics-managed"]);
@@ -1866,11 +1870,13 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                 mayStartRuntimeUpgrade={mayStartRuntimeUpgrade}
                 stacks={stackEnvironments}
                 managedEnvironmentSizes={managedEnvironmentInventory.sizes}
+                inventoryError={inventoryError}
                 onProviderExpanded={(providerId) => {
+                  setInventoryError(null);
                   const scans = providerId === "rfdetr"
                     ? stackEnvironments.map((stack) => managedEnvironmentInventory.scanProvider("rfdetr", stack.key as ManagedEnvironmentKey))
                     : [managedEnvironmentInventory.scanProvider(providerId)];
-                  void Promise.all(scans).catch((error: unknown) => setEnvError(String(error)));
+                  void Promise.all(scans).catch((error: unknown) => setInventoryError(String(error)));
                 }}
               />
             </div>

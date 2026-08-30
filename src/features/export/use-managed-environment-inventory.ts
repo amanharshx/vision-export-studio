@@ -31,6 +31,9 @@ export function useManagedEnvironmentInventory(): ManagedEnvironmentInventoryCon
     setSizes((current) => {
       if (!keys) return {};
       const next = { ...current };
+      Object.entries(next).forEach(([key, result]) => {
+        if (result.status === "calculating") delete next[key];
+      });
       if (keys.includes("rfdetr-all")) {
         Object.keys(next).filter((key) => key.startsWith("rfdetr-")).forEach((key) => delete next[key]);
       } else {
