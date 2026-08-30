@@ -510,7 +510,7 @@ export function EnvironmentGroups({
   stacks,
   managedEnvironmentSizes = {},
   defaultExpanded = false,
-  scanProvider,
+  onProviderExpanded,
 }: {
   envInfo: EnvironmentInfo | null;
   envError: string | null;
@@ -521,7 +521,7 @@ export function EnvironmentGroups({
   stacks: StackEnvironment[];
   managedEnvironmentSizes?: Record<string, ManagedEnvironmentScanResult>;
   defaultExpanded?: boolean;
-  scanProvider?: (providerId: ProviderId, singleKey?: import("@/lib/types").ManagedEnvironmentKey) => Promise<ManagedEnvironmentScanResult[]>;
+  onProviderExpanded?: (providerId: ProviderId) => void;
 }) {
   const ultralyticsGroupStatus = getUltralyticsGroupStatus(envInfo, envError, redetecting);
   const ultralyticsGroupSummary = ultralyticsGroupStatus[0].toUpperCase() + ultralyticsGroupStatus.slice(1);
@@ -536,7 +536,7 @@ export function EnvironmentGroups({
         summary={ultralyticsGroupSummary}
         status={ultralyticsGroupStatus}
         defaultExpanded={defaultExpanded}
-        onExpandedChange={(expanded) => { if (expanded) void scanProvider?.("ultralytics"); }}
+        onExpandedChange={(expanded) => { if (expanded) onProviderExpanded?.("ultralytics"); }}
       >
         <EnvCard
           title="Python"
@@ -583,7 +583,7 @@ export function EnvironmentGroups({
           version={envInfo?.ultralytics_version || (redetecting ? "..." : "Not found")}
           path={envInfo?.yolo_path || undefined}
         />
-        <p className="px-1 text-[11px] text-zinc-500">{envInfo ? managedEnvironmentSizeLabel(ultralyticsSize) : "Managed runtime not installed"}</p>
+        <p className="px-1 text-[11px] text-zinc-500">{ultralyticsSize?.exists === false ? "Managed runtime not installed" : managedEnvironmentSizeLabel(ultralyticsSize)}</p>
       </ProviderGroup>
 
       <ProviderGroup
@@ -592,7 +592,7 @@ export function EnvironmentGroups({
         status={rfdetrGroupStatus}
         defaultExpanded={defaultExpanded}
         onExpandedChange={(expanded) => {
-          if (expanded) stacks.forEach((stack) => void scanProvider?.("rfdetr", stack.key as import("@/lib/types").ManagedEnvironmentKey));
+          if (expanded) onProviderExpanded?.("rfdetr");
         }}
       >
         {stacks.length > 0 ? (
@@ -1198,9 +1198,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       setRuntimeInstallPhase("failed");
       setRuntimeInstallError(String(error));
     } finally {
+      managedEnvironmentInventory.invalidate(["ultralytics-managed"]);
       setDepCheckLoading(false);
     }
-  }, [envInfo?.python_path, refreshRouteDependencies, selectedRoute.id, streamDependencyInstall, ultralyticsRuntimeInstalling]);
+  }, [envInfo?.python_path, managedEnvironmentInventory.invalidate, refreshRouteDependencies, selectedRoute.id, streamDependencyInstall, ultralyticsRuntimeInstalling]);
 
   const failExportStart = useCallback((message: string) => {
     setInstallPhase("idle");
@@ -1865,7 +1866,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                 mayStartRuntimeUpgrade={mayStartRuntimeUpgrade}
                 stacks={stackEnvironments}
                 managedEnvironmentSizes={managedEnvironmentInventory.sizes}
-                scanProvider={managedEnvironmentInventory.scanProvider}
+                onProviderExpanded={(providerId) => {
+                  const scans = providerId === "rfdetr"
+                    ? stackEnvironments.map((stack) => managedEnvironmentInventory.scanProvider("rfdetr", stack.key as ManagedEnvironmentKey))
+                    : [managedEnvironmentInventory.scanProvider(providerId)];
+                  void Promise.all(scans).catch((error: unknown) => setEnvError(String(error)));
+                }}
               />
             </div>
 
