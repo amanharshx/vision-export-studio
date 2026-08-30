@@ -2261,7 +2261,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
                 stacks={stackEnvironments}
                 managedEnvironmentSizes={managedEnvironmentSizes}
                 onProviderExpanded={(providerId) => {
-                  void scanProviderEnvironments(providerId).catch((error: unknown) => setCleanupError(String(error)));
+                  const scans = providerId === "rfdetr"
+                    ? stackEnvironments.map((stack) => scanProviderEnvironments("rfdetr", stack.key as ManagedEnvironmentKey))
+                    : [scanProviderEnvironments(providerId)];
+                  void Promise.all(scans).catch((error: unknown) => setCleanupError(String(error)));
                 }}
                 onCleanupUltralytics={() => { void prepareCleanup("ultralytics"); }}
                 onCleanupRfDetr={() => { void prepareCleanup("rfdetr"); }}
