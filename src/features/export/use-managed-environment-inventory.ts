@@ -21,6 +21,7 @@ export function useManagedEnvironmentInventory(): ManagedEnvironmentInventoryCon
 
   const invalidate = useCallback((keys?: ManagedEnvironmentKey[]) => {
     generation.current += 1;
+    inFlight.current.clear();
     if (!keys) completed.current.clear();
     else for (const [requestKey, entry] of completed.current) {
       if (keys.includes("rfdetr-all") || entry.results.some((result) => keys.includes(result.key as ManagedEnvironmentKey))) {
