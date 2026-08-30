@@ -591,7 +591,9 @@ export function EnvironmentGroups({
         summary={rfdetrGroupSummary}
         status={rfdetrGroupStatus}
         defaultExpanded={defaultExpanded}
-        onExpandedChange={(expanded) => { if (expanded) void scanProvider?.("rfdetr"); }}
+        onExpandedChange={(expanded) => {
+          if (expanded) stacks.forEach((stack) => void scanProvider?.("rfdetr", stack.key as import("@/lib/types").ManagedEnvironmentKey));
+        }}
       >
         {stacks.length > 0 ? (
           <StackEnvironmentCards stacks={stacks} sizes={managedEnvironmentSizes} />
