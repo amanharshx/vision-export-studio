@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::commands::deps::{probe_distribution_version, probe_python_version};
@@ -107,10 +108,11 @@ pub(crate) fn list_stack_environments_for_runtime(runtime_dir: &str) -> Vec<Stac
     known_stacks()
         .iter()
         .filter_map(|stack| {
-            let python_path =
-                venv_python_at(&stack_venv_dir_for_key(Path::new(runtime_dir), stack.key)?);
-            Path::new(&python_path)
-                .exists()
+            let venv_path = stack_venv_dir_for_key(Path::new(runtime_dir), stack.key)?;
+            let python_path = venv_python_at(&venv_path);
+            fs::symlink_metadata(&venv_path)
+                .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+                .unwrap_or(false)
                 .then(|| StackEnvironmentInfo {
                     key: stack.key.to_string(),
                     display_name: stack.display_name.to_string(),
@@ -230,6 +232,25 @@ mod tests {
             assert!(matches!(stack.rfdetr_version, PackageVersion::Unavailable));
         }
         fs::remove_dir_all(runtime_dir).unwrap();
+    }
+
+    #[test]
+    fn listing_includes_empty_stack_venv_with_unavailable_probes() {
+        let runtime_dir = temp_runtime_dir();
+        let venv = stack_venv_dir_for_key(Path::new(&runtime_dir), "rfdetr-default").unwrap();
+        fs::create_dir_all(&venv).unwrap();
+        let stacks = list_stack_environments_for_runtime(runtime_dir.to_str().unwrap());
+        assert_eq!(stacks.len(), 1);
+        assert_eq!(stacks[0].key, "rfdetr-default");
+        assert!(matches!(
+            stacks[0].python_version,
+            PythonVersion::Unavailable
+        ));
+        assert!(matches!(
+            stacks[0].rfdetr_version,
+            PackageVersion::Unavailable
+        ));
+        let _ = fs::remove_dir_all(runtime_dir);
     }
 
     #[test]

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -95,7 +95,7 @@ fn target_keys(root: &Path, key: &str) -> Result<Vec<String>, String> {
 
 fn resolve_target_path(root: &Path, key: &str) -> Result<Vec<PathBuf>, String> {
     let root = normalize_runtime_root(root)?;
-    target_keys(&root, key).map(|keys| {
+    let targets: Vec<PathBuf> = target_keys(&root, key).map(|keys| {
         keys.into_iter()
             .map(|key| {
                 if key == ULTRALYTICS_MANAGED_KEY {
@@ -105,7 +105,63 @@ fn resolve_target_path(root: &Path, key: &str) -> Result<Vec<PathBuf>, String> {
                 }
             })
             .collect()
-    })
+    })?;
+    for target in &targets {
+        validate_target_path(&root, target)?;
+    }
+    Ok(targets)
+}
+
+fn validate_target_path(root: &Path, target: &Path) -> Result<(), String> {
+    let root_metadata = match fs::symlink_metadata(root) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("cannot inspect managed runtime root: {error}")),
+    };
+    if root_metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Err("managed runtime root must not be a symlink".to_string());
+    }
+    let relative = target
+        .strip_prefix(root)
+        .map_err(|_| "managed environment target escaped managed runtime root".to_string())?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(name) = component else {
+            return Err(
+                "managed environment target contains an invalid path component".to_string(),
+            );
+        };
+        current.push(name);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!(
+                    "managed environment target contains symlink: {}",
+                    current.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect managed environment target: {error}"
+                ))
+            }
+        }
+    }
+    let target_exists = target
+        .try_exists()
+        .map_err(|error| format!("cannot inspect managed environment target: {error}"))?;
+    if target_exists
+        && !fs::symlink_metadata(target)
+            .map_err(|error| format!("cannot inspect managed environment target: {error}"))?
+            .is_dir()
+    {
+        return Err("managed environment target is not a directory".to_string());
+    }
+    Ok(())
 }
 fn scan_logical_size(path: &Path) -> Result<u64, String> {
     let metadata = match fs::symlink_metadata(path) {
@@ -383,5 +439,26 @@ mod tests {
         #[cfg(unix)]
         assert!(result[0].estimated_logical_bytes.is_none());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_rejects_symlinked_runtime_component_before_reading_outside_root() {
+        let root = temp_root("symlink-component");
+        let outside = temp_root("symlink-component-outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(outside.join("rfdetr-default/.venv")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("envs")).unwrap();
+
+        let result = scan_results(
+            &ManagedEnvironments::default(),
+            &root,
+            &["rfdetr-default".to_string()],
+        )
+        .unwrap();
+        assert_eq!(result[0].exists, None);
+        assert!(result[0].estimated_logical_bytes.is_none());
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
     }
 }

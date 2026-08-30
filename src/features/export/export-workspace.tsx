@@ -31,6 +31,7 @@ import type {
   RouteSpec,
   StackEnvironment,
   ManagedEnvironmentScanResult,
+  ManagedEnvironmentKey,
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -448,12 +449,14 @@ export function ProviderGroup({
   status,
   children,
   defaultExpanded = false,
+  onExpandedChange,
 }: {
   title: string;
   summary: string;
   status: ProviderGroupStatus;
   children?: React.ReactNode;
   defaultExpanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const Icon = providerGroupIcon(status);
@@ -462,7 +465,7 @@ export function ProviderGroup({
       <button
         type="button"
         aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
+        onClick={() => setExpanded((value) => { const next = !value; onExpandedChange?.(next); return next; })}
         className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-white/70"
       >
         <Icon className={`size-4 shrink-0 ${providerGroupIconColor(status)}`} aria-hidden="true" />
@@ -507,6 +510,7 @@ export function EnvironmentGroups({
   stacks,
   managedEnvironmentSizes = {},
   defaultExpanded = false,
+  scanProvider,
 }: {
   envInfo: EnvironmentInfo | null;
   envError: string | null;
@@ -517,6 +521,7 @@ export function EnvironmentGroups({
   stacks: StackEnvironment[];
   managedEnvironmentSizes?: Record<string, ManagedEnvironmentScanResult>;
   defaultExpanded?: boolean;
+  scanProvider?: (providerId: ProviderId, singleKey?: import("@/lib/types").ManagedEnvironmentKey) => Promise<ManagedEnvironmentScanResult[]>;
 }) {
   const ultralyticsGroupStatus = getUltralyticsGroupStatus(envInfo, envError, redetecting);
   const ultralyticsGroupSummary = ultralyticsGroupStatus[0].toUpperCase() + ultralyticsGroupStatus.slice(1);
@@ -531,6 +536,7 @@ export function EnvironmentGroups({
         summary={ultralyticsGroupSummary}
         status={ultralyticsGroupStatus}
         defaultExpanded={defaultExpanded}
+        onExpandedChange={(expanded) => { if (expanded) void scanProvider?.("ultralytics"); }}
       >
         <EnvCard
           title="Python"
@@ -585,6 +591,7 @@ export function EnvironmentGroups({
         summary={rfdetrGroupSummary}
         status={rfdetrGroupStatus}
         defaultExpanded={defaultExpanded}
+        onExpandedChange={(expanded) => { if (expanded) void scanProvider?.("rfdetr"); }}
       >
         {stacks.length > 0 ? (
           <StackEnvironmentCards stacks={stacks} sizes={managedEnvironmentSizes} />
@@ -779,6 +786,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const [redetecting, setRedetecting] = useState(false);
   const [stackEnvironments, setStackEnvironments] = useState<StackEnvironment[]>([]);
   const managedEnvironmentInventory = useManagedEnvironmentInventory();
+  const invalidateEnvironmentForRoute = useCallback((routeId: string | null) => {
+    if (selectedProviderId === "ultralytics") {
+      managedEnvironmentInventory.invalidate(["ultralytics-managed"]);
+      return;
+    }
+    const stack = stackEnvironments.find((item) => item.route_ids.includes(routeId ?? ""));
+    managedEnvironmentInventory.invalidate(stack ? [stack.key as ManagedEnvironmentKey] : ["rfdetr-all"]);
+  }, [managedEnvironmentInventory.invalidate, selectedProviderId, stackEnvironments]);
   const refreshStackEnvironmentCards = useCallback(
     () => refreshStackEnvironments(setStackEnvironments),
     [],
@@ -911,11 +926,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     void getManagedRuntimeRebuildEligibility().then(setManagedRuntimeUpgrade).catch(() => setManagedRuntimeUpgrade(null));
     void refreshStackEnvironmentCards();
   }, [refreshStackEnvironmentCards]);
-
-  useEffect(() => {
-    if (!infoOpen) return;
-    void managedEnvironmentInventory.scanProvider(selectedProviderId).catch(() => {});
-  }, [infoOpen, managedEnvironmentInventory.scanProvider, selectedProviderId]);
 
   useEffect(() => {
     const requestId = hostSupportRequestRef.current + 1;
@@ -1385,6 +1395,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       const result = await streamDependencyInstall(exportRoute.routeId, missingPkgs, pythonPath, (line) => {
         setLogLines((prev) => [...prev, line]);
       });
+      invalidateEnvironmentForRoute(exportRoute.routeId);
 
       if (result !== "ok") {
         captureAnalyticsEvent("export_failed", {
@@ -1404,6 +1415,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         setInvokeError(outcome.message);
         return;
       }
+      invalidateEnvironmentForRoute(exportRoute.routeId);
       captureAnalyticsEvent("export_failed", {
         route_id: exportRoute.routeId,
         export_format: exportRoute.exportFormat,
@@ -1689,7 +1701,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     } finally {
       setRedetecting(false);
     }
-  }, [refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId]);
+  }, [invalidateEnvironmentForRoute, refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId]);
 
   const handleRebuildManagedRuntime = useCallback(async () => {
     setManagedRuntimeRebuilding(true);
@@ -1727,6 +1739,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         setManagedRuntimeRebuildError(getManagedRuntimeRebuildFailureMessage(result));
         return;
       }
+      managedEnvironmentInventory.invalidate(["ultralytics-managed"]);
       setManagedRuntimeUpgradeOpen(false);
       await handleRedetect();
     } catch (error) {
@@ -1735,7 +1748,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     } finally {
       setManagedRuntimeRebuilding(false);
     }
-  }, [handleRedetect]);
+  }, [handleRedetect, managedEnvironmentInventory.invalidate]);
 
   const openManagedRuntimeUpgrade = useCallback(() => {
     if (mayStartRuntimeUpgrade) setManagedRuntimeUpgradeOpen(true);
@@ -1850,6 +1863,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                 mayStartRuntimeUpgrade={mayStartRuntimeUpgrade}
                 stacks={stackEnvironments}
                 managedEnvironmentSizes={managedEnvironmentInventory.sizes}
+                scanProvider={managedEnvironmentInventory.scanProvider}
               />
             </div>
 
