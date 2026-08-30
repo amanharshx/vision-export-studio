@@ -18,4 +18,3 @@ describe("SetupScreen", () => {
     expect(html).toContain("Environment removed, but saving setup state failed: disk full");
   });
 });
-

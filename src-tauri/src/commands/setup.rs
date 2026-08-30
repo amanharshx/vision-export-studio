@@ -522,8 +522,8 @@ fn spawn_and_stream(
             }
             Some(mut child) => match child.wait() {
                 Ok(status) => {
+                    managed_environments.invalidate(&runtime_root, [ULTRALYTICS_MANAGED_KEY]);
                     if status.success() {
-                        managed_environments.invalidate(&runtime_root, [ULTRALYTICS_MANAGED_KEY]);
                         emit_after_operation_released(operation_guard.take().unwrap(), || {
                             let _ = ah_wait.emit(
                                 "setup:finished",
@@ -647,9 +647,9 @@ fn spawn_and_stream_rebuild(
             });
 
         let result = complete_managed_runtime_rebuild(&runtime_dir, result);
+        managed_environments.invalidate(&runtime_dir, [ULTRALYTICS_MANAGED_KEY]);
         match result {
             Ok(()) => {
-                managed_environments.invalidate(&runtime_dir, [ULTRALYTICS_MANAGED_KEY]);
                 emit_after_operation_released(operation_guard, || {
                     let _ = app_handle.emit(
                         "setup:finished",

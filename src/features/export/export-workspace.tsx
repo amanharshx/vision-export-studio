@@ -5,7 +5,8 @@ import { checkDependencies, installDependencies } from "@/lib/tauri/deps";
 import { cancelExport, openExportFolder, startExport } from "@/lib/tauri/export";
 import { defaultRouteForProvider, findRoute, hasAllowedSourceExtension, providers, providerList, routesForProvider } from "@/lib/providers";
 import { inspectRfDetrCheckpoint } from "@/lib/tauri/rfdetr";
-import { cleanupManagedEnvironments, scanManagedEnvironments } from "@/lib/tauri/managed-environments";
+import { cleanupManagedEnvironments } from "@/lib/tauri/managed-environments";
+import { useManagedEnvironmentInventory } from "./use-managed-environment-inventory";
 import { architectureMatters, type AppOS, type AppPlatform, getOS, incompatibleReason, isCompatible, UNKNOWN_ARCH } from "@/lib/platform";
 import { getAppTelemetryContext, getRoutePlatformSupport, type HostSupportResult } from "@/lib/tauri/app";
 import { createListenerGroup, type ListenerGroup } from "@/lib/tauri/listener-group";
@@ -1068,21 +1069,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     [],
   );
 
-  const [managedEnvironmentSizes, setManagedEnvironmentSizes] = useState<Record<string, ManagedEnvironmentScanResult>>({});
-  const managedScanPromisesRef = useRef(new Map<string, Promise<ManagedEnvironmentScanResult[]>>());
+  const managedEnvironmentInventory = useManagedEnvironmentInventory();
+  const managedEnvironmentSizes = managedEnvironmentInventory.sizes;
+  const scanProviderEnvironments = managedEnvironmentInventory.scanProvider;
+  const invalidateManagedEnvironmentSizesForMutation = managedEnvironmentInventory.invalidate;
   const [cleanupBusy, setCleanupBusy] = useState(false);
-  const managedScanGenerationRef = useRef(0);
-  const invalidateManagedEnvironmentSizesForMutation = useCallback((keys?: ManagedEnvironmentKey[]) => {
-    managedScanPromisesRef.current.clear();
-    setManagedEnvironmentSizes((current) => {
-      const mutated = applyManagedEnvironmentSizeMutation(
-        { generation: managedScanGenerationRef.current, sizes: current },
-        keys,
-      );
-      managedScanGenerationRef.current = mutated.generation;
-      return mutated.sizes;
-    });
-  }, []);
   const [cleanupError, setCleanupError] = useState<string | null>(null);
   const [cleanupConfirmation, setCleanupConfirmation] = useState<{
     keys: ManagedEnvironmentKey[];
@@ -1097,53 +1088,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     willReturnToSetup: boolean;
     isBulkCleanup: boolean;
   } | null>(null);
-
-  const scanProviderEnvironments = useCallback(async (providerId: ProviderId, singleKey?: ManagedEnvironmentKey): Promise<ManagedEnvironmentScanResult[]> => {
-    const keys = managedEnvironmentKeysForProvider(providerId, singleKey);
-    const cacheKeys = providerId === "rfdetr" && !singleKey
-      ? stackEnvironments.map((stack) => stack.key as ManagedEnvironmentKey)
-      : keys;
-    if (keys.length === 0 || (providerId === "rfdetr" && !singleKey && cacheKeys.length === 0)) return [];
-    const requestKey = `${providerId}:${keys.join(",")}`;
-    const existingPromise = managedScanPromisesRef.current.get(requestKey);
-    if (existingPromise) return existingPromise;
-    const cached = cacheKeys.map((key) => managedEnvironmentSizes[key]).filter((result): result is ManagedEnvironmentScanResult => Boolean(result));
-    if (cacheKeys.length > 0 && cacheKeys.every((key) => managedEnvironmentSizes[key]?.status === "available")) return cached;
-
-    setManagedEnvironmentSizes((current) => {
-      const next = { ...current };
-      for (const key of cacheKeys) {
-        if (next[key]?.status !== "available") {
-          next[key] = { key, status: "calculating", estimated_logical_bytes: null, size_error: null, exists: null };
-        }
-      }
-      return next;
-    });
-    const scanGeneration = managedScanGenerationRef.current;
-    const pending = scanManagedEnvironments(keys)
-      .then((results) => {
-        if (shouldApplyManagedEnvironmentScan(scanGeneration, managedScanGenerationRef.current)) {
-          setManagedEnvironmentSizes((current) => mergeManagedEnvironmentScanResults(current, results));
-        }
-        return results;
-      })
-      .catch((error: unknown) => {
-        // A command-level scan failure leaves the affected rows stuck on
-        // "Calculating…". Clear those transient rows before propagating so the
-        // caller's error surfaces without stranding the cards.
-        if (shouldApplyManagedEnvironmentScan(scanGeneration, managedScanGenerationRef.current)) {
-          setManagedEnvironmentSizes((current) => clearCalculatingManagedEnvironmentScan(current, cacheKeys));
-        }
-        throw error;
-      })
-      .finally(() => {
-        if (managedScanPromisesRef.current.get(requestKey) === pending) {
-          managedScanPromisesRef.current.delete(requestKey);
-        }
-      });
-    managedScanPromisesRef.current.set(requestKey, pending);
-    return pending;
-  }, [managedEnvironmentSizes, stackEnvironments]);
 
   // Output directory
   const [outputDirOverride, setOutputDirOverride] = useState("");
@@ -2208,17 +2152,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         // the managed runtime card whenever the .venv was actually removed, even
         // if saving setup state failed (surfaced via cleanupMessage above).
         if (managedEnvironmentDeletionSucceeded(report, "ultralytics-managed")) {
-          managedScanPromisesRef.current.delete("ultralytics:ultralytics-managed");
-          setManagedEnvironmentSizes((current) => ({
-            ...current,
-            "ultralytics-managed": {
-              key: "ultralytics-managed",
-              status: "available",
-              estimated_logical_bytes: 0,
-              size_error: null,
-              exists: false,
-            },
-          }));
           setEnvInfo(null);
           const setupAction = applyManagedEnvironmentCleanupSetup(report, onSetupCompleteChange);
           if (setupAction?.redetect) {
