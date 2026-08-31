@@ -13,10 +13,10 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .manage(ExportState::default())
-        .manage(ManagedEnvironments::default())
         .manage(SetupState::default())
         .manage(SettingsState::default())
         .manage(RuntimeOperationCoordinator::default())
+        .manage(ManagedEnvironments::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
@@ -51,6 +51,7 @@ pub fn run() {
             commands::environment::detect_environment,
             commands::stack_environments::list_stack_environments,
             commands::managed_environments::scan_managed_environments,
+            commands::managed_environments::cleanup_managed_environments,
             commands::export::start_export,
             commands::export::cancel_export,
             commands::export::open_export_folder,

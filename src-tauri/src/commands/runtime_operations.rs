@@ -6,6 +6,7 @@ pub enum RuntimeOperation {
     Install,
     Setup,
     Rebuild,
+    Cleanup,
 }
 
 impl RuntimeOperation {
@@ -15,6 +16,7 @@ impl RuntimeOperation {
             Self::Install => "dependency install",
             Self::Setup => "setup",
             Self::Rebuild => "managed runtime rebuild",
+            Self::Cleanup => "managed environment cleanup",
         }
     }
 }
@@ -133,5 +135,25 @@ mod tests {
         emit_after_operation_released(guard, || {
             assert!(coordinator.acquire(RuntimeOperation::Export).is_ok());
         });
+    }
+}
+
+#[test]
+fn cleanup_blocks_and_is_blocked_by_every_runtime_operation() {
+    let coordinator = RuntimeOperationCoordinator::default();
+    for operation in [
+        RuntimeOperation::Export,
+        RuntimeOperation::Install,
+        RuntimeOperation::Setup,
+        RuntimeOperation::Rebuild,
+        RuntimeOperation::Cleanup,
+    ] {
+        let active = coordinator.acquire(operation).unwrap();
+        assert!(coordinator.acquire(RuntimeOperation::Cleanup).is_err());
+        drop(active);
+
+        let cleanup = coordinator.acquire(RuntimeOperation::Cleanup).unwrap();
+        assert!(coordinator.acquire(operation).is_err());
+        drop(cleanup);
     }
 }
