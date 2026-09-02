@@ -84,7 +84,10 @@ describe("provider route registry", () => {
   test("RF-DETR TFLite declares experimental multi-artifact quantization", () => {
     const route = routesForProvider("rfdetr").find((item) => item.id === "rfdetr.pth.tflite");
 
-    expect(route?.pipDeps.map((dep) => dep.packageName)).toEqual(["rfdetr[tflite]"]);
+    expect(route?.pipDeps[0]).toEqual({
+      packageName: "rfdetr[tflite]>=1.9.4",
+      installHint: 'pip install "rfdetr[tflite]>=1.9.4"',
+    });
     expect(route?.platformLock).toBe("any");
     expect(route?.intermediates).toEqual(["onnx"]);
     expect(route?.precisionModes).toEqual(["fp32", "int8"]);
