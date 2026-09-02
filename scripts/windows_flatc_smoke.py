@@ -12,6 +12,8 @@ from pathlib import Path
 
 
 def candidate(path) -> str | None:
+    if path is None:
+        return None
     path = Path(path)
     if path.is_file() and path.parent.name.lower() != "scripts":
         return str(path)
