@@ -570,7 +570,7 @@ fn importable_name(package_name: &str) -> String {
 
 /// Run `python -c <code>` and return trimmed stdout.
 /// Returns Err when the process cannot be spawned or exits with a non-zero status.
-fn probe(python: &str, code: &str) -> Result<String, String> {
+pub(crate) fn probe(python: &str, code: &str) -> Result<String, String> {
     let output = Command::new(python)
         .arg("-c")
         .arg(code)
@@ -644,6 +644,64 @@ struct RfDetrProbeOutput {
     flatc_ready: bool,
 }
 
+/// Python source shared by dependency preflight and the RF-DETR export
+/// command. It stores the first concrete, runnable flatc path in
+/// `_flatc_path`, or `None` when no compiler is available.
+pub(crate) fn flatc_resolver_code() -> &'static str {
+    r#"
+import importlib.metadata as _metadata
+import shutil as _shutil
+from pathlib import Path as _Path
+
+def _flatc_is_wrapper(_path):
+    # ExecuTorch's Windows setuptools entry point lives in Scripts and is a
+    # launcher, not the compiler in data/bin.
+    return _path.parent.name.lower() == "scripts"
+
+def _flatc_candidate(_path):
+    _path = _Path(_path)
+    return str(_path) if _path.is_file() and not _flatc_is_wrapper(_path) else None
+
+_flatc_path = None
+try:
+    from importlib import resources as _resources
+    _flatc_package = _resources.files("executorch.data.bin")
+    for _name in ("flatc", "flatc.exe"):
+        _flatc_path = _flatc_candidate(_flatc_package.joinpath(_name))
+        if _flatc_path:
+            break
+except Exception:
+    pass
+if not _flatc_path:
+    try:
+        _dist = _metadata.distribution("executorch")
+        for _file in _dist.files or ():
+            _name = str(_file).replace("\\\\", "/")
+            if _name.lower().endswith(("/data/bin/flatc", "/data/bin/flatc.exe")):
+                _flatc_path = _flatc_candidate(_dist.locate_file(_file))
+                if _flatc_path:
+                    break
+    except _metadata.PackageNotFoundError:
+        pass
+if not _flatc_path:
+    try:
+        _dist = _metadata.distribution("flatc")
+        for _file in _dist.files or ():
+            _name = str(_file).replace("\\\\", "/")
+            if _name.lower().endswith(("/bin/flatc", "/bin/flatc.exe")):
+                _flatc_path = _flatc_candidate(_dist.locate_file(_file))
+                if _flatc_path:
+                    break
+    except _metadata.PackageNotFoundError:
+        pass
+if not _flatc_path:
+    for _name in ("flatc", "flatc.exe"):
+        _flatc_path = _flatc_candidate(_shutil.which(_name)) if _shutil.which(_name) else None
+        if _flatc_path:
+            break
+"#
+}
+
 #[derive(serde::Deserialize)]
 struct RfDetrModuleRow {
     name: String,
@@ -669,25 +727,10 @@ fn rfdetr_probe_code(route_id: &str) -> String {
         serde_json::to_string(&distributions).expect("static distribution names serialize");
 
     let flatc_code = if route_id == "rfdetr.pth.executorch" {
-        r#"_python_bin = str(_Path(_sys.executable).parent)
-_selected_path = _python_bin + _os.pathsep + _os.environ.get("PATH", "")
-_flatc_ready = bool(
-    _shutil.which("flatc")
-    or _shutil.which("flatc.exe")
-    or _shutil.which("flatc", path=_selected_path)
-    or _shutil.which("flatc.exe", path=_selected_path)
-)
-try:
-    _dist = _metadata.distribution("executorch")
-    for _file in _dist.files or ():
-        _name = str(_file).replace("\\\\", "/")
-        if _name.lower().endswith(("/data/bin/flatc", "/data/bin/flatc.exe")):
-            if _Path(_dist.locate_file(_file)).is_file():
-                _flatc_ready = True
-                break
-except _metadata.PackageNotFoundError:
-    pass"#
-            .to_string()
+        format!(
+            "exec({:?}, globals()); _flatc_ready = bool(_flatc_path)",
+            flatc_resolver_code()
+        )
     } else {
         "_flatc_ready = False".to_string()
     };
@@ -1725,10 +1768,13 @@ mod tests {
     #[test]
     fn executorch_probe_uses_distribution_floors_without_imports() {
         let probe = rfdetr_probe_code("rfdetr.pth.executorch");
-        assert!(probe.contains("which(\"flatc\")"));
-        assert!(probe.contains("which(\"flatc.exe\")"));
-        assert!(probe.contains("distribution(\"executorch\")"));
+        assert!(probe.contains("_shutil.which(_name)"));
+        assert!(probe.contains("_resources.files"));
+        assert!(probe.contains("distribution"));
+        assert!(flatc_resolver_code().contains("distribution(\"executorch\")"));
+        assert!(flatc_resolver_code().contains("distribution(\"flatc\")"));
         assert!(probe.contains("data/bin/flatc"));
+        assert!(!probe.contains("_selected_path"));
         assert!(probe.contains("PathFinder.find_spec"));
         let definition = rfdetr_probe("rfdetr.pth.executorch");
         assert_eq!(
@@ -1778,14 +1824,30 @@ mod tests {
             "Name: executorch\nVersion: 1.4.1\n",
         )
         .unwrap();
-        let bundled = lib.join("executorch/data/bin/flatc");
+        let bundled_name = if cfg!(windows) { "flatc.exe" } else { "flatc" };
+        let bundled = lib.join(format!("executorch/data/bin/{}", bundled_name));
         std::fs::write(&bundled, "").unwrap();
         std::fs::write(
             lib.join("executorch-1.4.1.dist-info/RECORD"),
-            "executorch/data/bin/flatc,,\n",
+            &format!("executorch/data/bin/{},,\n", bundled_name),
         )
         .unwrap();
-        let path_name = if kind == "exe" { "flatc.exe" } else { "flatc" };
+        let path_name = if cfg!(windows) { "flatc.exe" } else { "flatc" };
+        if kind == "wheel" {
+            std::fs::create_dir_all(lib.join("flatc-25.12.19rc0.dist-info")).unwrap();
+            std::fs::write(
+                lib.join("flatc-25.12.19rc0.dist-info/METADATA"),
+                "Name: flatc\nVersion: 25.12.19rc0\n",
+            )
+            .unwrap();
+            std::fs::write(
+                lib.join("flatc-25.12.19rc0.dist-info/RECORD"),
+                format!("flatc/bin/{},,\n", path_name),
+            )
+            .unwrap();
+            std::fs::create_dir_all(lib.join("flatc/bin")).unwrap();
+            std::fs::write(lib.join(format!("flatc/bin/{}", path_name)), "").unwrap();
+        }
         if kind == "path" || kind == "exe" {
             std::fs::write(bin.join(path_name), "").unwrap();
             #[cfg(unix)]
@@ -1832,6 +1894,11 @@ mod tests {
     #[test]
     fn exe_named_flatc_fixture_passes() {
         assert!(probe_flatc_fixture("exe"));
+    }
+
+    #[test]
+    fn flatc_wheel_bin_fixture_passes_without_path_compiler() {
+        assert!(probe_flatc_fixture("wheel"));
     }
 
     #[test]
