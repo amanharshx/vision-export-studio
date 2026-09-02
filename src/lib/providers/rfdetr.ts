@@ -70,7 +70,7 @@ export const rfdetrRoutes: RouteSpec[] = [
     targetFormat: "tflite",
     title: "TFLite",
     displayPath: "checkpoint.pth -> multiple .tflite files",
-    pipDeps: [{ packageName: "rfdetr[tflite]", installHint: 'pip install "rfdetr[tflite]"' }],
+    pipDeps: [{ packageName: "rfdetr[tflite]>=1.9.4", installHint: 'pip install "rfdetr[tflite]>=1.9.4"' }],
     intermediates: ["onnx"],
     precisionModes: ["fp32", "int8"],
     defaultPrecision: "fp32",

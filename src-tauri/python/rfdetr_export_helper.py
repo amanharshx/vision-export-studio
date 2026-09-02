@@ -263,12 +263,6 @@ def preload_tensorflow_before_rfdetr():
             raise
 
 
-def prepend_active_venv_scripts_to_path():
-    scripts_dir = os.path.dirname(sys.executable)
-    current_path = os.environ.get("PATH", "")
-    os.environ["PATH"] = scripts_dir if not current_path else scripts_dir + os.pathsep + current_path
-
-
 def export_checkpoint(args):
     os.makedirs(args.output_dir, exist_ok=True)
     try:
@@ -305,8 +299,6 @@ def export_checkpoint(args):
             kwargs["backend"] = "xnnpack"
         if args.route_id == "rfdetr.pth.onnx" and args.opset is not None:
             kwargs["opset_version"] = args.opset
-        if args.route_id == "rfdetr.pth.tflite":
-            prepend_active_venv_scripts_to_path()
         model.export(**kwargs)
 
         return 0

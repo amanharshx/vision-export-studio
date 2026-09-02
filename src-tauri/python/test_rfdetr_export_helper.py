@@ -63,15 +63,19 @@ class RfDetrExportHelperTests(unittest.TestCase):
         with patch("builtins.__import__", side_effect=ModuleNotFoundError(name="tensorflow")):
             helper.preload_tensorflow_before_rfdetr()
 
-    def test_export_prepends_active_venv_scripts_to_path(self):
-        with patch.object(helper.sys, "executable", "/tmp/rfdetr-tflite/.venv/bin/python"):
-            with patch.dict(helper.os.environ, {"PATH": "/usr/bin"}, clear=True):
-                helper.prepend_active_venv_scripts_to_path()
-
-                self.assertEqual(
-                    helper.os.environ["PATH"],
-                    "/tmp/rfdetr-tflite/.venv/bin:/usr/bin",
-                )
+    def test_tflite_export_leaves_parent_path_unchanged(self):
+        args = SimpleNamespace(
+            checkpoint="/tmp/model.pth", output_dir="/tmp/out", route_id="rfdetr.pth.tflite",
+            imgsz=640, batch=1, opset=None, precision="fp32",
+            variant_mode="auto", manual_class_symbol=None,
+        )
+        with patch.dict(helper.os.environ, {"PATH": "/usr/bin"}, clear=True):
+            with patch.object(helper, "preload_tensorflow_before_rfdetr"):
+                with patch.object(helper, "resolve_model", return_value=SimpleNamespace(export=Mock())):
+                    with patch.object(helper.os, "makedirs"):
+                        result = helper.export_checkpoint(args)
+            self.assertEqual(result, 0)
+            self.assertEqual(helper.os.environ["PATH"], "/usr/bin")
 
     def test_resolve_model_class_symbol_prefers_checkpoint_model_name(self):
         checkpoint = {"model_name": "RFDETRSmall"}

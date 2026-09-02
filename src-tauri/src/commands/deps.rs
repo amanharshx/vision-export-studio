@@ -190,6 +190,10 @@ const RFDETR_MODULES_ENGINE: &[&str] = &["rfdetr", "tensorrt"];
 const RFDETR_MODULES_COREML: &[&str] = &["rfdetr", "coremltools"];
 const RFDETR_MODULES_TFLITE: &[&str] = &["rfdetr", "tensorflow", "onnx2tf"];
 const RFDETR_MODULES_EXECUTORCH: &[&str] = &["rfdetr", "executorch.exir", "torch"];
+const RFDETR_TFLITE_DISTRIBUTIONS: &[DistributionRequirement] = &[DistributionRequirement {
+    name: "rfdetr",
+    required: "1.9.4",
+}];
 const RFDETR_EXECUTORCH_DISTRIBUTIONS: &[DistributionRequirement] = &[
     DistributionRequirement {
         name: "rfdetr",
@@ -225,11 +229,11 @@ fn rfdetr_probe(route_id: &str) -> RfDetrProbeDefinition {
             distributions: &[],
         },
         "rfdetr.pth.tflite" => RfDetrProbeDefinition {
-            item: "rfdetr[tflite]",
-            install_hint: "pip install \"rfdetr[tflite]\"",
-            install_package: "rfdetr[tflite]",
+            item: "rfdetr[tflite]>=1.9.4",
+            install_hint: "pip install \"rfdetr[tflite]>=1.9.4\"",
+            install_package: "rfdetr[tflite]>=1.9.4",
             modules: RFDETR_MODULES_TFLITE,
-            distributions: &[],
+            distributions: RFDETR_TFLITE_DISTRIBUTIONS,
         },
         "rfdetr.pth.executorch" => RfDetrProbeDefinition {
             item: "rfdetr[executorch]>=1.9.0",
@@ -492,8 +496,8 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
         }),
         "rfdetr.pth.tflite" => Some(RouteDeps {
             pip: &[PipDep {
-                package_name: "rfdetr[tflite]",
-                install_hint: "pip install \"rfdetr[tflite]\"",
+                package_name: "rfdetr[tflite]>=1.9.4",
+                install_hint: "pip install \"rfdetr[tflite]>=1.9.4\"",
                 optional: false,
             }],
             sys: &[],
@@ -768,6 +772,21 @@ fn parse_rfdetr_probe_output(route_id: &str, raw: &str) -> Vec<DepCheckResult> {
             ));
         }
     }
+    if route_id == "rfdetr.pth.tflite" {
+        if let Some(row) = output.modules.iter().find(|row| !row.present) {
+            return fail(format!("module '{}' is not available", row.name));
+        }
+        let installed = output
+            .distributions
+            .iter()
+            .find(|row| row.name == "rfdetr")
+            .and_then(|row| row.version.as_deref());
+        return vec![versioned_rfdetr_result(
+            &definition.distributions[0],
+            installed,
+            Some(&definition),
+        )];
+    }
     if route_id == "rfdetr.pth.executorch" {
         let module_present = |name: &str| {
             output
@@ -785,12 +804,12 @@ fn parse_rfdetr_probe_output(route_id: &str, raw: &str) -> Vec<DepCheckResult> {
                 .and_then(|row| row.version.as_deref())
         };
         let rfdetr = if module_present("rfdetr") && module_present("executorch.exir") {
-            versioned_rfdetr_result(&definition.distributions[0], installed("rfdetr"))
+            versioned_rfdetr_result(&definition.distributions[0], installed("rfdetr"), None)
         } else {
             missing_rfdetr_module_result("rfdetr or executorch.exir")
         };
         let torch = if module_present("torch") {
-            versioned_rfdetr_result(&definition.distributions[1], installed("torch"))
+            versioned_rfdetr_result(&definition.distributions[1], installed("torch"), None)
         } else {
             missing_torch_result("module 'torch' is not available".to_string())
         };
@@ -827,22 +846,26 @@ fn missing_rfdetr_module_result(module: &str) -> DepCheckResult {
 fn versioned_rfdetr_result(
     requirement: &DistributionRequirement,
     installed: Option<&str>,
+    definition: Option<&RfDetrProbeDefinition>,
 ) -> DepCheckResult {
-    let (item, install_hint) = if requirement.name == "rfdetr" {
-        (
+    let (item, install_hint) = match definition {
+        Some(definition) => (definition.item, definition.install_hint),
+        None if requirement.name == "rfdetr" => (
             "rfdetr[executorch]>=1.9.0",
             "pip install \"rfdetr[executorch]>=1.9.0\"",
-        )
-    } else {
-        ("torch>=2.13", "pip install \"torch>=2.13\"")
+        ),
+        None => ("torch>=2.13", "pip install \"torch>=2.13\""),
     };
+    let install_package = definition
+        .map(|definition| definition.install_package)
+        .unwrap_or(item);
     let Some(installed) = installed else {
         return DepCheckResult {
             item: item.to_string(),
             status: "version_too_old".to_string(),
             reason: format!("{} version could not be determined.", requirement.name),
             install_hint: install_hint.to_string(),
-            install_package: Some(item.to_string()),
+            install_package: Some(install_package.to_string()),
         };
     };
     if version_below(installed, requirement.required) {
@@ -854,7 +877,7 @@ fn versioned_rfdetr_result(
                 requirement.name, installed, requirement.required
             ),
             install_hint: install_hint.to_string(),
-            install_package: Some(item.to_string()),
+            install_package: Some(install_package.to_string()),
         }
     } else {
         DepCheckResult {
@@ -1010,11 +1033,11 @@ fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
             install_package: Some("rfdetr[coreml]".to_string()),
         }]),
         "rfdetr.pth.tflite" => Some(vec![DepCheckResult {
-            item: "rfdetr[tflite]".to_string(),
+            item: "rfdetr[tflite]>=1.9.4".to_string(),
             status: "missing_package".to_string(),
             reason: "RF-DETR TFLite stack environment has not been created.".to_string(),
-            install_hint: "pip install \"rfdetr[tflite]\"".to_string(),
-            install_package: Some("rfdetr[tflite]".to_string()),
+            install_hint: "pip install \"rfdetr[tflite]>=1.9.4\"".to_string(),
+            install_package: Some("rfdetr[tflite]>=1.9.4".to_string()),
         }]),
         "rfdetr.pth.executorch" => Some(vec![
             DepCheckResult {
@@ -1497,8 +1520,11 @@ mod tests {
     #[test]
     fn rfdetr_tflite_route_uses_isolated_extra() {
         let deps = route_deps("rfdetr.pth.tflite").expect("route deps");
-        assert_eq!(deps.pip[0].package_name, "rfdetr[tflite]");
-        assert_eq!(deps.pip[0].install_hint, "pip install \"rfdetr[tflite]\"");
+        assert_eq!(deps.pip[0].package_name, "rfdetr[tflite]>=1.9.4");
+        assert_eq!(
+            deps.pip[0].install_hint,
+            "pip install \"rfdetr[tflite]>=1.9.4\""
+        );
     }
 
     #[test]
@@ -1706,14 +1732,77 @@ mod tests {
             .expect("TFLite packageName in TypeScript metadata");
         let rust_deps = route_deps("rfdetr.pth.tflite").expect("Rust TFLite route deps");
 
-        assert_eq!(ts_package_name, "rfdetr[tflite]");
+        assert_eq!(ts_package_name, "rfdetr[tflite]>=1.9.4");
         assert_eq!(ts_package_name, rust_deps.pip[0].package_name);
+    }
+
+    #[test]
+    fn rfdetr_tflite_probe_uses_distribution_floor_without_framework_imports() {
+        let probe = rfdetr_probe_code("rfdetr.pth.tflite");
+        let definition = rfdetr_probe("rfdetr.pth.tflite");
+        assert_eq!(
+            definition
+                .distributions
+                .iter()
+                .map(|distribution| (distribution.name, distribution.required))
+                .collect::<Vec<_>>(),
+            vec![("rfdetr", "1.9.4")]
+        );
+        assert!(!probe.contains("import rfdetr"));
+        assert!(!probe.contains("import tensorflow"));
+        assert!(!probe.contains("import onnx2tf"));
+    }
+
+    #[test]
+    fn rfdetr_tflite_version_states_use_tflite_install_remedy() {
+        let modules = r#"[{"name":"rfdetr","present":true},{"name":"tensorflow","present":true},{"name":"onnx2tf","present":true}]"#;
+        let rows = |version: &str| {
+            parse_rfdetr_probe_output(
+                "rfdetr.pth.tflite",
+                &format!(
+                    r#"{{"modules":{modules},"distributions":[{{"name":"rfdetr","version":"{version}"}}]}}"#
+                ),
+            )
+        };
+        let old = rows("1.9.3");
+        assert_eq!(old[0].status, "version_too_old");
+        assert_eq!(old[0].item, "rfdetr[tflite]>=1.9.4");
+        assert_eq!(old[0].install_hint, "pip install \"rfdetr[tflite]>=1.9.4\"");
+        assert_eq!(
+            old[0].install_package.as_deref(),
+            Some("rfdetr[tflite]>=1.9.4")
+        );
+
+        let ready = rows("1.9.4");
+        assert_eq!(ready[0].status, "ready");
+        assert_eq!(ready[0].item, "rfdetr[tflite]>=1.9.4");
+
+        let newer = rows("1.9.5");
+        assert_eq!(newer[0].status, "ready");
+    }
+
+    #[test]
+    fn rfdetr_tflite_missing_module_preserves_versioned_install_remedy() {
+        let result = parse_rfdetr_probe_output(
+            "rfdetr.pth.tflite",
+            r#"{"modules":[{"name":"rfdetr","present":true},{"name":"tensorflow","present":false},{"name":"onnx2tf","present":true}],"distributions":[{"name":"rfdetr","version":"1.9.4"}]}"#,
+        );
+        assert_eq!(result[0].status, "missing_package");
+        assert_eq!(
+            result[0].install_package.as_deref(),
+            Some("rfdetr[tflite]>=1.9.4")
+        );
+        assert_eq!(
+            result[0].install_hint,
+            "pip install \"rfdetr[tflite]>=1.9.4\""
+        );
     }
 
     #[test]
     fn rfdetr_extra_install_package_survives_validation() {
         assert!(validate_package_name("rfdetr").is_ok());
         assert!(validate_package_name("rfdetr[onnx]").is_ok());
+        assert!(validate_package_name("rfdetr[tflite]>=1.9.4").is_ok());
     }
 
     #[test]
