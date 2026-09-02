@@ -13,6 +13,7 @@ import { createListenerGroup, type ListenerGroup } from "@/lib/tauri/listener-gr
 import type {
   DepCheckResult,
   EnvironmentInfo,
+  InstallableDependency,
   ExportCancelledPayload,
   ExportFailedPayload,
   ExportFinishedPayload,
@@ -67,6 +68,43 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { UpdaterController } from "@/features/updater/use-updater-controller";
+
+type BufferedInstallEvent =
+  | { kind: "stdout"; payload: InstallLinePayload }
+  | { kind: "stderr"; payload: InstallLinePayload }
+  | { kind: "finished"; payload: InstallFinishedPayload }
+  | { kind: "failed"; payload: InstallFailedPayload };
+
+export function createInstallEventBuffer(
+  onLine: (line: string) => void,
+  onTerminal: (result: "ok" | string) => void,
+) {
+  let sessionId = "";
+  let terminalHandled = false;
+  const pending: BufferedInstallEvent[] = [];
+
+  const handle = (event: BufferedInstallEvent) => {
+    if (terminalHandled || event.payload.session_id !== sessionId) return;
+    if (event.kind === "stdout") onLine("[stdout] " + event.payload.line);
+    if (event.kind === "stderr") onLine("[stderr] " + event.payload.line);
+    if (event.kind === "finished" || event.kind === "failed") {
+      terminalHandled = true;
+      onTerminal(event.kind === "finished" ? "ok" : event.payload.error);
+    }
+  };
+
+  return {
+    receive(event: BufferedInstallEvent) {
+      if (sessionId) handle(event);
+      else pending.push(event);
+    },
+    assignSessionId(id: string) {
+      sessionId = id;
+      for (const event of pending) handle(event);
+      pending.length = 0;
+    },
+  };
+}
 import { DropZone } from "./drop-zone";
 import { ExportModal } from "./export-modal";
 import { RouteGrid } from "./route-grid";
@@ -458,23 +496,21 @@ export function getRouteOptionsForOpen(
   };
 }
 
-export function getInstallableMissingPackages(results: DepCheckResult[] | null): string[] {
-  if (!results) {
+export function getInstallableMissingPackages(results: DepCheckResult[] | null): InstallableDependency[] {
+  if (!results) return [];
+
+  const packages = results.flatMap((result): InstallableDependency[] => {
+    if (result.install_package) {
+      return [{ package: result.install_package, prerelease: result.prerelease === true }];
+    }
+    if (result.status === "missing_binary" && result.install_hint.startsWith("pip install ")) {
+      return [{ package: result.install_hint.replace("pip install ", "").trim(), prerelease: false }];
+    }
     return [];
-  }
-
-  const pipMissing = results
-    .map((result) => result.install_package)
-    .filter((packageName): packageName is string => Boolean(packageName));
-  const binaryViaPip = results
-    .filter(
-      (r) =>
-        r.status === "missing_binary" &&
-        r.install_hint.startsWith("pip install "),
-    )
-    .map((r) => r.install_hint.replace("pip install ", "").trim());
-
-  return [...new Set([...pipMissing, ...binaryViaPip])];
+  });
+  return packages.filter((dependency, index) =>
+    packages.findIndex((candidate) => candidate.package === dependency.package) === index,
+  );
 }
 
 export function mayActivateRoute(exportStatus: ExportStatus, installPhase: InstallPhase): boolean {
@@ -1405,40 +1441,36 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
 
   const streamDependencyInstall = useCallback(async (
     routeId: string | null,
-    packages: string[],
+    packages: InstallableDependency[],
     pythonPath: string,
     appendLine: (line: string) => void,
   ): Promise<"ok" | string> => {
     const listeners = createListenerGroup();
     activeInstallListenerGroupRef.current?.dispose();
     activeInstallListenerGroupRef.current = listeners;
-    let installSessionId = "";
     let resolveInstall!: (result: "ok" | string) => void;
     const installPromise = new Promise<"ok" | string>((resolve) => {
       resolveInstall = resolve;
     });
+    const eventBuffer = createInstallEventBuffer(appendLine, resolveInstall);
 
     try {
       await Promise.all([
         listeners.add(listen<InstallLinePayload>("install:stdout", (ev) => {
-          if (!installSessionId || ev.payload.session_id !== installSessionId) return;
-          appendLine("[stdout] " + ev.payload.line);
+          eventBuffer.receive({ kind: "stdout", payload: ev.payload });
         })),
         listeners.add(listen<InstallLinePayload>("install:stderr", (ev) => {
-          if (!installSessionId || ev.payload.session_id !== installSessionId) return;
-          appendLine("[stderr] " + ev.payload.line);
+          eventBuffer.receive({ kind: "stderr", payload: ev.payload });
         })),
         listeners.add(listen<InstallFinishedPayload>("install:finished", (ev) => {
-          if (!installSessionId || ev.payload.session_id !== installSessionId) return;
-          resolveInstall("ok");
+          eventBuffer.receive({ kind: "finished", payload: ev.payload });
         })),
         listeners.add(listen<InstallFailedPayload>("install:failed", (ev) => {
-          if (!installSessionId || ev.payload.session_id !== installSessionId) return;
-          resolveInstall(ev.payload.error);
+          eventBuffer.receive({ kind: "failed", payload: ev.payload });
         })),
       ]);
 
-      installSessionId = await installDependencies(routeId, packages, pythonPath);
+      eventBuffer.assignSessionId(await installDependencies(routeId, packages, pythonPath));
       return await installPromise;
     } finally {
       listeners.dispose();
@@ -1461,7 +1493,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     setDepCheckError(null);
 
     try {
-      const result = await streamDependencyInstall(null, ["ultralytics"], pythonPath, (line) => {
+      const result = await streamDependencyInstall(null, [{ package: "ultralytics", prerelease: false }], pythonPath, (line) => {
         setRuntimeInstallLines((prev) => [...prev, line]);
       });
       invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
@@ -1731,7 +1763,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     setInstallPhase("done");
     setDepCheckLoading(true);
     setDepCheckError(null);
-    let refreshedMissingPkgs: string[] = [];
+    let refreshedMissingPkgs: InstallableDependency[] = [];
     let freshEnv: EnvironmentInfo | undefined;
     try {
       const refreshed = await checkDependencies(selectedRoute.id, pythonPath);

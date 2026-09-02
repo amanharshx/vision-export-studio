@@ -4,6 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Dialog } from "@/components/ui/dialog";
 import {
+  createInstallEventBuffer,
   getInstallStartFailureOutcome,
   getInstallableMissingPackages,
   getIncompatibleExportMessage,
@@ -16,6 +17,20 @@ import {
 } from "./export-workspace";
 import type { DepCheckResult, ExportStatus, InstallPhase, StackEnvironment } from "@/lib/types";
 import { findRoute } from "@/lib/providers";
+
+describe("createInstallEventBuffer", () => {
+  test("replays a matching terminal event received before session assignment once", () => {
+    const results: Array<"ok" | string> = [];
+    const buffer = createInstallEventBuffer(() => {}, (result) => results.push(result));
+
+    buffer.receive({ kind: "finished", payload: { session_id: "other" } });
+    buffer.receive({ kind: "failed", payload: { session_id: "session-1", error: "pip failed" } });
+    buffer.assignSessionId("session-1");
+    buffer.receive({ kind: "finished", payload: { session_id: "session-1" } });
+
+    expect(results).toEqual(["pip failed"]);
+  });
+});
 
 describe("getInstallableMissingPackages", () => {
   test("returns explicit install_package values", () => {
@@ -37,8 +52,8 @@ describe("getInstallableMissingPackages", () => {
     ];
 
     expect(getInstallableMissingPackages(results)).toEqual([
-      "ultralytics>=8.4.80",
-      "onnx",
+      { package: "ultralytics>=8.4.80", prerelease: false },
+      { package: "onnx", prerelease: false },
     ]);
   });
 
@@ -60,8 +75,8 @@ describe("getInstallableMissingPackages", () => {
     ];
 
     const packages = getInstallableMissingPackages(results);
-    expect(packages).not.toContain("Python 3.10+");
-    expect(packages).toEqual(["onnx"]);
+    expect(packages).not.toContainEqual({ package: "Python 3.10+", prerelease: false });
+    expect(packages).toEqual([{ package: "onnx", prerelease: false }]);
   });
 
   test("keeps pip-installable missing binaries", () => {
@@ -74,7 +89,21 @@ describe("getInstallableMissingPackages", () => {
       },
     ];
 
-    expect(getInstallableMissingPackages(results)).toEqual(["imx500-converter"]);
+    expect(getInstallableMissingPackages(results)).toEqual([{ package: "imx500-converter", prerelease: false }]);
+  });
+
+  test("carries typed prerelease metadata without parsing install hints", () => {
+    const result: DepCheckResult = {
+      item: "flatc",
+      status: "missing_package",
+      reason: "missing",
+      install_hint: "python -m pip install --pre flatc",
+      install_package: "flatc",
+      prerelease: true,
+    };
+    expect(getInstallableMissingPackages([result])).toEqual([
+      { package: "flatc", prerelease: true },
+    ]);
   });
 
   test("unknown ultralytics probe is never offered for install", () => {
@@ -95,7 +124,7 @@ describe("getInstallableMissingPackages", () => {
       reason: "Torch 2.12.1 is installed; 2.13 or newer is required.",
       install_hint: 'pip install "torch>=2.13"',
       install_package: "torch>=2.13",
-    }])).toEqual(["torch>=2.13"]);
+    }])).toEqual([{ package: "torch>=2.13", prerelease: false }]);
   });
 
   test("does not client-block unresolved or unknown architecture", () => {

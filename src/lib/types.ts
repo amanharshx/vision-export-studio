@@ -223,6 +223,12 @@ export interface DepCheckResult {
   reason: string;
   install_hint: string;
   install_package?: string;
+  prerelease?: boolean;
+}
+
+export interface InstallableDependency {
+  package: string;
+  prerelease: boolean;
 }
 
 export interface DepCheckResponse {

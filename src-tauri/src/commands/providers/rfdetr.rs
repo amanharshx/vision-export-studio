@@ -4,6 +4,7 @@ use std::process::Command;
 use tauri::Manager;
 
 use crate::commands::artifacts::{ArtifactDescriptor, ArtifactKind};
+use crate::commands::deps::{flatc_resolver_code, probe};
 use crate::commands::provider_registry::validate_rfdetr_manual_class;
 
 use super::ExportRequest;
@@ -261,6 +262,19 @@ pub fn build_command(
         .map_err(|e| format!("failed to resolve RF-DETR helper resource: {}", e))?;
     let mut cmd = Command::new(&request.python_path);
     append_helper_args(&mut cmd, request, &helper)?;
+    if request.route_id == "rfdetr.pth.executorch" {
+        let resolver = format!(
+            "exec({:?}, globals()); print(_flatc_path or \"\")",
+            flatc_resolver_code()
+        );
+        let flatc_path = probe(&request.python_path, &resolver)
+            .map_err(|error| format!("failed to resolve ExecuTorch flatc compiler: {}", error))?;
+        let flatc_path = flatc_path.trim();
+        if flatc_path.is_empty() {
+            return Err("No runnable ExecuTorch flatc compiler was found.".to_string());
+        }
+        cmd.env("FLATC_EXECUTABLE", flatc_path);
+    }
     Ok(cmd)
 }
 

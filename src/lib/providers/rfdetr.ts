@@ -89,6 +89,7 @@ export const rfdetrRoutes: RouteSpec[] = [
     pipDeps: [
       { packageName: "rfdetr[executorch]>=1.9.0", installHint: 'pip install "rfdetr[executorch]>=1.9.0"' },
       { packageName: "torch>=2.13", installHint: 'pip install "torch>=2.13"' },
+      { packageName: "flatc", installHint: "python -m pip install --pre flatc" },
     ],
     platformLock: "macos_arm64_linux_windows_x86_64",
     oneWay: true,

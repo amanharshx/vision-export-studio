@@ -54,7 +54,7 @@ describe("PendingInstallConsent", () => {
     const html = renderToStaticMarkup(
       React.createElement(PendingInstallConsent, {
         depResults: [outdatedUltralytics],
-        missingPackageNames: ["ultralytics>=8.4.80"],
+        missingPackageNames: [{ package: "ultralytics>=8.4.80", prerelease: false }],
       }),
     );
 
@@ -70,7 +70,7 @@ describe("PendingInstallConsent", () => {
     const html = renderToStaticMarkup(
       React.createElement(PendingInstallConsent, {
         depResults: [missingOnnx],
-        missingPackageNames: ["onnx"],
+        missingPackageNames: [{ package: "onnx", prerelease: false }],
       }),
     );
 
@@ -85,7 +85,7 @@ describe("PendingInstallConsent", () => {
     const html = renderToStaticMarkup(
       React.createElement(PendingInstallConsent, {
         depResults: [pythonFloor],
-        missingPackageNames: ["onnx"],
+        missingPackageNames: [{ package: "onnx", prerelease: false }],
       }),
     );
 

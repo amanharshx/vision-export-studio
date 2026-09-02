@@ -1,6 +1,6 @@
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::str::FromStr;
 
 use pep440_rs::Version;
@@ -83,6 +83,7 @@ fn ultralytics_version_too_old_result(installed: &str, required: &str) -> DepChe
         ),
         install_hint: format!("pip install \"ultralytics>={}\"", required),
         install_package: Some(format!("ultralytics>={}", required)),
+        prerelease: None,
     }
 }
 
@@ -96,6 +97,7 @@ fn python_version_too_old_result(installed: &str) -> DepCheckResult {
         ),
         install_hint: "Install/select Python 3.10 or newer, then re-detect the environment and recreate the export runtime.".to_string(),
         install_package: None,
+        prerelease: None,
     }
 }
 
@@ -115,6 +117,7 @@ fn route_python_version_result(route_id: &str, installed: &str) -> Option<DepChe
                 "Select Python 3.12, then recreate the RF-DETR TFLite export environment."
                     .to_string(),
             install_package: None,
+            prerelease: None,
         });
     }
     minimum_python_version(route_id).map(|_| python_version_too_old_result(installed))
@@ -132,6 +135,8 @@ pub struct DepCheckResult {
     pub install_hint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub install_package: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prerelease: Option<bool>,
 }
 
 #[derive(serde::Serialize)]
@@ -146,6 +151,7 @@ fn platform_unsupported_result(reason: String) -> DepCheckResult {
         reason: reason.clone(),
         install_hint: reason,
         install_package: None,
+        prerelease: None,
     }
 }
 
@@ -514,6 +520,11 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
                     install_hint: "pip install \"torch>=2.13\"",
                     optional: false,
                 },
+                PipDep {
+                    package_name: "flatc",
+                    install_hint: "python -m pip install --pre flatc",
+                    optional: false,
+                },
             ],
             sys: &[],
         }),
@@ -559,7 +570,7 @@ fn importable_name(package_name: &str) -> String {
 
 /// Run `python -c <code>` and return trimmed stdout.
 /// Returns Err when the process cannot be spawned or exits with a non-zero status.
-fn probe(python: &str, code: &str) -> Result<String, String> {
+pub(crate) fn probe(python: &str, code: &str) -> Result<String, String> {
     let output = Command::new(python)
         .arg("-c")
         .arg(code)
@@ -629,6 +640,66 @@ fn probe_installed_version(python: &str, importable: &str) -> Result<String, Str
 struct RfDetrProbeOutput {
     modules: Vec<RfDetrModuleRow>,
     distributions: Vec<RfDetrDistributionRow>,
+    #[serde(default)]
+    flatc_ready: bool,
+}
+
+/// Python source shared by dependency preflight and the RF-DETR export
+/// command. It stores the first concrete, runnable flatc path in
+/// `_flatc_path`, or `None` when no compiler is available.
+pub(crate) fn flatc_resolver_code() -> &'static str {
+    r#"
+import importlib.metadata as _metadata
+import shutil as _shutil
+from pathlib import Path as _Path
+
+def _flatc_is_wrapper(_path):
+    # ExecuTorch's Windows setuptools entry point lives in Scripts and is a
+    # launcher, not the compiler in data/bin.
+    return _path.parent.name.lower() == "scripts"
+
+def _flatc_candidate(_path):
+    _path = _Path(_path)
+    return str(_path) if _path.is_file() and not _flatc_is_wrapper(_path) else None
+
+_flatc_path = None
+try:
+    from importlib import resources as _resources
+    _flatc_package = _resources.files("executorch.data.bin")
+    for _name in ("flatc", "flatc.exe"):
+        _flatc_path = _flatc_candidate(_flatc_package.joinpath(_name))
+        if _flatc_path:
+            break
+except Exception:
+    pass
+if not _flatc_path:
+    try:
+        _dist = _metadata.distribution("executorch")
+        for _file in _dist.files or ():
+            _name = str(_file).replace("\\\\", "/")
+            if _name.lower().endswith(("/data/bin/flatc", "/data/bin/flatc.exe")):
+                _flatc_path = _flatc_candidate(_dist.locate_file(_file))
+                if _flatc_path:
+                    break
+    except _metadata.PackageNotFoundError:
+        pass
+if not _flatc_path:
+    try:
+        _dist = _metadata.distribution("flatc")
+        for _file in _dist.files or ():
+            _name = str(_file).replace("\\\\", "/")
+            if _name.lower().endswith(("/bin/flatc", "/bin/flatc.exe")):
+                _flatc_path = _flatc_candidate(_dist.locate_file(_file))
+                if _flatc_path:
+                    break
+    except _metadata.PackageNotFoundError:
+        pass
+if not _flatc_path:
+    for _name in ("flatc", "flatc.exe"):
+        _flatc_path = _flatc_candidate(_shutil.which(_name)) if _shutil.which(_name) else None
+        if _flatc_path:
+            break
+"#
 }
 
 #[derive(serde::Deserialize)]
@@ -655,11 +726,24 @@ fn rfdetr_probe_code(route_id: &str) -> String {
     let distributions =
         serde_json::to_string(&distributions).expect("static distribution names serialize");
 
+    let flatc_code = if route_id == "rfdetr.pth.executorch" {
+        format!(
+            "exec({:?}, globals()); _flatc_ready = bool(_flatc_path)",
+            flatc_resolver_code()
+        )
+    } else {
+        "_flatc_ready = False".to_string()
+    };
+
     format!(
         r#"import importlib.machinery as _machinery
 import importlib.metadata as _metadata
 import importlib.util as _util
 import json as _json
+import os as _os
+import shutil as _shutil
+import sys as _sys
+from pathlib import Path as _Path
 _modules = {modules}
 _distributions = {distributions}
 _module_rows = []
@@ -683,9 +767,11 @@ for _name in _distributions:
     except _metadata.PackageNotFoundError:
         _version = None
     _distribution_rows.append({{"name": _name, "version": _version}})
-print(_json.dumps({{"modules": _module_rows, "distributions": _distribution_rows}}))"#,
+{flatc_code}
+print(_json.dumps({{"modules": _module_rows, "distributions": _distribution_rows, "flatc_ready": _flatc_ready}}))"#,
         modules = modules,
         distributions = distributions,
+        flatc_code = flatc_code,
     )
 }
 
@@ -696,6 +782,7 @@ fn probe_failure_result(definition: RfDetrProbeDefinition, reason: String) -> De
         reason,
         install_hint: definition.install_hint.to_string(),
         install_package: Some(definition.install_package.to_string()),
+        prerelease: None,
     }
 }
 
@@ -708,9 +795,33 @@ fn probe_failure_results(
         return vec![
             probe_failure_result(definition, reason.clone()),
             missing_torch_result(reason),
+            missing_flatc_result(),
         ];
     }
     vec![probe_failure_result(definition, reason)]
+}
+
+fn ready_flatc_result() -> DepCheckResult {
+    DepCheckResult {
+        item: "flatc".to_string(),
+        status: "ready".to_string(),
+        reason: String::new(),
+        install_hint: "python -m pip install --pre flatc".to_string(),
+        install_package: None,
+        prerelease: None,
+    }
+}
+
+fn missing_flatc_result() -> DepCheckResult {
+    DepCheckResult {
+        item: "flatc".to_string(),
+        status: "missing_package".to_string(),
+        reason: "No bundled ExecuTorch flatc compiler or flatc executable was found on PATH."
+            .to_string(),
+        install_hint: "python -m pip install --pre flatc".to_string(),
+        install_package: Some("flatc".to_string()),
+        prerelease: Some(true),
+    }
 }
 
 fn missing_torch_result(reason: String) -> DepCheckResult {
@@ -720,6 +831,7 @@ fn missing_torch_result(reason: String) -> DepCheckResult {
         reason,
         install_hint: "pip install \"torch>=2.13\"".to_string(),
         install_package: Some("torch>=2.13".to_string()),
+        prerelease: None,
     }
 }
 
@@ -813,7 +925,12 @@ fn parse_rfdetr_probe_output(route_id: &str, raw: &str) -> Vec<DepCheckResult> {
         } else {
             missing_torch_result("module 'torch' is not available".to_string())
         };
-        return vec![rfdetr, torch];
+        let flatc = if output.flatc_ready {
+            ready_flatc_result()
+        } else {
+            missing_flatc_result()
+        };
+        return vec![rfdetr, torch, flatc];
     }
     if let Some(row) = output.modules.iter().find(|row| !row.present) {
         return fail(format!("module '{}' is not available", row.name));
@@ -825,6 +942,7 @@ fn parse_rfdetr_probe_output(route_id: &str, raw: &str) -> Vec<DepCheckResult> {
             reason: String::new(),
             install_hint: definition.install_hint.to_string(),
             install_package: None,
+            prerelease: None,
         }];
     }
     fail(format!(
@@ -840,6 +958,7 @@ fn missing_rfdetr_module_result(module: &str) -> DepCheckResult {
         reason: format!("module '{}' is not available", module),
         install_hint: "pip install \"rfdetr[executorch]>=1.9.0\"".to_string(),
         install_package: Some("rfdetr[executorch]>=1.9.0".to_string()),
+        prerelease: None,
     }
 }
 
@@ -866,6 +985,7 @@ fn versioned_rfdetr_result(
             reason: format!("{} version could not be determined.", requirement.name),
             install_hint: install_hint.to_string(),
             install_package: Some(install_package.to_string()),
+            prerelease: None,
         };
     };
     if version_below(installed, requirement.required) {
@@ -878,6 +998,7 @@ fn versioned_rfdetr_result(
             ),
             install_hint: install_hint.to_string(),
             install_package: Some(install_package.to_string()),
+            prerelease: None,
         }
     } else {
         DepCheckResult {
@@ -886,6 +1007,7 @@ fn versioned_rfdetr_result(
             reason: String::new(),
             install_hint: install_hint.to_string(),
             install_package: None,
+            prerelease: None,
         }
     }
 }
@@ -1017,6 +1139,7 @@ fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
             reason: "RF-DETR stack environment has not been created.".to_string(),
             install_hint: "pip install \"rfdetr[onnx]\"".to_string(),
             install_package: Some("rfdetr[onnx]".to_string()),
+            prerelease: None,
         }]),
         "rfdetr.pth.engine" => Some(vec![DepCheckResult {
             item: "rfdetr[tensorrt]".to_string(),
@@ -1024,6 +1147,7 @@ fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
             reason: "RF-DETR stack environment has not been created.".to_string(),
             install_hint: "pip install \"rfdetr[tensorrt]\"".to_string(),
             install_package: Some("rfdetr[tensorrt]".to_string()),
+            prerelease: None,
         }]),
         "rfdetr.pth.coreml" => Some(vec![DepCheckResult {
             item: "rfdetr[coreml]".to_string(),
@@ -1031,6 +1155,7 @@ fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
             reason: "RF-DETR stack environment has not been created.".to_string(),
             install_hint: "pip install \"rfdetr[coreml]\"".to_string(),
             install_package: Some("rfdetr[coreml]".to_string()),
+            prerelease: None,
         }]),
         "rfdetr.pth.tflite" => Some(vec![DepCheckResult {
             item: "rfdetr[tflite]>=1.9.4".to_string(),
@@ -1038,6 +1163,7 @@ fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
             reason: "RF-DETR TFLite stack environment has not been created.".to_string(),
             install_hint: "pip install \"rfdetr[tflite]>=1.9.4\"".to_string(),
             install_package: Some("rfdetr[tflite]>=1.9.4".to_string()),
+            prerelease: None,
         }]),
         "rfdetr.pth.executorch" => Some(vec![
             DepCheckResult {
@@ -1046,6 +1172,7 @@ fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
                 reason: "RF-DETR stack environment has not been created.".to_string(),
                 install_hint: "pip install \"rfdetr[executorch]>=1.9.0\"".to_string(),
                 install_package: Some("rfdetr[executorch]>=1.9.0".to_string()),
+                prerelease: None,
             },
             DepCheckResult {
                 item: "torch>=2.13".to_string(),
@@ -1053,7 +1180,9 @@ fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
                 reason: "RF-DETR stack environment has not been created.".to_string(),
                 install_hint: "pip install \"torch>=2.13\"".to_string(),
                 install_package: Some("torch>=2.13".to_string()),
+                prerelease: None,
             },
+            missing_flatc_result(),
         ]),
         _ => None,
     }
@@ -1095,6 +1224,7 @@ fn check_ultralytics_dep(python: &str, required: &str) -> DepCheckResult {
             reason: presence.reason,
             install_hint,
             install_package,
+            prerelease: None,
         },
         _ => presence,
     }
@@ -1118,6 +1248,7 @@ fn check_pip_dep(
             reason: format!("probe failed: {}", e),
             install_hint: install_hint.to_string(),
             install_package: None,
+            prerelease: None,
         },
         Ok(out) => {
             if out == "True" {
@@ -1127,6 +1258,7 @@ fn check_pip_dep(
                     reason: String::new(),
                     install_hint: install_hint.to_string(),
                     install_package: None,
+                    prerelease: None,
                 }
             } else if optional {
                 DepCheckResult {
@@ -1135,6 +1267,7 @@ fn check_pip_dep(
                     reason: "optional: improves model portability".to_string(),
                     install_hint: install_hint.to_string(),
                     install_package: None,
+                    prerelease: None,
                 }
             } else {
                 DepCheckResult {
@@ -1143,6 +1276,7 @@ fn check_pip_dep(
                     reason: format!("importlib.util.find_spec('{}') returned False", imp),
                     install_hint: install_hint.to_string(),
                     install_package: Some(package_name.to_string()),
+                    prerelease: None,
                 }
             }
         }
@@ -1152,6 +1286,12 @@ fn check_pip_dep(
 // ---------------------------------------------------------------------------
 // install_dependencies — payload types
 // ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+pub struct InstallableDependency {
+    package: String,
+    prerelease: bool,
+}
 
 #[derive(serde::Serialize, Clone)]
 struct InstallLinePayload {
@@ -1179,6 +1319,9 @@ struct InstallFailedPayload {
 fn validate_package_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("package name must not be empty".to_string());
+    }
+    if name.starts_with('-') {
+        return Err(format!("invalid package name: {}", name));
     }
     if !name.chars().all(|c| {
         c.is_alphanumeric()
@@ -1210,7 +1353,7 @@ pub async fn install_dependencies(
     runtime_operations: tauri::State<'_, RuntimeOperationCoordinator>,
     managed_environments: tauri::State<'_, ManagedEnvironments>,
     route_id: Option<String>,
-    packages: Vec<String>,
+    packages: Vec<InstallableDependency>,
     python_path: String,
 ) -> Result<String, String> {
     // Enforce platform compatibility before any package-manager command runs.
@@ -1236,8 +1379,8 @@ pub async fn install_dependencies(
     if packages.is_empty() {
         return Err("packages must not be empty".to_string());
     }
-    for pkg in &packages {
-        validate_package_name(pkg)?;
+    for dependency in &packages {
+        validate_package_name(&dependency.package)?;
     }
     let runtime_root = load_settings(app_handle.clone())?.runtime_dir;
     let invalidation_key = route_id
@@ -1272,121 +1415,166 @@ pub async fn install_dependencies(
         python_path.clone()
     };
 
-    // Build argv: python -m pip install pkg1 pkg2 ...
-    let mut cmd = build_pip_install_command(&install_python, &packages);
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("failed to spawn pip: {}", e))?;
-
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "no stdout handle".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "no stderr handle".to_string())?;
-
+    let (stable_packages, prerelease_packages) = partition_install_packages(&packages);
     let session_id = Uuid::new_v4().to_string();
-
-    // stdout reader thread
-    let ah_stdout = app_handle.clone();
-    let sid_stdout = session_id.clone();
-    let stdout_handle = std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            match line {
-                Ok(l) => {
-                    let _ = ah_stdout.emit(
-                        "install:stdout",
-                        InstallLinePayload {
-                            session_id: sid_stdout.clone(),
-                            line: l,
-                        },
-                    );
-                }
-                Err(_) => break,
-            }
-        }
-    });
-
-    // stderr reader thread
-    let ah_stderr = app_handle.clone();
-    let sid_stderr = session_id.clone();
-    let stderr_handle = std::thread::spawn(move || {
-        let reader = BufReader::new(stderr);
-        for line in reader.lines() {
-            match line {
-                Ok(l) => {
-                    let _ = ah_stderr.emit(
-                        "install:stderr",
-                        InstallLinePayload {
-                            session_id: sid_stderr.clone(),
-                            line: l,
-                        },
-                    );
-                }
-                Err(_) => break,
-            }
-        }
-    });
-
-    // waiter thread — joins readers then waits on child
+    let first_is_prerelease = stable_packages.is_empty();
+    let first_packages = if first_is_prerelease {
+        &prerelease_packages
+    } else {
+        &stable_packages
+    };
+    let first_child = spawn_pip_install_stage(&install_python, first_packages, first_is_prerelease)
+        .map_err(|(_, error)| error)?;
     let ah_wait = app_handle.clone();
     let sid_wait = session_id.clone();
     std::thread::spawn(move || {
-        let operation_guard = operation_guard;
-        let _ = stdout_handle.join();
-        let _ = stderr_handle.join();
+        let first_result =
+            run_pip_install_stage(&ah_wait, &sid_wait, first_child, first_is_prerelease);
+        let result = first_result.and_then(|_| {
+            let second_packages = if first_is_prerelease {
+                &stable_packages
+            } else {
+                &prerelease_packages
+            };
+            let second_is_prerelease = !first_is_prerelease;
+            if second_packages.is_empty() {
+                return Ok(());
+            }
+            spawn_pip_install_stage(&install_python, second_packages, second_is_prerelease)
+                .map_err(|(_, error)| (second_is_prerelease, error))
+                .and_then(|child| {
+                    run_pip_install_stage(&ah_wait, &sid_wait, child, second_is_prerelease)
+                })
+        });
         managed_environments.invalidate(Path::new(&runtime_root), [invalidation_key.as_str()]);
 
-        match child.wait() {
-            Ok(status) => {
-                if status.success() {
-                    emit_after_operation_released(operation_guard, || {
-                        let _ = ah_wait.emit(
-                            "install:finished",
-                            InstallFinishedPayload {
-                                session_id: sid_wait,
-                            },
-                        );
-                    });
-                } else {
-                    let code = status.code().unwrap_or(-1);
-                    emit_after_operation_released(operation_guard, || {
-                        let _ = ah_wait.emit(
-                            "install:failed",
-                            InstallFailedPayload {
-                                session_id: sid_wait,
-                                error: format!("pip exited with code {}", code),
-                            },
-                        );
-                    });
-                }
+        emit_after_operation_released(operation_guard, || {
+            let event = match result {
+                Ok(()) => ("install:finished", None),
+                Err((stage, error)) => (
+                    "install:failed",
+                    Some(if stage {
+                        format!("pip could not install the prerelease dependency (no compatible flatc distribution may exist for this Python/platform); {}; see the streamed pip output.", error)
+                    } else {
+                        error
+                    }),
+                ),
+            };
+            if let Some(error) = event.1 {
+                let _ = ah_wait.emit(
+                    event.0,
+                    InstallFailedPayload {
+                        session_id: sid_wait,
+                        error,
+                    },
+                );
+            } else {
+                let _ = ah_wait.emit(
+                    event.0,
+                    InstallFinishedPayload {
+                        session_id: sid_wait,
+                    },
+                );
             }
-            Err(e) => {
-                emit_after_operation_released(operation_guard, || {
-                    let _ = ah_wait.emit(
-                        "install:failed",
-                        InstallFailedPayload {
-                            session_id: sid_wait,
-                            error: format!("wait error: {}", e),
-                        },
-                    );
-                });
-            }
-        }
+        });
     });
 
     Ok(session_id)
 }
 
-fn build_pip_install_command(python: &str, packages: &[String]) -> Command {
+/// Run one pip stage, streaming both output streams into the install session.
+/// The bool in an error identifies the prerelease stage.
+fn spawn_pip_install_stage(
+    python: &str,
+    packages: &[String],
+    prerelease: bool,
+) -> Result<Child, (bool, String)> {
+    build_pip_install_command(python, packages, prerelease)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| (prerelease, format!("failed to spawn pip: {}", error)))
+}
+
+fn run_pip_install_stage(
+    app_handle: &tauri::AppHandle,
+    session_id: &str,
+    mut child: Child,
+    prerelease: bool,
+) -> Result<(), (bool, String)> {
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or((prerelease, "no stdout handle".to_string()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or((prerelease, "no stderr handle".to_string()))?;
+    let stdout_handle = stream_install_output(
+        app_handle.clone(),
+        session_id.to_string(),
+        stdout,
+        "install:stdout",
+    );
+    let stderr_handle = stream_install_output(
+        app_handle.clone(),
+        session_id.to_string(),
+        stderr,
+        "install:stderr",
+    );
+    let status = child
+        .wait()
+        .map_err(|error| (prerelease, format!("wait error: {}", error)))?;
+    let _ = stdout_handle.join();
+    let _ = stderr_handle.join();
+    if status.success() {
+        Ok(())
+    } else {
+        Err((
+            prerelease,
+            format!("pip exited with code {}", status.code().unwrap_or(-1)),
+        ))
+    }
+}
+
+fn stream_install_output<R: std::io::Read + Send + 'static>(
+    app_handle: tauri::AppHandle,
+    session_id: String,
+    stream: R,
+    event: &'static str,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        for line in BufReader::new(stream).lines().map_while(Result::ok) {
+            let _ = app_handle.emit(
+                event,
+                InstallLinePayload {
+                    session_id: session_id.clone(),
+                    line,
+                },
+            );
+        }
+    })
+}
+
+fn partition_install_packages(packages: &[InstallableDependency]) -> (Vec<String>, Vec<String>) {
+    packages
+        .iter()
+        .fold((Vec::new(), Vec::new()), |mut groups, dependency| {
+            if dependency.prerelease {
+                groups.1.push(dependency.package.clone());
+            } else {
+                groups.0.push(dependency.package.clone());
+            }
+            groups
+        })
+}
+
+fn build_pip_install_command(python: &str, packages: &[String], prerelease: bool) -> Command {
     let mut cmd = Command::new(python);
     cmd.args(["-m", "pip", "install"]);
+    if prerelease {
+        cmd.arg("--pre");
+    }
     cmd.args(packages);
     cmd
 }
@@ -1405,6 +1593,7 @@ fn check_sys_dep(python: &str, binary_name: &str, install_hint: &str) -> DepChec
             reason: format!("probe failed: {}", e),
             install_hint: install_hint.to_string(),
             install_package: None,
+            prerelease: None,
         },
         Ok(out) => {
             if out.is_empty() {
@@ -1414,6 +1603,7 @@ fn check_sys_dep(python: &str, binary_name: &str, install_hint: &str) -> DepChec
                     reason: format!("shutil.which('{}') returned None", binary_name),
                     install_hint: install_hint.to_string(),
                     install_package: None,
+                    prerelease: None,
                 }
             } else {
                 DepCheckResult {
@@ -1422,6 +1612,7 @@ fn check_sys_dep(python: &str, binary_name: &str, install_hint: &str) -> DepChec
                     reason: String::new(),
                     install_hint: install_hint.to_string(),
                     install_package: None,
+                    prerelease: None,
                 }
             }
         }
@@ -1508,6 +1699,7 @@ mod tests {
     fn litert_package_specs_survive_validation() {
         assert!(validate_package_name("litert-torch>=0.9.0").is_ok());
         assert!(validate_package_name("ai-edge-litert>=2.1.4").is_ok());
+        assert!(validate_package_name("--pre").is_err());
     }
 
     #[test]
@@ -1537,6 +1729,22 @@ mod tests {
     }
 
     #[test]
+    fn rfdetr_non_executorch_probes_do_not_discover_flatc() {
+        for route_id in [
+            "rfdetr.pth.onnx",
+            "rfdetr.pth.engine",
+            "rfdetr.pth.coreml",
+            "rfdetr.pth.tflite",
+        ] {
+            let probe = rfdetr_probe_code(route_id);
+            assert!(
+                !probe.contains("which(\"flatc\")"),
+                "unexpected flatc discovery in {route_id}"
+            );
+        }
+    }
+
+    #[test]
     fn rfdetr_routes_declare_exact_module_checks() {
         assert_eq!(rfdetr_probe("rfdetr.pth.onnx").modules, &["rfdetr", "onnx"]);
         assert_eq!(
@@ -1560,6 +1768,13 @@ mod tests {
     #[test]
     fn executorch_probe_uses_distribution_floors_without_imports() {
         let probe = rfdetr_probe_code("rfdetr.pth.executorch");
+        assert!(probe.contains("_shutil.which(_name)"));
+        assert!(probe.contains("_resources.files"));
+        assert!(probe.contains("distribution"));
+        assert!(flatc_resolver_code().contains("distribution(\"executorch\")"));
+        assert!(flatc_resolver_code().contains("distribution(\"flatc\")"));
+        assert!(probe.contains("data/bin/flatc"));
+        assert!(!probe.contains("_selected_path"));
         assert!(probe.contains("PathFinder.find_spec"));
         let definition = rfdetr_probe("rfdetr.pth.executorch");
         assert_eq!(
@@ -1595,6 +1810,112 @@ mod tests {
         probe(python, &code).expect("probe must leave framework modules absent");
     }
 
+    fn probe_flatc_fixture(kind: &str) -> bool {
+        let python = available_test_python().expect("python3 or python required");
+        let root = std::env::temp_dir().join(format!("ves-flatc-{}-{}", kind, Uuid::new_v4()));
+        let lib = root.join("lib");
+        let bin = root.join("bin");
+        std::fs::create_dir_all(lib.join("executorch/data/bin")).unwrap();
+        std::fs::create_dir_all(lib.join("executorch-1.4.1.dist-info")).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(lib.join("executorch/__init__.py"), "").unwrap();
+        std::fs::write(
+            lib.join("executorch-1.4.1.dist-info/METADATA"),
+            "Name: executorch\nVersion: 1.4.1\n",
+        )
+        .unwrap();
+        let bundled_name = if cfg!(windows) { "flatc.exe" } else { "flatc" };
+        let bundled = lib.join(format!("executorch/data/bin/{}", bundled_name));
+        std::fs::write(&bundled, "").unwrap();
+        std::fs::write(
+            lib.join("executorch-1.4.1.dist-info/RECORD"),
+            &format!("executorch/data/bin/{},,\n", bundled_name),
+        )
+        .unwrap();
+        let path_name = if cfg!(windows) { "flatc.exe" } else { "flatc" };
+        if kind == "wheel" {
+            std::fs::create_dir_all(lib.join("flatc-25.12.19rc0.dist-info")).unwrap();
+            std::fs::write(
+                lib.join("flatc-25.12.19rc0.dist-info/METADATA"),
+                "Name: flatc\nVersion: 25.12.19rc0\n",
+            )
+            .unwrap();
+            std::fs::write(
+                lib.join("flatc-25.12.19rc0.dist-info/RECORD"),
+                format!("flatc/bin/{},,\n", path_name),
+            )
+            .unwrap();
+            std::fs::create_dir_all(lib.join("flatc/bin")).unwrap();
+            std::fs::write(lib.join(format!("flatc/bin/{}", path_name)), "").unwrap();
+        }
+        if kind == "wrapper" {
+            let scripts = root.join("Scripts");
+            std::fs::create_dir_all(&scripts).unwrap();
+            std::fs::write(scripts.join(path_name), "").unwrap();
+        }
+        if kind == "path" || kind == "exe" {
+            std::fs::write(bin.join(path_name), "").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(
+                    bin.join(path_name),
+                    std::fs::Permissions::from_mode(0o755),
+                )
+                .unwrap();
+            }
+        }
+        if kind != "bundled" {
+            std::fs::remove_file(bundled).unwrap();
+        }
+        let root_json = serde_json::to_string(&root).unwrap();
+        let lib_json = serde_json::to_string(&lib).unwrap();
+        let path_dir = if kind == "wrapper" {
+            root.join("Scripts")
+        } else {
+            bin
+        };
+        let path_json = serde_json::to_string(&path_dir).unwrap();
+        let code = format!("import os, sys\nsys.executable = {root_json} + '/fake-python'\nsys.path.insert(0, {lib_json})\nos.environ['PATH']={path_json} if {kind:?} in ('path', 'exe', 'wrapper') else ''\nexec({probe:?})", probe = rfdetr_probe_code("rfdetr.pth.executorch"));
+        let ready = probe(python, &code)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<RfDetrProbeOutput>(&raw).ok())
+            .unwrap()
+            .flatc_ready;
+        let _ = std::fs::remove_dir_all(&root);
+        ready
+    }
+
+    #[test]
+    fn bundled_flatc_fixture_passes_without_path_compiler() {
+        assert!(probe_flatc_fixture("bundled"));
+    }
+
+    #[test]
+    fn path_flatc_fixture_passes_without_bundle() {
+        assert!(probe_flatc_fixture("path"));
+    }
+
+    #[test]
+    fn missing_flatc_fixture_fails_closed() {
+        assert!(!probe_flatc_fixture("neither"));
+    }
+
+    #[test]
+    fn exe_named_flatc_fixture_passes() {
+        assert!(probe_flatc_fixture("exe"));
+    }
+
+    #[test]
+    fn flatc_fixture_wheel_bin_passes_without_path_compiler() {
+        assert!(probe_flatc_fixture("wheel"));
+    }
+
+    #[test]
+    fn flatc_fixture_wrapper_only_fails_closed() {
+        assert!(!probe_flatc_fixture("wrapper"));
+    }
+
     #[test]
     fn malformed_probe_rows_fail_closed() {
         for output in [
@@ -1613,9 +1934,9 @@ mod tests {
     }
 
     #[test]
-    fn malformed_executorch_probe_returns_two_installable_rows() {
+    fn malformed_executorch_probe_returns_three_installable_rows() {
         let result = parse_rfdetr_probe_output("rfdetr.pth.executorch", "not json");
-        assert_eq!(result.len(), 2);
+        assert_eq!(result.len(), 3);
         assert!(result.iter().all(|row| row.status == "missing_package"));
         assert_eq!(result[0].item, "rfdetr[executorch]>=1.9.0");
         assert_eq!(result[1].item, "torch>=2.13");
@@ -1640,7 +1961,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn failed_executorch_probe_returns_two_installable_rows() {
+    fn failed_executorch_probe_returns_three_installable_rows() {
         use std::os::unix::fs::PermissionsExt;
 
         let root = std::env::temp_dir().join(format!("rfdetr-probe-fail-{}", Uuid::new_v4()));
@@ -1649,9 +1970,13 @@ mod tests {
         std::fs::write(&python, b"#!/bin/sh\nexit 7\n").unwrap();
         std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
         let result = check_rfdetr_probe_dep(python.to_str().unwrap(), "rfdetr.pth.executorch");
-        assert_eq!(result.len(), 2);
+        assert_eq!(result.len(), 3);
         assert!(result.iter().all(|row| row.status == "missing_package"));
-        assert!(result.iter().all(|row| row.reason.contains("probe failed")));
+        assert!(result[..2]
+            .iter()
+            .all(|row| row.reason.contains("probe failed")));
+        assert_eq!(result[2].item, "flatc");
+        assert_eq!(result[2].prerelease, Some(true));
         assert_eq!(
             result[0].install_package.as_deref(),
             Some("rfdetr[executorch]>=1.9.0")
@@ -1803,6 +2128,7 @@ mod tests {
         assert!(validate_package_name("rfdetr").is_ok());
         assert!(validate_package_name("rfdetr[onnx]").is_ok());
         assert!(validate_package_name("rfdetr[tflite]>=1.9.4").is_ok());
+        assert!(validate_package_name("--pre").is_err());
     }
 
     #[test]
@@ -1839,13 +2165,13 @@ mod tests {
     }
 
     #[test]
-    fn absent_rfdetr_executorch_stack_returns_two_exact_install_rows() {
+    fn absent_rfdetr_executorch_stack_returns_three_exact_install_rows() {
         let runtime = std::env::temp_dir().join(format!("rfdetr-stack-{}", Uuid::new_v4()));
         let runtime = runtime.to_string_lossy();
         let results = missing_stack_results_if_absent(&runtime, "rfdetr.pth.executorch")
             .expect("RF-DETR ExecuTorch stack results");
 
-        assert_eq!(results.len(), 2);
+        assert_eq!(results.len(), 3);
         assert_eq!(results[0].item, "rfdetr[executorch]>=1.9.0");
         assert_eq!(
             results[0].install_package.as_deref(),
@@ -1893,10 +2219,37 @@ mod tests {
     }
 
     #[test]
+    fn rfdetr_executorch_route_declares_flatc_dependency_row() {
+        let deps = route_deps("rfdetr.pth.executorch").expect("route deps");
+        assert_eq!(
+            deps.pip
+                .iter()
+                .map(|dep| dep.package_name)
+                .collect::<Vec<_>>(),
+            vec!["rfdetr[executorch]>=1.9.0", "torch>=2.13", "flatc"]
+        );
+    }
+
+    #[test]
     fn rfdetr_install_command_targets_stack_python() {
         let command = build_pip_install_command(
             "/tmp/runtime/envs/rfdetr-default/.venv/bin/python",
             &["rfdetr[onnx]".to_string()],
+            false,
+        );
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            vec!["-m", "pip", "install", "rfdetr[onnx]"]
+        );
+
+        let prerelease = build_pip_install_command(
+            "/tmp/runtime/envs/rfdetr-default/.venv/bin/python",
+            &["flatc".to_string()],
+            true,
+        );
+        assert_eq!(
+            prerelease.get_args().collect::<Vec<_>>(),
+            vec!["-m", "pip", "install", "--pre", "flatc"]
         );
 
         assert_eq!(
@@ -1906,9 +2259,41 @@ mod tests {
     }
 
     #[test]
+    fn mixed_install_packages_split_pre_release_only_for_the_second_stage() {
+        let packages = vec![
+            InstallableDependency {
+                package: "torch>=2.13".into(),
+                prerelease: false,
+            },
+            InstallableDependency {
+                package: "flatc".into(),
+                prerelease: true,
+            },
+        ];
+        let (stable, prerelease) = partition_install_packages(&packages);
+        assert_eq!(stable, vec!["torch>=2.13"]);
+        assert_eq!(prerelease, vec!["flatc"]);
+        assert_eq!(
+            build_pip_install_command("python", &stable, false)
+                .get_args()
+                .collect::<Vec<_>>(),
+            vec!["-m", "pip", "install", "torch>=2.13"]
+        );
+        assert_eq!(
+            build_pip_install_command("python", &prerelease, true)
+                .get_args()
+                .collect::<Vec<_>>(),
+            vec!["-m", "pip", "install", "--pre", "flatc"]
+        );
+    }
+
+    #[test]
     fn ultralytics_install_command_keeps_base_python() {
-        let command =
-            build_pip_install_command("/tmp/runtime/.venv/bin/python", &["onnx".to_string()]);
+        let command = build_pip_install_command(
+            "/tmp/runtime/.venv/bin/python",
+            &["onnx".to_string()],
+            false,
+        );
 
         assert_eq!(command.get_program(), "/tmp/runtime/.venv/bin/python");
     }
@@ -1920,6 +2305,7 @@ mod tests {
         let install = build_pip_install_command(
             &stack_python("/tmp/runtime", "rfdetr.pth.onnx").unwrap(),
             &["rfdetr[onnx]".to_string()],
+            false,
         );
 
         assert_eq!(create.get_program(), "/base/python");
@@ -1927,6 +2313,16 @@ mod tests {
             install.get_program(),
             std::ffi::OsStr::new(&stack_python("/tmp/runtime", "rfdetr.pth.onnx").unwrap())
         );
+    }
+
+    #[test]
+    fn package_validation_rejects_option_like_name_even_when_not_prerelease() {
+        let dependency = InstallableDependency {
+            package: "--pre".to_string(),
+            prerelease: false,
+        };
+        assert!(!dependency.prerelease);
+        assert!(validate_package_name(&dependency.package).is_err());
     }
 
     #[test]
@@ -2080,23 +2476,36 @@ mod tests {
     }
 
     #[test]
-    fn executorch_probe_preserves_two_dependency_rows_for_each_state() {
+    fn executorch_probe_preserves_three_dependency_rows_for_each_state() {
         let modules = r#"[{"name":"rfdetr","present":true},{"name":"executorch.exir","present":true},{"name":"torch","present":true}]"#;
         let rows = |rfdetr: &str, torch: &str| {
             parse_rfdetr_probe_output(
                 "rfdetr.pth.executorch",
                 &format!(
-                    r#"{{"modules":{modules},"distributions":[{{"name":"rfdetr","version":"{rfdetr}"}},{{"name":"torch","version":"{torch}"}}]}}"#
+                    r#"{{"modules":{modules},"distributions":[{{"name":"rfdetr","version":"{rfdetr}"}},{{"name":"torch","version":"{torch}"}}],"flatc_ready":true}}"#
                 ),
             )
         };
 
         let ready = rows("1.9.0", "2.13");
-        assert_eq!(ready.len(), 2);
+        assert_eq!(ready.len(), 3);
         assert_eq!(ready[0].item, "rfdetr[executorch]>=1.9.0");
         assert_eq!(ready[0].status, "ready");
         assert_eq!(ready[1].item, "torch>=2.13");
         assert_eq!(ready[1].status, "ready");
+        assert_eq!(ready[2].item, "flatc");
+        assert_eq!(ready[2].status, "ready");
+
+        let missing_flatc = parse_rfdetr_probe_output(
+            "rfdetr.pth.executorch",
+            &format!(
+                r#"{{"modules":{modules},"distributions":[{{"name":"rfdetr","version":"1.9.0"}},{{"name":"torch","version":"2.13"}}],"flatc_ready":false}}"#
+            ),
+        );
+        assert_eq!(missing_flatc[2].item, "flatc");
+        assert_eq!(missing_flatc[2].status, "missing_package");
+        assert_eq!(missing_flatc[2].install_package.as_deref(), Some("flatc"));
+        assert_eq!(missing_flatc[2].prerelease, Some(true));
 
         let missing_torch = parse_rfdetr_probe_output(
             "rfdetr.pth.executorch",
@@ -2104,7 +2513,7 @@ mod tests {
                 r#"{{"modules":{modules},"distributions":[{{"name":"rfdetr","version":"1.9.0"}},{{"name":"torch","version":null}}]}}"#
             ),
         );
-        assert_eq!(missing_torch.len(), 2);
+        assert_eq!(missing_torch.len(), 3);
         assert_eq!(missing_torch[0].status, "ready");
         assert_eq!(missing_torch[1].status, "version_too_old");
         assert_eq!(missing_torch[1].item, "torch>=2.13");
@@ -2117,7 +2526,7 @@ mod tests {
             "rfdetr.pth.executorch",
             r#"{"modules":[{"name":"rfdetr","present":true},{"name":"executorch.exir","present":true},{"name":"torch","present":false}],"distributions":[{"name":"rfdetr","version":"1.9.0"},{"name":"torch","version":"2.13"}]}"#,
         );
-        assert_eq!(missing_torch_module.len(), 2);
+        assert_eq!(missing_torch_module.len(), 3);
         assert_eq!(missing_torch_module[0].status, "ready");
         assert_eq!(missing_torch_module[1].status, "missing_package");
         assert_eq!(missing_torch_module[1].item, "torch>=2.13");
@@ -2134,7 +2543,7 @@ mod tests {
             "rfdetr.pth.executorch",
             r#"{"modules":[{"name":"rfdetr","present":true},{"name":"executorch.exir","present":false},{"name":"torch","present":true}],"distributions":[{"name":"rfdetr","version":"1.9.0"},{"name":"torch","version":"2.13"}]}"#,
         );
-        assert_eq!(missing_executorch_module.len(), 2);
+        assert_eq!(missing_executorch_module.len(), 3);
         assert_eq!(missing_executorch_module[0].status, "missing_package");
         assert_eq!(
             missing_executorch_module[0].item,
@@ -2144,14 +2553,16 @@ mod tests {
         assert_eq!(missing_executorch_module[1].item, "torch>=2.13");
 
         let old_torch = rows("1.9.0", "2.12.1");
-        assert_eq!(old_torch.len(), 2);
+        assert_eq!(old_torch.len(), 3);
         assert_eq!(old_torch[0].status, "ready");
         assert_eq!(old_torch[1].status, "version_too_old");
         assert_eq!(old_torch[1].install_package.as_deref(), Some("torch>=2.13"));
 
         let both_old = rows("1.8.9", "2.12.1");
-        assert_eq!(both_old.len(), 2);
-        assert!(both_old.iter().all(|row| row.status == "version_too_old"));
+        assert_eq!(both_old.len(), 3);
+        assert_eq!(both_old[0].status, "version_too_old");
+        assert_eq!(both_old[1].status, "version_too_old");
+        assert_eq!(both_old[2].status, "ready");
     }
 
     #[test]
