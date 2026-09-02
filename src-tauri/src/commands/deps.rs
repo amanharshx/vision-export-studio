@@ -1,6 +1,6 @@
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::str::FromStr;
 
 use pep440_rs::Version;
@@ -1277,6 +1277,9 @@ fn validate_package_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("package name must not be empty".to_string());
     }
+    if name.starts_with('-') {
+        return Err(format!("invalid package name: {}", name));
+    }
     if !name.chars().all(|c| {
         c.is_alphanumeric()
             || c == '-'
@@ -1371,20 +1374,35 @@ pub async fn install_dependencies(
 
     let (stable_packages, prerelease_packages) = partition_install_packages(&packages);
     let session_id = Uuid::new_v4().to_string();
+    let first_is_prerelease = stable_packages.is_empty();
+    let first_packages = if first_is_prerelease {
+        &prerelease_packages
+    } else {
+        &stable_packages
+    };
+    let first_child = spawn_pip_install_stage(&install_python, first_packages, first_is_prerelease)
+        .map_err(|(_, error)| error)?;
     let ah_wait = app_handle.clone();
     let sid_wait = session_id.clone();
     std::thread::spawn(move || {
-        let run_stage = |package_names: &[String], prerelease: bool| {
-            run_pip_install_stage(
-                &ah_wait,
-                &sid_wait,
-                &install_python,
-                package_names,
-                prerelease,
-            )
-        };
-        let result =
-            run_stage(&stable_packages, false).and_then(|_| run_stage(&prerelease_packages, true));
+        let first_result =
+            run_pip_install_stage(&ah_wait, &sid_wait, first_child, first_is_prerelease);
+        let result = first_result.and_then(|_| {
+            let second_packages = if first_is_prerelease {
+                &stable_packages
+            } else {
+                &prerelease_packages
+            };
+            let second_is_prerelease = !first_is_prerelease;
+            if second_packages.is_empty() {
+                return Ok(());
+            }
+            spawn_pip_install_stage(&install_python, second_packages, second_is_prerelease)
+                .map_err(|(_, error)| (second_is_prerelease, error))
+                .and_then(|child| {
+                    run_pip_install_stage(&ah_wait, &sid_wait, child, second_is_prerelease)
+                })
+        });
         managed_environments.invalidate(Path::new(&runtime_root), [invalidation_key.as_str()]);
 
         emit_after_operation_released(operation_guard, || {
@@ -1423,21 +1441,24 @@ pub async fn install_dependencies(
 
 /// Run one pip stage, streaming both output streams into the install session.
 /// The bool in an error identifies the prerelease stage.
-fn run_pip_install_stage(
-    app_handle: &tauri::AppHandle,
-    session_id: &str,
+fn spawn_pip_install_stage(
     python: &str,
     packages: &[String],
     prerelease: bool,
-) -> Result<(), (bool, String)> {
-    if packages.is_empty() {
-        return Ok(());
-    }
-    let mut child = build_pip_install_command(python, packages, prerelease)
+) -> Result<Child, (bool, String)> {
+    build_pip_install_command(python, packages, prerelease)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| (prerelease, format!("failed to spawn pip: {}", error)))?;
+        .map_err(|error| (prerelease, format!("failed to spawn pip: {}", error)))
+}
+
+fn run_pip_install_stage(
+    app_handle: &tauri::AppHandle,
+    session_id: &str,
+    mut child: Child,
+    prerelease: bool,
+) -> Result<(), (bool, String)> {
     let stdout = child
         .stdout
         .take()
@@ -1635,6 +1656,7 @@ mod tests {
     fn litert_package_specs_survive_validation() {
         assert!(validate_package_name("litert-torch>=0.9.0").is_ok());
         assert!(validate_package_name("ai-edge-litert>=2.1.4").is_ok());
+        assert!(validate_package_name("--pre").is_err());
     }
 
     #[test]
@@ -1830,7 +1852,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_executorch_probe_returns_two_installable_rows() {
+    fn malformed_executorch_probe_returns_three_installable_rows() {
         let result = parse_rfdetr_probe_output("rfdetr.pth.executorch", "not json");
         assert_eq!(result.len(), 3);
         assert!(result.iter().all(|row| row.status == "missing_package"));
@@ -1857,7 +1879,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn failed_executorch_probe_returns_two_installable_rows() {
+    fn failed_executorch_probe_returns_three_installable_rows() {
         use std::os::unix::fs::PermissionsExt;
 
         let root = std::env::temp_dir().join(format!("rfdetr-probe-fail-{}", Uuid::new_v4()));
@@ -2024,6 +2046,7 @@ mod tests {
         assert!(validate_package_name("rfdetr").is_ok());
         assert!(validate_package_name("rfdetr[onnx]").is_ok());
         assert!(validate_package_name("rfdetr[tflite]>=1.9.4").is_ok());
+        assert!(validate_package_name("--pre").is_err());
     }
 
     #[test]
@@ -2060,7 +2083,7 @@ mod tests {
     }
 
     #[test]
-    fn absent_rfdetr_executorch_stack_returns_two_exact_install_rows() {
+    fn absent_rfdetr_executorch_stack_returns_three_exact_install_rows() {
         let runtime = std::env::temp_dir().join(format!("rfdetr-stack-{}", Uuid::new_v4()));
         let runtime = runtime.to_string_lossy();
         let results = missing_stack_results_if_absent(&runtime, "rfdetr.pth.executorch")
@@ -2208,6 +2231,16 @@ mod tests {
             install.get_program(),
             std::ffi::OsStr::new(&stack_python("/tmp/runtime", "rfdetr.pth.onnx").unwrap())
         );
+    }
+
+    #[test]
+    fn package_validation_rejects_option_like_name_even_when_not_prerelease() {
+        let dependency = InstallableDependency {
+            package: "--pre".to_string(),
+            prerelease: false,
+        };
+        assert!(!dependency.prerelease);
+        assert!(validate_package_name(&dependency.package).is_err());
     }
 
     #[test]
@@ -2361,7 +2394,7 @@ mod tests {
     }
 
     #[test]
-    fn executorch_probe_preserves_two_dependency_rows_for_each_state() {
+    fn executorch_probe_preserves_three_dependency_rows_for_each_state() {
         let modules = r#"[{"name":"rfdetr","present":true},{"name":"executorch.exir","present":true},{"name":"torch","present":true}]"#;
         let rows = |rfdetr: &str, torch: &str| {
             parse_rfdetr_probe_output(

@@ -4,6 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Dialog } from "@/components/ui/dialog";
 import {
+  createInstallEventBuffer,
   getInstallStartFailureOutcome,
   getInstallableMissingPackages,
   getIncompatibleExportMessage,
@@ -16,6 +17,20 @@ import {
 } from "./export-workspace";
 import type { DepCheckResult, ExportStatus, InstallPhase, StackEnvironment } from "@/lib/types";
 import { findRoute } from "@/lib/providers";
+
+describe("createInstallEventBuffer", () => {
+  test("replays a matching terminal event received before session assignment once", () => {
+    const results: Array<"ok" | string> = [];
+    const buffer = createInstallEventBuffer(() => {}, (result) => results.push(result));
+
+    buffer.receive({ kind: "finished", payload: { session_id: "other" } });
+    buffer.receive({ kind: "failed", payload: { session_id: "session-1", error: "pip failed" } });
+    buffer.assignSessionId("session-1");
+    buffer.receive({ kind: "finished", payload: { session_id: "session-1" } });
+
+    expect(results).toEqual(["pip failed"]);
+  });
+});
 
 describe("getInstallableMissingPackages", () => {
   test("returns explicit install_package values", () => {

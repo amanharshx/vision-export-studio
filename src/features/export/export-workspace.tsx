@@ -68,6 +68,43 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { UpdaterController } from "@/features/updater/use-updater-controller";
+
+type BufferedInstallEvent =
+  | { kind: "stdout"; payload: InstallLinePayload }
+  | { kind: "stderr"; payload: InstallLinePayload }
+  | { kind: "finished"; payload: InstallFinishedPayload }
+  | { kind: "failed"; payload: InstallFailedPayload };
+
+export function createInstallEventBuffer(
+  onLine: (line: string) => void,
+  onTerminal: (result: "ok" | string) => void,
+) {
+  let sessionId = "";
+  let terminalHandled = false;
+  const pending: BufferedInstallEvent[] = [];
+
+  const handle = (event: BufferedInstallEvent) => {
+    if (terminalHandled || event.payload.session_id !== sessionId) return;
+    if (event.kind === "stdout") onLine("[stdout] " + event.payload.line);
+    if (event.kind === "stderr") onLine("[stderr] " + event.payload.line);
+    if (event.kind === "finished" || event.kind === "failed") {
+      terminalHandled = true;
+      onTerminal(event.kind === "finished" ? "ok" : event.payload.error);
+    }
+  };
+
+  return {
+    receive(event: BufferedInstallEvent) {
+      if (sessionId) handle(event);
+      else pending.push(event);
+    },
+    assignSessionId(id: string) {
+      sessionId = id;
+      for (const event of pending) handle(event);
+      pending.length = 0;
+    },
+  };
+}
 import { DropZone } from "./drop-zone";
 import { ExportModal } from "./export-modal";
 import { RouteGrid } from "./route-grid";
@@ -1411,33 +1448,29 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     const listeners = createListenerGroup();
     activeInstallListenerGroupRef.current?.dispose();
     activeInstallListenerGroupRef.current = listeners;
-    let installSessionId = "";
     let resolveInstall!: (result: "ok" | string) => void;
     const installPromise = new Promise<"ok" | string>((resolve) => {
       resolveInstall = resolve;
     });
+    const eventBuffer = createInstallEventBuffer(appendLine, resolveInstall);
 
     try {
       await Promise.all([
         listeners.add(listen<InstallLinePayload>("install:stdout", (ev) => {
-          if (!installSessionId || ev.payload.session_id !== installSessionId) return;
-          appendLine("[stdout] " + ev.payload.line);
+          eventBuffer.receive({ kind: "stdout", payload: ev.payload });
         })),
         listeners.add(listen<InstallLinePayload>("install:stderr", (ev) => {
-          if (!installSessionId || ev.payload.session_id !== installSessionId) return;
-          appendLine("[stderr] " + ev.payload.line);
+          eventBuffer.receive({ kind: "stderr", payload: ev.payload });
         })),
         listeners.add(listen<InstallFinishedPayload>("install:finished", (ev) => {
-          if (!installSessionId || ev.payload.session_id !== installSessionId) return;
-          resolveInstall("ok");
+          eventBuffer.receive({ kind: "finished", payload: ev.payload });
         })),
         listeners.add(listen<InstallFailedPayload>("install:failed", (ev) => {
-          if (!installSessionId || ev.payload.session_id !== installSessionId) return;
-          resolveInstall(ev.payload.error);
+          eventBuffer.receive({ kind: "failed", payload: ev.payload });
         })),
       ]);
 
-      installSessionId = await installDependencies(routeId, packages, pythonPath);
+      eventBuffer.assignSessionId(await installDependencies(routeId, packages, pythonPath));
       return await installPromise;
     } finally {
       listeners.dispose();
