@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DepCheckResponse } from "@/lib/types";
+import type { DepCheckResponse, InstallableDependency } from "@/lib/types";
 
 export function checkDependencies(
   routeId: string,
@@ -13,7 +13,7 @@ export function checkDependencies(
 
 export function installDependencies(
   routeId: string | null,
-  packages: string[],
+  packages: InstallableDependency[],
   pythonPath: string,
 ): Promise<string> {
   return invoke<string>("install_dependencies", { routeId, packages, pythonPath });

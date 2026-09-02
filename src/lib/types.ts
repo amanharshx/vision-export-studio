@@ -73,7 +73,7 @@ export interface RouteSpec {
   title: string;
   backend?: string;
   displayPath: string;
-  pipDeps: Array<{ packageName: string; installHint: string; optional?: boolean }>;
+  pipDeps: Array<{ packageName: string; installHint: string; optional?: boolean; prerelease?: boolean }>;
   sysDeps: Array<{ binaryName: string; installHint: string; optional?: boolean }>;
   platformLock: PlatformLock;
   intermediates: string[];
@@ -223,6 +223,12 @@ export interface DepCheckResult {
   reason: string;
   install_hint: string;
   install_package?: string;
+  prerelease?: boolean;
+}
+
+export interface InstallableDependency {
+  package: string;
+  prerelease: boolean;
 }
 
 export interface DepCheckResponse {

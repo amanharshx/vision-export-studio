@@ -13,6 +13,7 @@ import { createListenerGroup, type ListenerGroup } from "@/lib/tauri/listener-gr
 import type {
   DepCheckResult,
   EnvironmentInfo,
+  InstallableDependency,
   ExportCancelledPayload,
   ExportFailedPayload,
   ExportFinishedPayload,
@@ -458,23 +459,21 @@ export function getRouteOptionsForOpen(
   };
 }
 
-export function getInstallableMissingPackages(results: DepCheckResult[] | null): string[] {
-  if (!results) {
+export function getInstallableMissingPackages(results: DepCheckResult[] | null): InstallableDependency[] {
+  if (!results) return [];
+
+  const packages = results.flatMap((result): InstallableDependency[] => {
+    if (result.install_package) {
+      return [{ package: result.install_package, prerelease: result.prerelease === true }];
+    }
+    if (result.status === "missing_binary" && result.install_hint.startsWith("pip install ")) {
+      return [{ package: result.install_hint.replace("pip install ", "").trim(), prerelease: false }];
+    }
     return [];
-  }
-
-  const pipMissing = results
-    .map((result) => result.install_package)
-    .filter((packageName): packageName is string => Boolean(packageName));
-  const binaryViaPip = results
-    .filter(
-      (r) =>
-        r.status === "missing_binary" &&
-        r.install_hint.startsWith("pip install "),
-    )
-    .map((r) => r.install_hint.replace("pip install ", "").trim());
-
-  return [...new Set([...pipMissing, ...binaryViaPip])];
+  });
+  return packages.filter((dependency, index) =>
+    packages.findIndex((candidate) => candidate.package === dependency.package) === index,
+  );
 }
 
 export function mayActivateRoute(exportStatus: ExportStatus, installPhase: InstallPhase): boolean {
@@ -1405,7 +1404,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
 
   const streamDependencyInstall = useCallback(async (
     routeId: string | null,
-    packages: string[],
+    packages: InstallableDependency[],
     pythonPath: string,
     appendLine: (line: string) => void,
   ): Promise<"ok" | string> => {
@@ -1461,7 +1460,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     setDepCheckError(null);
 
     try {
-      const result = await streamDependencyInstall(null, ["ultralytics"], pythonPath, (line) => {
+      const result = await streamDependencyInstall(null, [{ package: "ultralytics", prerelease: false }], pythonPath, (line) => {
         setRuntimeInstallLines((prev) => [...prev, line]);
       });
       invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
@@ -1731,7 +1730,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     setInstallPhase("done");
     setDepCheckLoading(true);
     setDepCheckError(null);
-    let refreshedMissingPkgs: string[] = [];
+    let refreshedMissingPkgs: InstallableDependency[] = [];
     let freshEnv: EnvironmentInfo | undefined;
     try {
       const refreshed = await checkDependencies(selectedRoute.id, pythonPath);

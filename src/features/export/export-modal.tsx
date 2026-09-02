@@ -11,6 +11,7 @@ import { formats } from "@/lib/routes";
 import type {
   DepCheckResult,
   ExportOptions,
+  InstallableDependency,
   ExportStatus,
   InstallPhase,
   ProviderSpec,
@@ -45,7 +46,7 @@ interface ExportModalProps {
   depCheckError?: string | null;
   errorMsg?: string | null;
   installPhase: InstallPhase;
-  missingPackageNames: string[];
+  missingPackageNames: InstallableDependency[];
   onInstallAndExport: () => void;
   outputDir?: string;
   completedOutputDir?: string | null;
@@ -117,7 +118,7 @@ export function PendingInstallConsent({
   missingPackageNames,
 }: {
   depResults?: DepCheckResult[];
-  missingPackageNames: string[];
+  missingPackageNames: InstallableDependency[];
 }) {
   const involvesUpdate = involvesPackageUpdate(depResults);
   return (
@@ -132,8 +133,8 @@ export function PendingInstallConsent({
       </p>
       <ul className="space-y-0.5">
         {missingPackageNames.map((pkg) => (
-          <li key={pkg} className="font-mono text-xs text-blue-900">
-            • {pkg}
+          <li key={pkg.package} className="font-mono text-xs text-blue-900">
+            • {pkg.package}
           </li>
         ))}
       </ul>

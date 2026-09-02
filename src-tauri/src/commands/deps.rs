@@ -83,6 +83,7 @@ fn ultralytics_version_too_old_result(installed: &str, required: &str) -> DepChe
         ),
         install_hint: format!("pip install \"ultralytics>={}\"", required),
         install_package: Some(format!("ultralytics>={}", required)),
+        prerelease: None,
     }
 }
 
@@ -96,6 +97,7 @@ fn python_version_too_old_result(installed: &str) -> DepCheckResult {
         ),
         install_hint: "Install/select Python 3.10 or newer, then re-detect the environment and recreate the export runtime.".to_string(),
         install_package: None,
+        prerelease: None,
     }
 }
 
@@ -115,6 +117,7 @@ fn route_python_version_result(route_id: &str, installed: &str) -> Option<DepChe
                 "Select Python 3.12, then recreate the RF-DETR TFLite export environment."
                     .to_string(),
             install_package: None,
+            prerelease: None,
         });
     }
     minimum_python_version(route_id).map(|_| python_version_too_old_result(installed))
@@ -132,6 +135,8 @@ pub struct DepCheckResult {
     pub install_hint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub install_package: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prerelease: Option<bool>,
 }
 
 #[derive(serde::Serialize)]
@@ -146,6 +151,7 @@ fn platform_unsupported_result(reason: String) -> DepCheckResult {
         reason: reason.clone(),
         install_hint: reason,
         install_package: None,
+        prerelease: None,
     }
 }
 
@@ -629,6 +635,8 @@ fn probe_installed_version(python: &str, importable: &str) -> Result<String, Str
 struct RfDetrProbeOutput {
     modules: Vec<RfDetrModuleRow>,
     distributions: Vec<RfDetrDistributionRow>,
+    #[serde(default)]
+    flatc_ready: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -660,6 +668,10 @@ fn rfdetr_probe_code(route_id: &str) -> String {
 import importlib.metadata as _metadata
 import importlib.util as _util
 import json as _json
+import os as _os
+import shutil as _shutil
+import sys as _sys
+from pathlib import Path as _Path
 _modules = {modules}
 _distributions = {distributions}
 _module_rows = []
@@ -683,7 +695,25 @@ for _name in _distributions:
     except _metadata.PackageNotFoundError:
         _version = None
     _distribution_rows.append({{"name": _name, "version": _version}})
-print(_json.dumps({{"modules": _module_rows, "distributions": _distribution_rows}}))"#,
+_python_bin = str(_Path(_sys.executable).parent)
+_selected_path = _python_bin + _os.pathsep + _os.environ.get("PATH", "")
+_flatc_ready = bool(
+    _shutil.which("flatc")
+    or _shutil.which("flatc.exe")
+    or _shutil.which("flatc", path=_selected_path)
+    or _shutil.which("flatc.exe", path=_selected_path)
+)
+try:
+    _dist = _metadata.distribution("executorch")
+    for _file in _dist.files or ():
+        _name = str(_file).replace("\\\\", "/")
+        if _name.lower().endswith(("/data/bin/flatc", "/data/bin/flatc.exe")):
+            if _Path(_dist.locate_file(_file)).is_file():
+                _flatc_ready = True
+                break
+except _metadata.PackageNotFoundError:
+    pass
+print(_json.dumps({{"modules": _module_rows, "distributions": _distribution_rows, "flatc_ready": _flatc_ready}}))"#,
         modules = modules,
         distributions = distributions,
     )
@@ -696,6 +726,7 @@ fn probe_failure_result(definition: RfDetrProbeDefinition, reason: String) -> De
         reason,
         install_hint: definition.install_hint.to_string(),
         install_package: Some(definition.install_package.to_string()),
+        prerelease: None,
     }
 }
 
@@ -708,9 +739,33 @@ fn probe_failure_results(
         return vec![
             probe_failure_result(definition, reason.clone()),
             missing_torch_result(reason),
+            missing_flatc_result(),
         ];
     }
     vec![probe_failure_result(definition, reason)]
+}
+
+fn ready_flatc_result() -> DepCheckResult {
+    DepCheckResult {
+        item: "flatc".to_string(),
+        status: "ready".to_string(),
+        reason: String::new(),
+        install_hint: "python -m pip install --pre flatc".to_string(),
+        install_package: None,
+        prerelease: None,
+    }
+}
+
+fn missing_flatc_result() -> DepCheckResult {
+    DepCheckResult {
+        item: "flatc".to_string(),
+        status: "missing_package".to_string(),
+        reason: "No bundled ExecuTorch flatc compiler or flatc executable was found on PATH."
+            .to_string(),
+        install_hint: "python -m pip install --pre flatc".to_string(),
+        install_package: Some("flatc".to_string()),
+        prerelease: Some(true),
+    }
 }
 
 fn missing_torch_result(reason: String) -> DepCheckResult {
@@ -720,6 +775,7 @@ fn missing_torch_result(reason: String) -> DepCheckResult {
         reason,
         install_hint: "pip install \"torch>=2.13\"".to_string(),
         install_package: Some("torch>=2.13".to_string()),
+        prerelease: None,
     }
 }
 
@@ -813,7 +869,12 @@ fn parse_rfdetr_probe_output(route_id: &str, raw: &str) -> Vec<DepCheckResult> {
         } else {
             missing_torch_result("module 'torch' is not available".to_string())
         };
-        return vec![rfdetr, torch];
+        let flatc = if output.flatc_ready {
+            ready_flatc_result()
+        } else {
+            missing_flatc_result()
+        };
+        return vec![rfdetr, torch, flatc];
     }
     if let Some(row) = output.modules.iter().find(|row| !row.present) {
         return fail(format!("module '{}' is not available", row.name));
@@ -825,6 +886,7 @@ fn parse_rfdetr_probe_output(route_id: &str, raw: &str) -> Vec<DepCheckResult> {
             reason: String::new(),
             install_hint: definition.install_hint.to_string(),
             install_package: None,
+            prerelease: None,
         }];
     }
     fail(format!(
@@ -840,6 +902,7 @@ fn missing_rfdetr_module_result(module: &str) -> DepCheckResult {
         reason: format!("module '{}' is not available", module),
         install_hint: "pip install \"rfdetr[executorch]>=1.9.0\"".to_string(),
         install_package: Some("rfdetr[executorch]>=1.9.0".to_string()),
+        prerelease: None,
     }
 }
 
@@ -866,6 +929,7 @@ fn versioned_rfdetr_result(
             reason: format!("{} version could not be determined.", requirement.name),
             install_hint: install_hint.to_string(),
             install_package: Some(install_package.to_string()),
+            prerelease: None,
         };
     };
     if version_below(installed, requirement.required) {
@@ -878,6 +942,7 @@ fn versioned_rfdetr_result(
             ),
             install_hint: install_hint.to_string(),
             install_package: Some(install_package.to_string()),
+            prerelease: None,
         }
     } else {
         DepCheckResult {
@@ -886,6 +951,7 @@ fn versioned_rfdetr_result(
             reason: String::new(),
             install_hint: install_hint.to_string(),
             install_package: None,
+            prerelease: None,
         }
     }
 }
@@ -1017,6 +1083,7 @@ fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
             reason: "RF-DETR stack environment has not been created.".to_string(),
             install_hint: "pip install \"rfdetr[onnx]\"".to_string(),
             install_package: Some("rfdetr[onnx]".to_string()),
+            prerelease: None,
         }]),
         "rfdetr.pth.engine" => Some(vec![DepCheckResult {
             item: "rfdetr[tensorrt]".to_string(),
@@ -1024,6 +1091,7 @@ fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
             reason: "RF-DETR stack environment has not been created.".to_string(),
             install_hint: "pip install \"rfdetr[tensorrt]\"".to_string(),
             install_package: Some("rfdetr[tensorrt]".to_string()),
+            prerelease: None,
         }]),
         "rfdetr.pth.coreml" => Some(vec![DepCheckResult {
             item: "rfdetr[coreml]".to_string(),
@@ -1031,6 +1099,7 @@ fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
             reason: "RF-DETR stack environment has not been created.".to_string(),
             install_hint: "pip install \"rfdetr[coreml]\"".to_string(),
             install_package: Some("rfdetr[coreml]".to_string()),
+            prerelease: None,
         }]),
         "rfdetr.pth.tflite" => Some(vec![DepCheckResult {
             item: "rfdetr[tflite]>=1.9.4".to_string(),
@@ -1038,6 +1107,7 @@ fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
             reason: "RF-DETR TFLite stack environment has not been created.".to_string(),
             install_hint: "pip install \"rfdetr[tflite]>=1.9.4\"".to_string(),
             install_package: Some("rfdetr[tflite]>=1.9.4".to_string()),
+            prerelease: None,
         }]),
         "rfdetr.pth.executorch" => Some(vec![
             DepCheckResult {
@@ -1046,6 +1116,7 @@ fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
                 reason: "RF-DETR stack environment has not been created.".to_string(),
                 install_hint: "pip install \"rfdetr[executorch]>=1.9.0\"".to_string(),
                 install_package: Some("rfdetr[executorch]>=1.9.0".to_string()),
+                prerelease: None,
             },
             DepCheckResult {
                 item: "torch>=2.13".to_string(),
@@ -1053,7 +1124,9 @@ fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
                 reason: "RF-DETR stack environment has not been created.".to_string(),
                 install_hint: "pip install \"torch>=2.13\"".to_string(),
                 install_package: Some("torch>=2.13".to_string()),
+                prerelease: None,
             },
+            missing_flatc_result(),
         ]),
         _ => None,
     }
@@ -1095,6 +1168,7 @@ fn check_ultralytics_dep(python: &str, required: &str) -> DepCheckResult {
             reason: presence.reason,
             install_hint,
             install_package,
+            prerelease: None,
         },
         _ => presence,
     }
@@ -1118,6 +1192,7 @@ fn check_pip_dep(
             reason: format!("probe failed: {}", e),
             install_hint: install_hint.to_string(),
             install_package: None,
+            prerelease: None,
         },
         Ok(out) => {
             if out == "True" {
@@ -1127,6 +1202,7 @@ fn check_pip_dep(
                     reason: String::new(),
                     install_hint: install_hint.to_string(),
                     install_package: None,
+                    prerelease: None,
                 }
             } else if optional {
                 DepCheckResult {
@@ -1135,6 +1211,7 @@ fn check_pip_dep(
                     reason: "optional: improves model portability".to_string(),
                     install_hint: install_hint.to_string(),
                     install_package: None,
+                    prerelease: None,
                 }
             } else {
                 DepCheckResult {
@@ -1143,6 +1220,7 @@ fn check_pip_dep(
                     reason: format!("importlib.util.find_spec('{}') returned False", imp),
                     install_hint: install_hint.to_string(),
                     install_package: Some(package_name.to_string()),
+                    prerelease: None,
                 }
             }
         }
@@ -1152,6 +1230,12 @@ fn check_pip_dep(
 // ---------------------------------------------------------------------------
 // install_dependencies — payload types
 // ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+pub struct InstallableDependency {
+    package: String,
+    prerelease: bool,
+}
 
 #[derive(serde::Serialize, Clone)]
 struct InstallLinePayload {
@@ -1210,7 +1294,7 @@ pub async fn install_dependencies(
     runtime_operations: tauri::State<'_, RuntimeOperationCoordinator>,
     managed_environments: tauri::State<'_, ManagedEnvironments>,
     route_id: Option<String>,
-    packages: Vec<String>,
+    packages: Vec<InstallableDependency>,
     python_path: String,
 ) -> Result<String, String> {
     // Enforce platform compatibility before any package-manager command runs.
@@ -1236,8 +1320,8 @@ pub async fn install_dependencies(
     if packages.is_empty() {
         return Err("packages must not be empty".to_string());
     }
-    for pkg in &packages {
-        validate_package_name(pkg)?;
+    for dependency in &packages {
+        validate_package_name(&dependency.package)?;
     }
     let runtime_root = load_settings(app_handle.clone())?.runtime_dir;
     let invalidation_key = route_id
@@ -1272,8 +1356,13 @@ pub async fn install_dependencies(
         python_path.clone()
     };
 
-    // Build argv: python -m pip install pkg1 pkg2 ...
-    let mut cmd = build_pip_install_command(&install_python, &packages);
+    // Build argv without parsing install hints or shell fragments.
+    let package_names: Vec<String> = packages
+        .iter()
+        .map(|dependency| dependency.package.clone())
+        .collect();
+    let prerelease = packages.iter().any(|dependency| dependency.prerelease);
+    let mut cmd = build_pip_install_command(&install_python, &package_names, prerelease);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
@@ -1361,7 +1450,11 @@ pub async fn install_dependencies(
                             "install:failed",
                             InstallFailedPayload {
                                 session_id: sid_wait,
-                                error: format!("pip exited with code {}", code),
+                                error: if prerelease {
+                            format!("pip could not install the prerelease dependency (no compatible flatc distribution may exist for this Python/platform); pip exited with code {}. Try a supported Python/platform.", code)
+                        } else {
+                            format!("pip exited with code {}", code)
+                        },
                             },
                         );
                     });
@@ -1384,9 +1477,12 @@ pub async fn install_dependencies(
     Ok(session_id)
 }
 
-fn build_pip_install_command(python: &str, packages: &[String]) -> Command {
+fn build_pip_install_command(python: &str, packages: &[String], prerelease: bool) -> Command {
     let mut cmd = Command::new(python);
     cmd.args(["-m", "pip", "install"]);
+    if prerelease {
+        cmd.arg("--pre");
+    }
     cmd.args(packages);
     cmd
 }
@@ -1405,6 +1501,7 @@ fn check_sys_dep(python: &str, binary_name: &str, install_hint: &str) -> DepChec
             reason: format!("probe failed: {}", e),
             install_hint: install_hint.to_string(),
             install_package: None,
+            prerelease: None,
         },
         Ok(out) => {
             if out.is_empty() {
@@ -1414,6 +1511,7 @@ fn check_sys_dep(python: &str, binary_name: &str, install_hint: &str) -> DepChec
                     reason: format!("shutil.which('{}') returned None", binary_name),
                     install_hint: install_hint.to_string(),
                     install_package: None,
+                    prerelease: None,
                 }
             } else {
                 DepCheckResult {
@@ -1422,6 +1520,7 @@ fn check_sys_dep(python: &str, binary_name: &str, install_hint: &str) -> DepChec
                     reason: String::new(),
                     install_hint: install_hint.to_string(),
                     install_package: None,
+                    prerelease: None,
                 }
             }
         }
@@ -1560,6 +1659,10 @@ mod tests {
     #[test]
     fn executorch_probe_uses_distribution_floors_without_imports() {
         let probe = rfdetr_probe_code("rfdetr.pth.executorch");
+        assert!(probe.contains("which(\"flatc\")"));
+        assert!(probe.contains("which(\"flatc.exe\")"));
+        assert!(probe.contains("distribution(\"executorch\")"));
+        assert!(probe.contains("data/bin/flatc"));
         assert!(probe.contains("PathFinder.find_spec"));
         let definition = rfdetr_probe("rfdetr.pth.executorch");
         assert_eq!(
@@ -1615,7 +1718,7 @@ mod tests {
     #[test]
     fn malformed_executorch_probe_returns_two_installable_rows() {
         let result = parse_rfdetr_probe_output("rfdetr.pth.executorch", "not json");
-        assert_eq!(result.len(), 2);
+        assert_eq!(result.len(), 3);
         assert!(result.iter().all(|row| row.status == "missing_package"));
         assert_eq!(result[0].item, "rfdetr[executorch]>=1.9.0");
         assert_eq!(result[1].item, "torch>=2.13");
@@ -1649,9 +1752,13 @@ mod tests {
         std::fs::write(&python, b"#!/bin/sh\nexit 7\n").unwrap();
         std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
         let result = check_rfdetr_probe_dep(python.to_str().unwrap(), "rfdetr.pth.executorch");
-        assert_eq!(result.len(), 2);
+        assert_eq!(result.len(), 3);
         assert!(result.iter().all(|row| row.status == "missing_package"));
-        assert!(result.iter().all(|row| row.reason.contains("probe failed")));
+        assert!(result[..2]
+            .iter()
+            .all(|row| row.reason.contains("probe failed")));
+        assert_eq!(result[2].item, "flatc");
+        assert_eq!(result[2].prerelease, Some(true));
         assert_eq!(
             result[0].install_package.as_deref(),
             Some("rfdetr[executorch]>=1.9.0")
@@ -1845,7 +1952,7 @@ mod tests {
         let results = missing_stack_results_if_absent(&runtime, "rfdetr.pth.executorch")
             .expect("RF-DETR ExecuTorch stack results");
 
-        assert_eq!(results.len(), 2);
+        assert_eq!(results.len(), 3);
         assert_eq!(results[0].item, "rfdetr[executorch]>=1.9.0");
         assert_eq!(
             results[0].install_package.as_deref(),
@@ -1897,6 +2004,21 @@ mod tests {
         let command = build_pip_install_command(
             "/tmp/runtime/envs/rfdetr-default/.venv/bin/python",
             &["rfdetr[onnx]".to_string()],
+            false,
+        );
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            vec!["-m", "pip", "install", "rfdetr[onnx]"]
+        );
+
+        let prerelease = build_pip_install_command(
+            "/tmp/runtime/envs/rfdetr-default/.venv/bin/python",
+            &["flatc".to_string()],
+            true,
+        );
+        assert_eq!(
+            prerelease.get_args().collect::<Vec<_>>(),
+            vec!["-m", "pip", "install", "--pre", "flatc"]
         );
 
         assert_eq!(
@@ -1907,8 +2029,11 @@ mod tests {
 
     #[test]
     fn ultralytics_install_command_keeps_base_python() {
-        let command =
-            build_pip_install_command("/tmp/runtime/.venv/bin/python", &["onnx".to_string()]);
+        let command = build_pip_install_command(
+            "/tmp/runtime/.venv/bin/python",
+            &["onnx".to_string()],
+            false,
+        );
 
         assert_eq!(command.get_program(), "/tmp/runtime/.venv/bin/python");
     }
@@ -1920,6 +2045,7 @@ mod tests {
         let install = build_pip_install_command(
             &stack_python("/tmp/runtime", "rfdetr.pth.onnx").unwrap(),
             &["rfdetr[onnx]".to_string()],
+            false,
         );
 
         assert_eq!(create.get_program(), "/base/python");
@@ -2086,17 +2212,30 @@ mod tests {
             parse_rfdetr_probe_output(
                 "rfdetr.pth.executorch",
                 &format!(
-                    r#"{{"modules":{modules},"distributions":[{{"name":"rfdetr","version":"{rfdetr}"}},{{"name":"torch","version":"{torch}"}}]}}"#
+                    r#"{{"modules":{modules},"distributions":[{{"name":"rfdetr","version":"{rfdetr}"}},{{"name":"torch","version":"{torch}"}}],"flatc_ready":true}}"#
                 ),
             )
         };
 
         let ready = rows("1.9.0", "2.13");
-        assert_eq!(ready.len(), 2);
+        assert_eq!(ready.len(), 3);
         assert_eq!(ready[0].item, "rfdetr[executorch]>=1.9.0");
         assert_eq!(ready[0].status, "ready");
         assert_eq!(ready[1].item, "torch>=2.13");
         assert_eq!(ready[1].status, "ready");
+        assert_eq!(ready[2].item, "flatc");
+        assert_eq!(ready[2].status, "ready");
+
+        let missing_flatc = parse_rfdetr_probe_output(
+            "rfdetr.pth.executorch",
+            &format!(
+                r#"{{"modules":{modules},"distributions":[{{"name":"rfdetr","version":"1.9.0"}},{{"name":"torch","version":"2.13"}}],"flatc_ready":false}}"#
+            ),
+        );
+        assert_eq!(missing_flatc[2].item, "flatc");
+        assert_eq!(missing_flatc[2].status, "missing_package");
+        assert_eq!(missing_flatc[2].install_package.as_deref(), Some("flatc"));
+        assert_eq!(missing_flatc[2].prerelease, Some(true));
 
         let missing_torch = parse_rfdetr_probe_output(
             "rfdetr.pth.executorch",
@@ -2104,7 +2243,7 @@ mod tests {
                 r#"{{"modules":{modules},"distributions":[{{"name":"rfdetr","version":"1.9.0"}},{{"name":"torch","version":null}}]}}"#
             ),
         );
-        assert_eq!(missing_torch.len(), 2);
+        assert_eq!(missing_torch.len(), 3);
         assert_eq!(missing_torch[0].status, "ready");
         assert_eq!(missing_torch[1].status, "version_too_old");
         assert_eq!(missing_torch[1].item, "torch>=2.13");
@@ -2117,7 +2256,7 @@ mod tests {
             "rfdetr.pth.executorch",
             r#"{"modules":[{"name":"rfdetr","present":true},{"name":"executorch.exir","present":true},{"name":"torch","present":false}],"distributions":[{"name":"rfdetr","version":"1.9.0"},{"name":"torch","version":"2.13"}]}"#,
         );
-        assert_eq!(missing_torch_module.len(), 2);
+        assert_eq!(missing_torch_module.len(), 3);
         assert_eq!(missing_torch_module[0].status, "ready");
         assert_eq!(missing_torch_module[1].status, "missing_package");
         assert_eq!(missing_torch_module[1].item, "torch>=2.13");
@@ -2134,7 +2273,7 @@ mod tests {
             "rfdetr.pth.executorch",
             r#"{"modules":[{"name":"rfdetr","present":true},{"name":"executorch.exir","present":false},{"name":"torch","present":true}],"distributions":[{"name":"rfdetr","version":"1.9.0"},{"name":"torch","version":"2.13"}]}"#,
         );
-        assert_eq!(missing_executorch_module.len(), 2);
+        assert_eq!(missing_executorch_module.len(), 3);
         assert_eq!(missing_executorch_module[0].status, "missing_package");
         assert_eq!(
             missing_executorch_module[0].item,
@@ -2144,14 +2283,16 @@ mod tests {
         assert_eq!(missing_executorch_module[1].item, "torch>=2.13");
 
         let old_torch = rows("1.9.0", "2.12.1");
-        assert_eq!(old_torch.len(), 2);
+        assert_eq!(old_torch.len(), 3);
         assert_eq!(old_torch[0].status, "ready");
         assert_eq!(old_torch[1].status, "version_too_old");
         assert_eq!(old_torch[1].install_package.as_deref(), Some("torch>=2.13"));
 
         let both_old = rows("1.8.9", "2.12.1");
-        assert_eq!(both_old.len(), 2);
-        assert!(both_old.iter().all(|row| row.status == "version_too_old"));
+        assert_eq!(both_old.len(), 3);
+        assert_eq!(both_old[0].status, "version_too_old");
+        assert_eq!(both_old[1].status, "version_too_old");
+        assert_eq!(both_old[2].status, "ready");
     }
 
     #[test]

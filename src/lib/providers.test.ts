@@ -109,6 +109,7 @@ describe("provider route registry", () => {
     expect(route?.pipDeps.map((dep) => dep.packageName)).toEqual([
       "rfdetr[executorch]>=1.9.0",
       "torch>=2.13",
+      "flatc",
     ]);
     expect(route?.platformLock).toBe("macos_arm64_linux_windows_x86_64");
     expect(route?.precisionModes).toEqual(["fp32"]);
