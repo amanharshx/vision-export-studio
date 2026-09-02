@@ -520,6 +520,11 @@ fn route_deps(route_id: &str) -> Option<RouteDeps> {
                     install_hint: "pip install \"torch>=2.13\"",
                     optional: false,
                 },
+                PipDep {
+                    package_name: "flatc",
+                    install_hint: "python -m pip install --pre flatc",
+                    optional: false,
+                },
             ],
             sys: &[],
         }),
@@ -663,6 +668,30 @@ fn rfdetr_probe_code(route_id: &str) -> String {
     let distributions =
         serde_json::to_string(&distributions).expect("static distribution names serialize");
 
+    let flatc_code = if route_id == "rfdetr.pth.executorch" {
+        r#"_python_bin = str(_Path(_sys.executable).parent)
+_selected_path = _python_bin + _os.pathsep + _os.environ.get("PATH", "")
+_flatc_ready = bool(
+    _shutil.which("flatc")
+    or _shutil.which("flatc.exe")
+    or _shutil.which("flatc", path=_selected_path)
+    or _shutil.which("flatc.exe", path=_selected_path)
+)
+try:
+    _dist = _metadata.distribution("executorch")
+    for _file in _dist.files or ():
+        _name = str(_file).replace("\\\\", "/")
+        if _name.lower().endswith(("/data/bin/flatc", "/data/bin/flatc.exe")):
+            if _Path(_dist.locate_file(_file)).is_file():
+                _flatc_ready = True
+                break
+except _metadata.PackageNotFoundError:
+    pass"#
+            .to_string()
+    } else {
+        "_flatc_ready = False".to_string()
+    };
+
     format!(
         r#"import importlib.machinery as _machinery
 import importlib.metadata as _metadata
@@ -695,27 +724,11 @@ for _name in _distributions:
     except _metadata.PackageNotFoundError:
         _version = None
     _distribution_rows.append({{"name": _name, "version": _version}})
-_python_bin = str(_Path(_sys.executable).parent)
-_selected_path = _python_bin + _os.pathsep + _os.environ.get("PATH", "")
-_flatc_ready = bool(
-    _shutil.which("flatc")
-    or _shutil.which("flatc.exe")
-    or _shutil.which("flatc", path=_selected_path)
-    or _shutil.which("flatc.exe", path=_selected_path)
-)
-try:
-    _dist = _metadata.distribution("executorch")
-    for _file in _dist.files or ():
-        _name = str(_file).replace("\\\\", "/")
-        if _name.lower().endswith(("/data/bin/flatc", "/data/bin/flatc.exe")):
-            if _Path(_dist.locate_file(_file)).is_file():
-                _flatc_ready = True
-                break
-except _metadata.PackageNotFoundError:
-    pass
+{flatc_code}
 print(_json.dumps({{"modules": _module_rows, "distributions": _distribution_rows, "flatc_ready": _flatc_ready}}))"#,
         modules = modules,
         distributions = distributions,
+        flatc_code = flatc_code,
     )
 }
 
@@ -1356,125 +1369,140 @@ pub async fn install_dependencies(
         python_path.clone()
     };
 
-    // Build argv without parsing install hints or shell fragments.
-    let package_names: Vec<String> = packages
-        .iter()
-        .map(|dependency| dependency.package.clone())
-        .collect();
-    let prerelease = packages.iter().any(|dependency| dependency.prerelease);
-    let mut cmd = build_pip_install_command(&install_python, &package_names, prerelease);
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("failed to spawn pip: {}", e))?;
-
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "no stdout handle".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "no stderr handle".to_string())?;
-
+    let (stable_packages, prerelease_packages) = partition_install_packages(&packages);
     let session_id = Uuid::new_v4().to_string();
-
-    // stdout reader thread
-    let ah_stdout = app_handle.clone();
-    let sid_stdout = session_id.clone();
-    let stdout_handle = std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            match line {
-                Ok(l) => {
-                    let _ = ah_stdout.emit(
-                        "install:stdout",
-                        InstallLinePayload {
-                            session_id: sid_stdout.clone(),
-                            line: l,
-                        },
-                    );
-                }
-                Err(_) => break,
-            }
-        }
-    });
-
-    // stderr reader thread
-    let ah_stderr = app_handle.clone();
-    let sid_stderr = session_id.clone();
-    let stderr_handle = std::thread::spawn(move || {
-        let reader = BufReader::new(stderr);
-        for line in reader.lines() {
-            match line {
-                Ok(l) => {
-                    let _ = ah_stderr.emit(
-                        "install:stderr",
-                        InstallLinePayload {
-                            session_id: sid_stderr.clone(),
-                            line: l,
-                        },
-                    );
-                }
-                Err(_) => break,
-            }
-        }
-    });
-
-    // waiter thread — joins readers then waits on child
     let ah_wait = app_handle.clone();
     let sid_wait = session_id.clone();
     std::thread::spawn(move || {
-        let operation_guard = operation_guard;
-        let _ = stdout_handle.join();
-        let _ = stderr_handle.join();
+        let run_stage = |package_names: &[String], prerelease: bool| {
+            run_pip_install_stage(
+                &ah_wait,
+                &sid_wait,
+                &install_python,
+                package_names,
+                prerelease,
+            )
+        };
+        let result =
+            run_stage(&stable_packages, false).and_then(|_| run_stage(&prerelease_packages, true));
         managed_environments.invalidate(Path::new(&runtime_root), [invalidation_key.as_str()]);
 
-        match child.wait() {
-            Ok(status) => {
-                if status.success() {
-                    emit_after_operation_released(operation_guard, || {
-                        let _ = ah_wait.emit(
-                            "install:finished",
-                            InstallFinishedPayload {
-                                session_id: sid_wait,
-                            },
-                        );
-                    });
-                } else {
-                    let code = status.code().unwrap_or(-1);
-                    emit_after_operation_released(operation_guard, || {
-                        let _ = ah_wait.emit(
-                            "install:failed",
-                            InstallFailedPayload {
-                                session_id: sid_wait,
-                                error: if prerelease {
-                            format!("pip could not install the prerelease dependency (no compatible flatc distribution may exist for this Python/platform); pip exited with code {}. Try a supported Python/platform.", code)
-                        } else {
-                            format!("pip exited with code {}", code)
-                        },
-                            },
-                        );
-                    });
-                }
+        emit_after_operation_released(operation_guard, || {
+            let event = match result {
+                Ok(()) => ("install:finished", None),
+                Err((stage, error)) => (
+                    "install:failed",
+                    Some(if stage {
+                        format!("pip could not install the prerelease dependency (no compatible flatc distribution may exist for this Python/platform); {}; see the streamed pip output.", error)
+                    } else {
+                        error
+                    }),
+                ),
+            };
+            if let Some(error) = event.1 {
+                let _ = ah_wait.emit(
+                    event.0,
+                    InstallFailedPayload {
+                        session_id: sid_wait,
+                        error,
+                    },
+                );
+            } else {
+                let _ = ah_wait.emit(
+                    event.0,
+                    InstallFinishedPayload {
+                        session_id: sid_wait,
+                    },
+                );
             }
-            Err(e) => {
-                emit_after_operation_released(operation_guard, || {
-                    let _ = ah_wait.emit(
-                        "install:failed",
-                        InstallFailedPayload {
-                            session_id: sid_wait,
-                            error: format!("wait error: {}", e),
-                        },
-                    );
-                });
-            }
-        }
+        });
     });
 
     Ok(session_id)
+}
+
+/// Run one pip stage, streaming both output streams into the install session.
+/// The bool in an error identifies the prerelease stage.
+fn run_pip_install_stage(
+    app_handle: &tauri::AppHandle,
+    session_id: &str,
+    python: &str,
+    packages: &[String],
+    prerelease: bool,
+) -> Result<(), (bool, String)> {
+    if packages.is_empty() {
+        return Ok(());
+    }
+    let mut child = build_pip_install_command(python, packages, prerelease)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| (prerelease, format!("failed to spawn pip: {}", error)))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or((prerelease, "no stdout handle".to_string()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or((prerelease, "no stderr handle".to_string()))?;
+    let stdout_handle = stream_install_output(
+        app_handle.clone(),
+        session_id.to_string(),
+        stdout,
+        "install:stdout",
+    );
+    let stderr_handle = stream_install_output(
+        app_handle.clone(),
+        session_id.to_string(),
+        stderr,
+        "install:stderr",
+    );
+    let status = child
+        .wait()
+        .map_err(|error| (prerelease, format!("wait error: {}", error)))?;
+    let _ = stdout_handle.join();
+    let _ = stderr_handle.join();
+    if status.success() {
+        Ok(())
+    } else {
+        Err((
+            prerelease,
+            format!("pip exited with code {}", status.code().unwrap_or(-1)),
+        ))
+    }
+}
+
+fn stream_install_output<R: std::io::Read + Send + 'static>(
+    app_handle: tauri::AppHandle,
+    session_id: String,
+    stream: R,
+    event: &'static str,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        for line in BufReader::new(stream).lines().map_while(Result::ok) {
+            let _ = app_handle.emit(
+                event,
+                InstallLinePayload {
+                    session_id: session_id.clone(),
+                    line,
+                },
+            );
+        }
+    })
+}
+
+fn partition_install_packages(packages: &[InstallableDependency]) -> (Vec<String>, Vec<String>) {
+    packages
+        .iter()
+        .fold((Vec::new(), Vec::new()), |mut groups, dependency| {
+            if dependency.prerelease {
+                groups.1.push(dependency.package.clone());
+            } else {
+                groups.0.push(dependency.package.clone());
+            }
+            groups
+        })
 }
 
 fn build_pip_install_command(python: &str, packages: &[String], prerelease: bool) -> Command {
@@ -1636,6 +1664,22 @@ mod tests {
     }
 
     #[test]
+    fn rfdetr_non_executorch_probes_do_not_discover_flatc() {
+        for route_id in [
+            "rfdetr.pth.onnx",
+            "rfdetr.pth.engine",
+            "rfdetr.pth.coreml",
+            "rfdetr.pth.tflite",
+        ] {
+            let probe = rfdetr_probe_code(route_id);
+            assert!(
+                !probe.contains("which(\"flatc\")"),
+                "unexpected flatc discovery in {route_id}"
+            );
+        }
+    }
+
+    #[test]
     fn rfdetr_routes_declare_exact_module_checks() {
         assert_eq!(rfdetr_probe("rfdetr.pth.onnx").modules, &["rfdetr", "onnx"]);
         assert_eq!(
@@ -1696,6 +1740,76 @@ mod tests {
             "exec({code:?})\nassert 'executorch' not in __import__('sys').modules\nassert 'torch' not in __import__('sys').modules\nassert 'rfdetr' not in __import__('sys').modules",
         );
         probe(python, &code).expect("probe must leave framework modules absent");
+    }
+
+    fn probe_flatc_fixture(kind: &str) -> bool {
+        let python = available_test_python().expect("python3 or python required");
+        let root = std::env::temp_dir().join(format!("ves-flatc-{}-{}", kind, Uuid::new_v4()));
+        let lib = root.join("lib");
+        let bin = root.join("bin");
+        std::fs::create_dir_all(lib.join("executorch/data/bin")).unwrap();
+        std::fs::create_dir_all(lib.join("executorch-1.4.1.dist-info")).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(lib.join("executorch/__init__.py"), "").unwrap();
+        std::fs::write(
+            lib.join("executorch-1.4.1.dist-info/METADATA"),
+            "Name: executorch\nVersion: 1.4.1\n",
+        )
+        .unwrap();
+        let bundled = lib.join("executorch/data/bin/flatc");
+        std::fs::write(&bundled, "").unwrap();
+        std::fs::write(
+            lib.join("executorch-1.4.1.dist-info/RECORD"),
+            "executorch/data/bin/flatc,,\n",
+        )
+        .unwrap();
+        let path_name = if kind == "exe" { "flatc.exe" } else { "flatc" };
+        if kind == "path" || kind == "exe" {
+            std::fs::write(bin.join(path_name), "").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(
+                    bin.join(path_name),
+                    std::fs::Permissions::from_mode(0o755),
+                )
+                .unwrap();
+            }
+        }
+        if kind != "bundled" {
+            std::fs::remove_file(bundled).unwrap();
+        }
+        let root_json = serde_json::to_string(&root).unwrap();
+        let lib_json = serde_json::to_string(&lib).unwrap();
+        let bin_json = serde_json::to_string(&bin).unwrap();
+        let code = format!("import os, sys\nsys.executable = {root_json} + '/fake-python'\nsys.path.insert(0, {lib_json})\nos.environ['PATH']={bin_json} if {kind:?} in ('path', 'exe') else ''\nexec({probe:?})", probe = rfdetr_probe_code("rfdetr.pth.executorch"));
+        let ready = probe(python, &code)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<RfDetrProbeOutput>(&raw).ok())
+            .unwrap()
+            .flatc_ready;
+        let _ = std::fs::remove_dir_all(&root);
+        ready
+    }
+
+    #[test]
+    fn bundled_flatc_fixture_passes_without_path_compiler() {
+        assert!(probe_flatc_fixture("bundled"));
+    }
+
+    #[test]
+    fn path_flatc_fixture_passes_without_bundle() {
+        assert!(probe_flatc_fixture("path"));
+    }
+
+    #[test]
+    fn missing_flatc_fixture_fails_closed() {
+        assert!(!probe_flatc_fixture("neither"));
+    }
+
+    #[test]
+    fn exe_named_flatc_fixture_passes() {
+        assert!(probe_flatc_fixture("exe"));
     }
 
     #[test]
@@ -2000,6 +2114,18 @@ mod tests {
     }
 
     #[test]
+    fn rfdetr_executorch_route_declares_flatc_dependency_row() {
+        let deps = route_deps("rfdetr.pth.executorch").expect("route deps");
+        assert_eq!(
+            deps.pip
+                .iter()
+                .map(|dep| dep.package_name)
+                .collect::<Vec<_>>(),
+            vec!["rfdetr[executorch]>=1.9.0", "torch>=2.13", "flatc"]
+        );
+    }
+
+    #[test]
     fn rfdetr_install_command_targets_stack_python() {
         let command = build_pip_install_command(
             "/tmp/runtime/envs/rfdetr-default/.venv/bin/python",
@@ -2024,6 +2150,35 @@ mod tests {
         assert_eq!(
             command.get_program(),
             "/tmp/runtime/envs/rfdetr-default/.venv/bin/python"
+        );
+    }
+
+    #[test]
+    fn mixed_install_packages_split_pre_release_only_for_the_second_stage() {
+        let packages = vec![
+            InstallableDependency {
+                package: "torch>=2.13".into(),
+                prerelease: false,
+            },
+            InstallableDependency {
+                package: "flatc".into(),
+                prerelease: true,
+            },
+        ];
+        let (stable, prerelease) = partition_install_packages(&packages);
+        assert_eq!(stable, vec!["torch>=2.13"]);
+        assert_eq!(prerelease, vec!["flatc"]);
+        assert_eq!(
+            build_pip_install_command("python", &stable, false)
+                .get_args()
+                .collect::<Vec<_>>(),
+            vec!["-m", "pip", "install", "torch>=2.13"]
+        );
+        assert_eq!(
+            build_pip_install_command("python", &prerelease, true)
+                .get_args()
+                .collect::<Vec<_>>(),
+            vec!["-m", "pip", "install", "--pre", "flatc"]
         );
     }
 

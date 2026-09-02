@@ -73,7 +73,7 @@ export interface RouteSpec {
   title: string;
   backend?: string;
   displayPath: string;
-  pipDeps: Array<{ packageName: string; installHint: string; optional?: boolean; prerelease?: boolean }>;
+  pipDeps: Array<{ packageName: string; installHint: string; optional?: boolean }>;
   sysDeps: Array<{ binaryName: string; installHint: string; optional?: boolean }>;
   platformLock: PlatformLock;
   intermediates: string[];
