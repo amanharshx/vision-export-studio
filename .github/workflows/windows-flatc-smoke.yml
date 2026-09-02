@@ -1,0 +1,38 @@
+# Temporary branch-only experiment. Remove after the Windows flatc log is captured.
+name: Windows flatc smoke
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [fix/executorch-flatc-preflight]
+
+concurrency:
+  group: windows-flatc-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Windows x64 flatc smoke
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+      - name: Create unactivated venv and install executorch
+        shell: pwsh
+        run: |
+          python -m venv .venv-flatc-smoke
+          $py = Join-Path (Get-Location) ".venv-flatc-smoke\Scripts\python.exe"
+          if ($env:VIRTUAL_ENV) { throw "VIRTUAL_ENV is set; do not activate" }
+          & $py -m pip install --upgrade pip
+          & $py -m pip install --no-deps "executorch==1.4.1"
+          & $py scripts/windows_flatc_smoke.py
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Focused Rust flatc fixtures
+        shell: pwsh
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib flatc_fixture

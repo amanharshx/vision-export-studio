@@ -1848,6 +1848,11 @@ mod tests {
             std::fs::create_dir_all(lib.join("flatc/bin")).unwrap();
             std::fs::write(lib.join(format!("flatc/bin/{}", path_name)), "").unwrap();
         }
+        if kind == "wrapper" {
+            let scripts = root.join("Scripts");
+            std::fs::create_dir_all(&scripts).unwrap();
+            std::fs::write(scripts.join(path_name), "").unwrap();
+        }
         if kind == "path" || kind == "exe" {
             std::fs::write(bin.join(path_name), "").unwrap();
             #[cfg(unix)]
@@ -1865,8 +1870,13 @@ mod tests {
         }
         let root_json = serde_json::to_string(&root).unwrap();
         let lib_json = serde_json::to_string(&lib).unwrap();
-        let bin_json = serde_json::to_string(&bin).unwrap();
-        let code = format!("import os, sys\nsys.executable = {root_json} + '/fake-python'\nsys.path.insert(0, {lib_json})\nos.environ['PATH']={bin_json} if {kind:?} in ('path', 'exe') else ''\nexec({probe:?})", probe = rfdetr_probe_code("rfdetr.pth.executorch"));
+        let path_dir = if kind == "wrapper" {
+            root.join("Scripts")
+        } else {
+            bin
+        };
+        let path_json = serde_json::to_string(&path_dir).unwrap();
+        let code = format!("import os, sys\nsys.executable = {root_json} + '/fake-python'\nsys.path.insert(0, {lib_json})\nos.environ['PATH']={path_json} if {kind:?} in ('path', 'exe', 'wrapper') else ''\nexec({probe:?})", probe = rfdetr_probe_code("rfdetr.pth.executorch"));
         let ready = probe(python, &code)
             .ok()
             .and_then(|raw| serde_json::from_str::<RfDetrProbeOutput>(&raw).ok())
@@ -1897,8 +1907,13 @@ mod tests {
     }
 
     #[test]
-    fn flatc_wheel_bin_fixture_passes_without_path_compiler() {
+    fn flatc_fixture_wheel_bin_passes_without_path_compiler() {
         assert!(probe_flatc_fixture("wheel"));
+    }
+
+    #[test]
+    fn flatc_fixture_wrapper_only_fails_closed() {
+        assert!(!probe_flatc_fixture("wrapper"));
     }
 
     #[test]
