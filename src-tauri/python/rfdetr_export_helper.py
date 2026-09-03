@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import inspect
 import json
 import os
 import sys
@@ -86,18 +87,28 @@ def resolve_model_class_symbol(checkpoint):
     return None
 
 
+def _from_checkpoint_accepts_trust_flag(from_checkpoint):
+    """Check the supported upstream signature for trust_checkpoint.
+
+    RF-DETR 1.9.0 declares trust_checkpoint explicitly; older releases only
+    forward **kwargs into strict model configuration, so the flag must not
+    be sent based on **kwargs presence.
+    """
+    try:
+        return "trust_checkpoint" in inspect.signature(from_checkpoint).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 def load_model_for_inspect(checkpoint_path, checkpoint=None):
     module = __import__("rfdetr", fromlist=["from_checkpoint"])
     from_checkpoint = getattr(module, "from_checkpoint", None)
     if callable(from_checkpoint):
         # The Rust command only runs inspect after explicit user trust, so
-        # forward that confirmed trust to upstream loading.
-        try:
+        # forward that confirmed trust when the supported signature accepts it.
+        if _from_checkpoint_accepts_trust_flag(from_checkpoint):
             return from_checkpoint(checkpoint_path, trust_checkpoint=True)
-        except TypeError as exc:
-            if "trust_checkpoint" not in str(exc):
-                raise
-            return from_checkpoint(checkpoint_path)
+        return from_checkpoint(checkpoint_path)
 
     checkpoint = checkpoint if checkpoint is not None else load_checkpoint(checkpoint_path)
     class_symbol = resolve_model_class_symbol(checkpoint)
@@ -283,35 +294,20 @@ def inspect_checkpoint(checkpoint_path):
                 native["recommended_imgsz"] is None
                 or native["patch_size"] is None
                 or native["num_windows"] is None
+                or native["resolution_source"] not in ("saved_model_config", "model_config")
             )
         ):
-            # Saved geometry is incomplete but the checkpoint class is known.
-            # The Rust command only reaches here after explicit user trust,
-            # which load_model_for_inspect forwards to from_checkpoint.
-            # Merge: keep already-resolved checkpoint values and use the
-            # loaded model only to fill missing fields.
+            # Checkpoint geometry is missing or weaker than the loaded model
+            # configuration. The Rust command only reaches here after explicit
+            # user trust, which load_model_for_inspect forwards when supported.
+            # Re-resolve once with every source; precedence and validation
+            # stay in infer_native_export_shape, the single owner.
             try:
                 model = load_model_for_inspect(checkpoint_path, checkpoint)
             except Exception:
                 model = None
             if model is not None:
-                filled = infer_native_export_shape(checkpoint_path, model, checkpoint)
-                for key in ("recommended_imgsz", "patch_size", "num_windows"):
-                    if native[key] is None:
-                        native[key] = filled[key]
-                if native["recommended_imgsz"] is not None and native["resolution_source"] is None:
-                    native["resolution_source"] = filled["resolution_source"]
-                patch_size = native["patch_size"]
-                num_windows = native["num_windows"]
-                native["required_multiple"] = (
-                    patch_size * num_windows
-                    if patch_size is not None and num_windows is not None
-                    else None
-                )
-                if native["recommended_imgsz"] is not None and patch_size:
-                    native["token_grid"] = native["recommended_imgsz"] // patch_size
-                else:
-                    native["token_grid"] = None
+                native = infer_native_export_shape(checkpoint_path, model, checkpoint)
         emit({
             "success": success,
             "class_symbol": class_symbol,

@@ -170,6 +170,20 @@ class RfDetrExportHelperTests(unittest.TestCase):
                 "required_multiple": 32, "token_grid": 32,
                 "resolution_source": "args",
             }),
+            ("invalid_saved_resolution_falls_through", {
+                "model_config": {"resolution": 518, "patch_size": 14, "num_windows": 4},
+            }, None, {
+                "recommended_imgsz": None, "patch_size": 14, "num_windows": 4,
+                "required_multiple": 56, "token_grid": None,
+                "resolution_source": None,
+            }),
+            ("model_fields_outrank_conflicting_args",
+             {"args": {"resolution": 560, "patch_size": 14, "num_windows": 4}},
+             model_512, {
+                 "recommended_imgsz": 512, "patch_size": 16, "num_windows": 2,
+                 "required_multiple": 32, "token_grid": 32,
+                 "resolution_source": "model_config",
+             }),
             ("incomplete", {}, None, {
                 "recommended_imgsz": None, "patch_size": None, "num_windows": None,
                 "required_multiple": None, "token_grid": None,
@@ -227,6 +241,15 @@ class RfDetrExportHelperTests(unittest.TestCase):
             ("seg_medium", "RFDETRSegMedium",
              {"resolution": 480, "patch_size": 12, "num_windows": 2},
              "segmentation", 24, 0, True, False),
+            ("seg_large", "RFDETRSegLarge",
+             {"resolution": 504, "patch_size": 12, "num_windows": 2},
+             "segmentation", 24, 0, True, False),
+            ("seg_xlarge", "RFDETRSegXLarge",
+             {"resolution": 624, "patch_size": 12, "num_windows": 2},
+             "segmentation", 24, 0, True, False),
+            ("seg_2xlarge", "RFDETRSeg2XLarge",
+             {"resolution": 768, "patch_size": 12, "num_windows": 2},
+             "segmentation", 24, 0, True, False),
             ("plus_only", "RFDETRXLarge",
              {"resolution": 704, "patch_size": 16, "num_windows": 2},
              "detection", 32, 2, False, False),
@@ -279,10 +302,10 @@ class RfDetrExportHelperTests(unittest.TestCase):
         self.assertEqual(captured["required_multiple"], 32)
         self.assertEqual(captured["resolution_source"], "model_config")
 
-    def test_inspect_preserves_legacy_resolution_when_model_fills_missing_fields(self):
-        # Legacy args carry a custom 640 resolution without patch info; the
-        # loaded model supplies patch/windows but must not replace 640 with
-        # its own 512 default.
+    def test_inspect_prefers_valid_loaded_model_resolution_over_legacy_args(self):
+        # Legacy args carry 640 without patch info; the loaded model supplies
+        # 512/16/2. Precedence is saved > model > args with validity filtering,
+        # so the valid loaded-model resolution wins in a single re-resolve.
         checkpoint = {"model_name": "RFDETRSmall", "args": {"resolution": 640}}
         loaded = SimpleNamespace(
             model_config=SimpleNamespace(resolution=512, patch_size=16, num_windows=2)
@@ -298,11 +321,33 @@ class RfDetrExportHelperTests(unittest.TestCase):
                     result = helper.inspect_checkpoint("/tmp/model.pth")
 
         self.assertEqual(result, 0)
-        self.assertEqual(captured["recommended_imgsz"], 640)
-        self.assertEqual(captured["resolution_source"], "args")
+        self.assertEqual(captured["recommended_imgsz"], 512)
+        self.assertEqual(captured["resolution_source"], "model_config")
         self.assertEqual(captured["patch_size"], 16)
         self.assertEqual(captured["required_multiple"], 32)
-        self.assertEqual(captured["token_grid"], 40)
+        self.assertEqual(captured["token_grid"], 32)
+
+    def test_inspect_rejects_invalid_legacy_resolution_after_model_load(self):
+        # Args 518 against loaded 560/14/4 (block 56): 518 is invalid and
+        # must fall through instead of pairing with the model multiple.
+        checkpoint = {"model_name": "RFDETRBase", "args": {"resolution": 518}}
+        loaded = SimpleNamespace(
+            model_config=SimpleNamespace(resolution=560, patch_size=14, num_windows=4)
+        )
+        captured = {}
+
+        def fake_emit(payload):
+            captured.update(payload)
+
+        with patch.object(helper, "load_checkpoint", return_value=checkpoint):
+            with patch.object(helper, "load_model_for_inspect", return_value=loaded):
+                with patch.object(helper, "emit", side_effect=fake_emit):
+                    result = helper.inspect_checkpoint("/tmp/model.pth")
+
+        self.assertEqual(result, 0)
+        self.assertEqual(captured["recommended_imgsz"], 560)
+        self.assertEqual(captured["resolution_source"], "model_config")
+        self.assertEqual(captured["required_multiple"], 56)
 
     def test_inspect_keeps_checkpoint_geometry_when_model_load_fails(self):
         incomplete = {"model_name": "RFDETRSmall"}
@@ -354,37 +399,32 @@ class RfDetrExportHelperTests(unittest.TestCase):
         self.assertIn("torch load boom", failure_captured["error"])
 
     def test_load_model_for_inspect_forwards_confirmed_trust(self):
-        from_checkpoint = Mock(return_value=SimpleNamespace())
+        seen = {}
+
+        def from_checkpoint(path, trust_checkpoint=False):
+            seen["kwargs"] = {"trust_checkpoint": trust_checkpoint}
+            return SimpleNamespace()
+
         fake_module = types.SimpleNamespace(from_checkpoint=from_checkpoint)
 
         with patch("builtins.__import__", return_value=fake_module):
             helper.load_model_for_inspect("/tmp/model.pth")
 
-        from_checkpoint.assert_called_once_with("/tmp/model.pth", trust_checkpoint=True)
+        self.assertEqual(seen["kwargs"], {"trust_checkpoint": True})
 
-    def test_load_model_for_inspect_falls_back_without_trust_flag(self):
-        sentinel = SimpleNamespace()
-        from_checkpoint = Mock(side_effect=[
-            TypeError("from_checkpoint() got an unexpected keyword argument 'trust_checkpoint'"),
-            sentinel,
-        ])
+    def test_load_model_for_inspect_omits_trust_flag_on_legacy_signature(self):
+        seen = {}
+
+        def from_checkpoint(path, **kwargs):
+            seen["kwargs"] = kwargs
+            return SimpleNamespace()
+
         fake_module = types.SimpleNamespace(from_checkpoint=from_checkpoint)
 
         with patch("builtins.__import__", return_value=fake_module):
-            model = helper.load_model_for_inspect("/tmp/model.pth")
+            helper.load_model_for_inspect("/tmp/model.pth")
 
-        self.assertIs(model, sentinel)
-        self.assertEqual(from_checkpoint.call_count, 2)
-
-    def test_load_model_for_inspect_reraises_unrelated_type_errors(self):
-        from_checkpoint = Mock(side_effect=TypeError("bad pretrain weights"))
-        fake_module = types.SimpleNamespace(from_checkpoint=from_checkpoint)
-
-        with patch("builtins.__import__", return_value=fake_module):
-            with self.assertRaises(TypeError):
-                helper.load_model_for_inspect("/tmp/model.pth")
-
-        from_checkpoint.assert_called_once_with("/tmp/model.pth", trust_checkpoint=True)
+        self.assertEqual(seen["kwargs"], {})
 
     def test_empty_failure_carries_new_geometry_fields(self):
         failure = helper.empty_failure("boom")
