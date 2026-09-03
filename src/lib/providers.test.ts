@@ -273,7 +273,10 @@ const rfdInspect512: RfDetrInspectResult = {
   is_legacy: false,
   recommended_imgsz: 512,
   patch_size: 16,
+  num_windows: 2,
+  required_multiple: 32,
   token_grid: 32,
+  resolution_source: "saved_model_config",
   error: null,
 };
 
@@ -286,7 +289,10 @@ const rfdInspectFailed: RfDetrInspectResult = {
   is_legacy: false,
   recommended_imgsz: null,
   patch_size: null,
+  num_windows: null,
+  required_multiple: null,
   token_grid: null,
+  resolution_source: null,
   error: "failed",
 };
 

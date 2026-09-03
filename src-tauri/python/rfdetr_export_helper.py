@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import inspect
 import json
 import os
 import sys
@@ -39,7 +40,10 @@ def empty_failure(message):
         "is_legacy": False,
         "recommended_imgsz": None,
         "patch_size": None,
+        "num_windows": None,
+        "required_multiple": None,
         "token_grid": None,
+        "resolution_source": None,
         "error": message,
     }
 
@@ -87,6 +91,17 @@ def load_model_for_inspect(checkpoint_path, checkpoint=None):
     module = __import__("rfdetr", fromlist=["from_checkpoint"])
     from_checkpoint = getattr(module, "from_checkpoint", None)
     if callable(from_checkpoint):
+        # The Rust command only runs inspect after explicit user trust, so
+        # forward that confirmed trust when RFDETR.from_checkpoint declares
+        # it. The public wrapper keeps (path, **kwargs) and forwards.
+        try:
+            declares_trust = "trust_checkpoint" in inspect.signature(
+                module.RFDETR.from_checkpoint
+            ).parameters
+        except (TypeError, ValueError, AttributeError):
+            declares_trust = False
+        if declares_trust:
+            return from_checkpoint(checkpoint_path, trust_checkpoint=True)
         return from_checkpoint(checkpoint_path)
 
     checkpoint = checkpoint if checkpoint is not None else load_checkpoint(checkpoint_path)
@@ -98,111 +113,177 @@ def load_model_for_inspect(checkpoint_path, checkpoint=None):
     return model_class(pretrain_weights=checkpoint_path)
 
 
-def resolve_patch_size(model):
-    model_config = getattr(model, "model_config", None)
-    patch_size = getattr(model_config, "patch_size", None)
-    if patch_size is None:
-        patch_size = 16
-    return int(patch_size)
+def _as_positive_int(value):
+    """Return value when it is a positive int, else None.
+
+    Anything else (strings, floats, bools, index-like objects) counts as
+    malformed metadata and falls through to weaker sources.
+    """
+    if isinstance(value, bool):
+        return None
+    if type(value) is not int:
+        return None
+    return value if value > 0 else None
+
+
+def _field_from_container(container, key):
+    if container is None:
+        return None
+    if isinstance(container, dict):
+        return container.get(key)
+    return getattr(container, key, None)
+
+
+def _read_resolution_patch_windows(container, *, is_args=False):
+    """Read (resolution, patch_size, num_windows) from a config-like container."""
+    if container is None:
+        return (None, None, None)
+    if is_args:
+        resolution = None
+        for key in ("resolution", "imgsz", "img_size", "image_size"):
+            candidate = _as_positive_int(_field_from_container(container, key))
+            if candidate is not None:
+                resolution = candidate
+                break
+    else:
+        resolution = _as_positive_int(_field_from_container(container, "resolution"))
+    patch_size = _as_positive_int(_field_from_container(container, "patch_size"))
+    num_windows = _as_positive_int(_field_from_container(container, "num_windows"))
+    return (resolution, patch_size, num_windows)
+
+
+def _first_present(*pairs):
+    """Return (value, source) for the first pair whose value is not None."""
+    for value, source in pairs:
+        if value is not None:
+            return (value, source)
+    return (None, None)
 
 
 def infer_native_export_shape(checkpoint_path, model, checkpoint=None):
     import math
 
-    # primary: model.model_config
-    try:
-        cfg = model.model_config
-        resolution = int(cfg.resolution)
-        patch_size = int(cfg.patch_size)
-        if resolution > 0 and patch_size > 0:
-            token_grid = resolution // patch_size
-            print(
-                "[rfdetr-inspect] source=model_config resolution={} patch_size={} token_grid={}".format(
-                    resolution, patch_size, token_grid
-                ),
-                file=sys.stderr,
-                flush=True,
-            )
-            return {
-                "recommended_imgsz": resolution,
-                "patch_size": patch_size,
-                "token_grid": token_grid,
-            }
-    except Exception:
-        pass
-
-    # fallback: checkpoint args / position_embeddings
     try:
         checkpoint = checkpoint if checkpoint is not None else load_checkpoint(checkpoint_path)
-
-        # try args
-        args = checkpoint.get("args")
-        if args is not None:
-            resolution = None
-            if hasattr(args, "resolution"):
-                resolution = int(args.resolution)
-            elif isinstance(args, dict):
-                if "resolution" in args:
-                    resolution = int(args["resolution"])
-                else:
-                    for key in ("imgsz", "img_size", "image_size"):
-                        if key in args:
-                            resolution = int(args[key])
-                            break
-            if resolution is not None:
-                patch_size = resolve_patch_size(model)
-                print(
-                    "[rfdetr-inspect] source=args resolution={} patch_size={} token_grid={}".format(
-                        resolution,
-                        patch_size,
-                        resolution // patch_size,
-                    ),
-                    file=sys.stderr,
-                    flush=True,
-                )
-                return {
-                    "recommended_imgsz": resolution,
-                    "patch_size": patch_size,
-                    "token_grid": resolution // patch_size,
-                }
-
-        # try position embeddings
-        state_dict = checkpoint.get("state_dict") if isinstance(checkpoint.get("state_dict"), dict) else None
-        model_dict = checkpoint.get("model") if isinstance(checkpoint.get("model"), dict) else None
-
-        pos_emb = None
-        for state, key in (
-            (model_dict, "backbone.0.encoder.encoder.embeddings.position_embeddings"),
-            (state_dict, "model.backbone.0.encoder.encoder.embeddings.position_embeddings"),
-        ):
-            if isinstance(state, dict) and key in state:
-                pos_emb = state[key]
-                break
-
-        if pos_emb is not None:
-            num_tokens = int(pos_emb.shape[1]) - 1
-            tokens = int(math.isqrt(num_tokens))
-            patch_size = resolve_patch_size(model)
-            recommended = tokens * patch_size
-            print(
-                "[rfdetr-inspect] source=position_embeddings tokens={} patch_size={} recommended={}".format(
-                    tokens,
-                    patch_size,
-                    recommended,
-                ),
-                file=sys.stderr,
-                flush=True,
-            )
-            return {
-                "recommended_imgsz": recommended,
-                "patch_size": patch_size,
-                "token_grid": tokens,
-            }
     except Exception:
-        pass
+        checkpoint = None
 
-    print("[rfdetr-inspect] source=failed", file=sys.stderr, flush=True)
-    return {"recommended_imgsz": None, "patch_size": None, "token_grid": None}
+    saved_container = None
+    if isinstance(checkpoint, dict):
+        saved_candidate = checkpoint.get("model_config")
+        if isinstance(saved_candidate, dict):
+            saved_container = saved_candidate
+    saved_resolution, saved_patch, saved_windows = _read_resolution_patch_windows(saved_container)
+
+    model_container = getattr(model, "model_config", None) if model is not None else None
+    model_resolution, model_patch, model_windows = _read_resolution_patch_windows(model_container)
+
+    args_container = checkpoint.get("args") if isinstance(checkpoint, dict) else None
+    args_resolution, args_patch, args_windows = _read_resolution_patch_windows(
+        args_container, is_args=True
+    )
+
+    # Strongest wins per field; weaker sources only fill gaps. Resolution
+    # keeps checkpoint args ahead of the loaded-model default so custom
+    # training resolutions survive; patch/windows prefer the loaded model
+    # over args. The selected resolution is validated against the final
+    # patch_size * num_windows below.
+    patch_size, patch_source = _first_present(
+        (saved_patch, "saved_model_config"),
+        (model_patch, "model_config"),
+        (args_patch, "args"),
+    )
+    num_windows, num_windows_source = _first_present(
+        (saved_windows, "saved_model_config"),
+        (model_windows, "model_config"),
+        (args_windows, "args"),
+    )
+    required_multiple = (
+        patch_size * num_windows
+        if patch_size is not None and num_windows is not None
+        else None
+    )
+
+    # Every resolution candidate must satisfy the block size. An invalid
+    # stronger candidate falls through to the next valid source.
+    candidates = []
+    if saved_resolution is not None:
+        candidates.append((saved_resolution, "saved_model_config"))
+    if args_resolution is not None:
+        candidates.append((args_resolution, "args"))
+    if model_resolution is not None:
+        candidates.append((model_resolution, "model_config"))
+
+    resolution = None
+    resolution_source = None
+    token_grid = None
+    for value, source in candidates:
+        if required_multiple is not None and value % required_multiple != 0:
+            continue
+        resolution = value
+        resolution_source = source
+        token_grid = resolution // patch_size if patch_size else None
+        break
+    if resolution is None:
+        # Weakest source: derive resolution from position embeddings. Only
+        # accept it when divisible by the model block size; e.g. RF-DETR
+        # Base reports 37x37 tokens at patch 14 (518px) but requires
+        # multiples of 14*4=56, so 518 must stay incomplete.
+        try:
+            pos_emb = None
+            if isinstance(checkpoint, dict):
+                for weight_key in ("model", "state_dict"):
+                    state = checkpoint.get(weight_key)
+                    if isinstance(state, dict):
+                        for key, value in state.items():
+                            if isinstance(key, str) and key.endswith("embeddings.position_embeddings"):
+                                pos_emb = value
+                                break
+                        if pos_emb is not None:
+                            break
+            if pos_emb is not None and patch_size and num_windows:
+                num_tokens = int(pos_emb.shape[1]) - 1
+                if num_tokens > 0:
+                    tokens = int(math.isqrt(num_tokens))
+                    if tokens > 0 and tokens * tokens == num_tokens:
+                        candidate = tokens * patch_size
+                        if candidate % (patch_size * num_windows) == 0:
+                            resolution = candidate
+                            token_grid = tokens
+                            resolution_source = "position_embeddings"
+        except (AttributeError, IndexError, TypeError, ValueError):
+            pass
+
+    if resolution is None:
+        print("[rfdetr-inspect] source=failed", file=sys.stderr, flush=True)
+        return {
+            "recommended_imgsz": None,
+            "patch_size": patch_size,
+            "num_windows": num_windows,
+            "required_multiple": required_multiple,
+            "token_grid": None,
+            "resolution_source": None,
+            "patch_source": patch_source,
+            "num_windows_source": num_windows_source,
+        }
+
+    print(
+        "[rfdetr-inspect] source={} resolution={} patch_size={} num_windows={} required_multiple={} token_grid={}".format(
+            resolution_source, resolution, patch_size, num_windows, required_multiple, token_grid
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
+    return {
+        "recommended_imgsz": resolution,
+        "patch_size": patch_size,
+        "num_windows": num_windows,
+        "required_multiple": required_multiple,
+        "token_grid": token_grid,
+        "resolution_source": resolution_source,
+        "patch_source": patch_source,
+        "num_windows_source": num_windows_source,
+    }
 
 
 def inspect_checkpoint(checkpoint_path):
@@ -217,6 +298,23 @@ def inspect_checkpoint(checkpoint_path):
         family = class_family(class_symbol)
         success = family is not None and not requires_plus
         native = infer_native_export_shape(checkpoint_path, model, checkpoint)
+        fully_saved = (
+            native["resolution_source"] == "saved_model_config"
+            and native["patch_source"] == "saved_model_config"
+            and native["num_windows_source"] == "saved_model_config"
+        )
+        if model is None and not requires_plus and not fully_saved:
+            # Checkpoint geometry is missing or weaker than the loaded model
+            # configuration. The Rust command only reaches here after explicit
+            # user trust, which load_model_for_inspect forwards when supported.
+            # Re-resolve once with every source; precedence and validation
+            # stay in infer_native_export_shape, the single owner.
+            try:
+                model = load_model_for_inspect(checkpoint_path, checkpoint)
+            except Exception:
+                model = None
+            if model is not None:
+                native = infer_native_export_shape(checkpoint_path, model, checkpoint)
         emit({
             "success": success,
             "class_symbol": class_symbol,
@@ -226,7 +324,10 @@ def inspect_checkpoint(checkpoint_path):
             "is_legacy": class_symbol in LEGACY_CLASSES,
             "recommended_imgsz": native["recommended_imgsz"],
             "patch_size": native["patch_size"],
+            "num_windows": native["num_windows"],
+            "required_multiple": native["required_multiple"],
             "token_grid": native["token_grid"],
+            "resolution_source": native["resolution_source"],
             "error": (
                 f"{class_symbol} requires rfdetr_plus support and is not supported in v1."
                 if requires_plus else None

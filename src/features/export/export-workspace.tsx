@@ -1970,7 +1970,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         is_legacy: false,
         recommended_imgsz: null,
         patch_size: null,
+        num_windows: null,
+        required_multiple: null,
         token_grid: null,
+        resolution_source: null,
         error: String(error),
       });
       setRfDetrInspectStatus("failed");
@@ -2546,7 +2549,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
               )}
               {rfdetrInspectStatus === "inspecting" && <p>Inspecting RF-DETR checkpoint...</p>}
               {rfdetrInspectStatus === "detected" && rfdetrInspectResult && (
-                <p>Detected: <span className="font-mono">{rfdetrInspectResult.class_symbol}</span>{rfdetrInspectResult.is_legacy ? " (legacy)" : ""}</p>
+                <p>Detected: <span className="font-mono">{rfdetrInspectResult.class_symbol}</span>{rfdetrInspectResult.is_legacy ? " (legacy)" : ""}{rfdetrInspectResult.recommended_imgsz ? ` · native ${rfdetrInspectResult.recommended_imgsz}px` : ""}{rfdetrInspectResult.required_multiple ? ` · multiple ${rfdetrInspectResult.required_multiple}` : ""}</p>
               )}
               {rfdetrInspectStatus === "failed" && (
                 <div className="space-y-3">

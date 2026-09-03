@@ -163,7 +163,10 @@ export interface RfDetrInspectResult {
   is_legacy: boolean;
   recommended_imgsz: number | null;
   patch_size: number | null;
+  num_windows: number | null;
+  required_multiple: number | null;
   token_grid: number | null;
+  resolution_source: string | null;
   error: string | null;
 }
 
