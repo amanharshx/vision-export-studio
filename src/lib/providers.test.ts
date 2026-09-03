@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createElement, Fragment } from "react";
 import {
   withRfDetrDetectedDefaults,
+  formatRfDetrGeometrySummary,
   getRouteOptionsForOpen,
   applyDetectedRouteOptions,
   applyDetectedRouteOptionsToProviderRoutes,
@@ -273,7 +274,10 @@ const rfdInspect512: RfDetrInspectResult = {
   is_legacy: false,
   recommended_imgsz: 512,
   patch_size: 16,
+  num_windows: 2,
+  required_multiple: 32,
   token_grid: 32,
+  resolution_source: "saved_model_config",
   error: null,
 };
 
@@ -286,7 +290,10 @@ const rfdInspectFailed: RfDetrInspectResult = {
   is_legacy: false,
   recommended_imgsz: null,
   patch_size: null,
+  num_windows: null,
+  required_multiple: null,
   token_grid: null,
+  resolution_source: null,
   error: "failed",
 };
 
@@ -321,6 +328,46 @@ describe("withRfDetrDetectedDefaults", () => {
     expect(result.imgsz).toBe(512);
     expect(result.precision).toBe("fp16");
     expect(result.simplify).toBe(true);
+  });
+});
+
+describe("formatRfDetrGeometrySummary", () => {
+  test("summarizes native size and required multiple", () => {
+    expect(formatRfDetrGeometrySummary(rfdInspect512)).toBe("native 512px · multiple 32");
+  });
+
+  test("returns null for failed or null inspect", () => {
+    expect(formatRfDetrGeometrySummary(rfdInspectFailed)).toBeNull();
+    expect(formatRfDetrGeometrySummary(null)).toBeNull();
+  });
+
+  test("derives multiple from patch and windows when required_multiple missing", () => {
+    const inspect: RfDetrInspectResult = {
+      ...rfdInspect512,
+      required_multiple: null,
+    };
+    expect(formatRfDetrGeometrySummary(inspect)).toBe("native 512px · multiple 32");
+  });
+
+  test("summarizes custom training resolution without preset replacement", () => {
+    const custom: RfDetrInspectResult = {
+      ...rfdInspect512,
+      recommended_imgsz: 640,
+      token_grid: 40,
+      resolution_source: "saved_model_config",
+    };
+    expect(formatRfDetrGeometrySummary(custom)).toBe("native 640px · multiple 32");
+  });
+
+  test("returns null when geometry is incomplete", () => {
+    const incomplete: RfDetrInspectResult = {
+      ...rfdInspect512,
+      recommended_imgsz: null,
+      required_multiple: null,
+      patch_size: null,
+      num_windows: null,
+    };
+    expect(formatRfDetrGeometrySummary(incomplete)).toBeNull();
   });
 });
 

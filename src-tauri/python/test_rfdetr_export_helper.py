@@ -113,15 +113,228 @@ class RfDetrExportHelperTests(unittest.TestCase):
         load_model.assert_not_called()
 
     def test_infer_native_export_shape_prefers_model_config(self):
-        model = SimpleNamespace(model_config=SimpleNamespace(resolution=512, patch_size=16))
+        model = SimpleNamespace(model_config=SimpleNamespace(resolution=512, patch_size=16, num_windows=2))
 
         native = helper.infer_native_export_shape("/tmp/model.pth", model, checkpoint={})
 
         self.assertEqual(native, {
             "recommended_imgsz": 512,
             "patch_size": 16,
+            "num_windows": 2,
+            "required_multiple": 32,
             "token_grid": 32,
+            "resolution_source": "model_config",
         })
+
+    def test_infer_prefers_saved_model_config_over_model_config(self):
+        checkpoint = {"model_config": {"resolution": 640, "patch_size": 16, "num_windows": 2}}
+        model = SimpleNamespace(model_config=SimpleNamespace(resolution=512, patch_size=16, num_windows=2))
+
+        native = helper.infer_native_export_shape("/tmp/model.pth", model, checkpoint=checkpoint)
+
+        self.assertEqual(native["recommended_imgsz"], 640)
+        self.assertEqual(native["patch_size"], 16)
+        self.assertEqual(native["num_windows"], 2)
+        self.assertEqual(native["required_multiple"], 32)
+        self.assertEqual(native["token_grid"], 40)
+        self.assertEqual(native["resolution_source"], "saved_model_config")
+
+    def test_infer_preserves_custom_training_resolution(self):
+        checkpoint = {"model_config": {"resolution": 640, "patch_size": 16, "num_windows": 2}}
+        model = SimpleNamespace(model_config=SimpleNamespace(resolution=640, patch_size=16, num_windows=2))
+
+        native = helper.infer_native_export_shape("/tmp/model.pth", model, checkpoint=checkpoint)
+
+        # Custom 640 for a Small variant must not be replaced by the 512 family preset.
+        self.assertEqual(native["recommended_imgsz"], 640)
+        self.assertEqual(native["resolution_source"], "saved_model_config")
+
+    def test_infer_falls_back_to_legacy_args_without_replacing_stronger_source(self):
+        checkpoint = {
+            "model_config": {"resolution": 640, "patch_size": 16, "num_windows": 2},
+            "args": {"resolution": 512, "patch_size": 14, "num_windows": 4},
+        }
+        model = SimpleNamespace(model_config=SimpleNamespace(resolution=512, patch_size=16, num_windows=2))
+
+        native = helper.infer_native_export_shape("/tmp/model.pth", model, checkpoint=checkpoint)
+
+        self.assertEqual(native["recommended_imgsz"], 640)
+        self.assertEqual(native["resolution_source"], "saved_model_config")
+        self.assertEqual(native["patch_size"], 16)
+        self.assertEqual(native["num_windows"], 2)
+
+    def test_infer_uses_legacy_args_when_stronger_sources_missing(self):
+        checkpoint = {"args": {"resolution": 560, "patch_size": 14, "num_windows": 4}}
+
+        native = helper.infer_native_export_shape("/tmp/model.pth", None, checkpoint=checkpoint)
+
+        self.assertEqual(native, {
+            "recommended_imgsz": 560,
+            "patch_size": 14,
+            "num_windows": 4,
+            "required_multiple": 56,
+            "token_grid": 40,
+            "resolution_source": "args",
+        })
+
+    def test_infer_reads_namespace_args(self):
+        checkpoint = {"args": SimpleNamespace(resolution=384, patch_size=16, num_windows=2)}
+
+        native = helper.infer_native_export_shape("/tmp/model.pth", None, checkpoint=checkpoint)
+
+        self.assertEqual(native["recommended_imgsz"], 384)
+        self.assertEqual(native["required_multiple"], 32)
+        self.assertEqual(native["resolution_source"], "args")
+
+    def test_infer_derives_resolution_from_position_embeddings(self):
+        checkpoint = {
+            "model_name": "RFDETRSmall",
+            "state_dict": {
+                "model.backbone.0.encoder.encoder.embeddings.position_embeddings": SimpleNamespace(
+                    shape=(1, 1025, 384)
+                ),
+            },
+        }
+        model = SimpleNamespace(model_config=SimpleNamespace(patch_size=16, num_windows=2))
+
+        native = helper.infer_native_export_shape("/tmp/model.pth", model, checkpoint=checkpoint)
+
+        self.assertEqual(native["recommended_imgsz"], 512)
+        self.assertEqual(native["token_grid"], 32)
+        self.assertEqual(native["required_multiple"], 32)
+        self.assertEqual(native["resolution_source"], "position_embeddings")
+
+    def test_infer_ignores_malformed_metadata_and_falls_through(self):
+        checkpoint = {
+            "model_config": {"resolution": "bad", "patch_size": -1, "num_windows": 0},
+            "args": {"resolution": 512, "patch_size": 16, "num_windows": 2},
+        }
+
+        native = helper.infer_native_export_shape("/tmp/model.pth", None, checkpoint=checkpoint)
+
+        self.assertEqual(native["recommended_imgsz"], 512)
+        self.assertEqual(native["resolution_source"], "args")
+
+    def test_infer_returns_incomplete_geometry_without_crashing(self):
+        native = helper.infer_native_export_shape("/tmp/model.pth", None, checkpoint={})
+
+        self.assertEqual(native, {
+            "recommended_imgsz": None,
+            "patch_size": None,
+            "num_windows": None,
+            "required_multiple": None,
+            "token_grid": None,
+            "resolution_source": None,
+        })
+
+    def test_infer_reports_segmentation_geometry(self):
+        checkpoint = {"model_config": {"resolution": 384, "patch_size": 12, "num_windows": 2}}
+
+        native = helper.infer_native_export_shape("/tmp/model.pth", None, checkpoint=checkpoint)
+
+        self.assertEqual(native["recommended_imgsz"], 384)
+        self.assertEqual(native["required_multiple"], 24)
+        self.assertEqual(native["resolution_source"], "saved_model_config")
+
+    def test_inspect_reports_full_geometry_for_detection_variant(self):
+        checkpoint = {
+            "model_name": "RFDETRSmall",
+            "model_config": {"resolution": 512, "patch_size": 16, "num_windows": 2},
+        }
+        captured = {}
+
+        def fake_emit(payload):
+            captured.update(payload)
+
+        with patch.object(helper, "load_checkpoint", return_value=checkpoint):
+            with patch.object(helper, "emit", side_effect=fake_emit):
+                result = helper.inspect_checkpoint("/tmp/model.pth")
+
+        self.assertEqual(result, 0)
+        self.assertTrue(captured["success"])
+        self.assertEqual(captured["family"], "detection")
+        self.assertEqual(captured["recommended_imgsz"], 512)
+        self.assertEqual(captured["patch_size"], 16)
+        self.assertEqual(captured["num_windows"], 2)
+        self.assertEqual(captured["required_multiple"], 32)
+        self.assertEqual(captured["resolution_source"], "saved_model_config")
+        self.assertIsNone(captured["error"])
+
+    def test_inspect_reports_full_geometry_for_segmentation_variant(self):
+        checkpoint = {
+            "model_name": "RFDETRSegSmall",
+            "model_config": {"resolution": 384, "patch_size": 12, "num_windows": 2},
+        }
+        captured = {}
+
+        def fake_emit(payload):
+            captured.update(payload)
+
+        with patch.object(helper, "load_checkpoint", return_value=checkpoint):
+            with patch.object(helper, "emit", side_effect=fake_emit):
+                result = helper.inspect_checkpoint("/tmp/model.pth")
+
+        self.assertEqual(result, 0)
+        self.assertEqual(captured["family"], "segmentation")
+        self.assertEqual(captured["required_multiple"], 24)
+        self.assertEqual(captured["resolution_source"], "saved_model_config")
+
+    def test_inspect_marks_plus_only_unsupported_with_geometry(self):
+        checkpoint = {
+            "model_name": "RFDETRXLarge",
+            "model_config": {"resolution": 704, "patch_size": 16, "num_windows": 2},
+        }
+        captured = {}
+
+        def fake_emit(payload):
+            captured.update(payload)
+
+        with patch.object(helper, "load_checkpoint", return_value=checkpoint):
+            with patch.object(helper, "emit", side_effect=fake_emit):
+                result = helper.inspect_checkpoint("/tmp/model.pth")
+
+        self.assertEqual(result, 2)
+        self.assertFalse(captured["success"])
+        self.assertTrue(captured["requires_plus"])
+        self.assertIsNotNone(captured["error"])
+
+    def test_inspect_distinguishes_load_failure_from_incomplete_geometry(self):
+        incomplete = {"model_name": "RFDETRSmall"}
+        incomplete_captured = {}
+        legacy_captured = {}
+
+        def capture_incomplete(payload):
+            incomplete_captured.update(payload)
+
+        def capture_failure(payload):
+            legacy_captured.update(payload)
+
+        with patch.object(helper, "load_checkpoint", return_value=incomplete):
+            with patch.object(helper, "emit", side_effect=capture_incomplete):
+                incomplete_result = helper.inspect_checkpoint("/tmp/model.pth")
+
+        with patch.object(helper, "load_checkpoint", side_effect=RuntimeError("torch load boom")):
+            with patch.object(helper, "emit", side_effect=capture_failure):
+                failure_result = helper.inspect_checkpoint("/tmp/model.pth")
+
+        # Incomplete geometry: variant known, geometry missing, no error.
+        self.assertEqual(incomplete_result, 0)
+        self.assertTrue(incomplete_captured["success"])
+        self.assertIsNone(incomplete_captured["recommended_imgsz"])
+        self.assertIsNone(incomplete_captured["resolution_source"])
+        self.assertIsNone(incomplete_captured["error"])
+        # Load failure: variant unknown, explicit error.
+        self.assertEqual(failure_result, 1)
+        self.assertFalse(legacy_captured["success"])
+        self.assertIsNone(legacy_captured["class_symbol"])
+        self.assertIn("torch load boom", legacy_captured["error"])
+
+    def test_empty_failure_carries_new_geometry_fields(self):
+        failure = helper.empty_failure("boom")
+
+        self.assertIsNone(failure["num_windows"])
+        self.assertIsNone(failure["required_multiple"])
+        self.assertIsNone(failure["resolution_source"])
 
     def test_export_checkpoint_uses_tflite_quantization_without_legacy_flags(self):
         for quantization in ("fp32", "int8"):

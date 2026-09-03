@@ -261,6 +261,25 @@ export function withRfDetrDetectedDefaults(
   return { ...base, imgsz: inspect.recommended_imgsz };
 }
 
+/**
+ * Compact detected-geometry summary for a trusted RF-DETR checkpoint.
+ * Returns null when there is no successful inspection to summarize.
+ * Example: "native 512px · multiple 32".
+ */
+export function formatRfDetrGeometrySummary(
+  inspect: RfDetrInspectResult | null,
+): string | null {
+  if (!inspect?.success) return null;
+  const parts: string[] = [];
+  if (inspect.recommended_imgsz) parts.push(`native ${inspect.recommended_imgsz}px`);
+  const multiple = inspect.required_multiple
+    ?? (inspect.patch_size != null && inspect.num_windows != null
+      ? inspect.patch_size * inspect.num_windows
+      : null);
+  if (multiple) parts.push(`multiple ${multiple}`);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
 export function formatManagedEnvironmentSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   const units = ["KiB", "MiB", "GiB", "TiB"];
@@ -1970,7 +1989,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         is_legacy: false,
         recommended_imgsz: null,
         patch_size: null,
+        num_windows: null,
+        required_multiple: null,
         token_grid: null,
+        resolution_source: null,
         error: String(error),
       });
       setRfDetrInspectStatus("failed");
@@ -2546,7 +2568,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
               )}
               {rfdetrInspectStatus === "inspecting" && <p>Inspecting RF-DETR checkpoint...</p>}
               {rfdetrInspectStatus === "detected" && rfdetrInspectResult && (
-                <p>Detected: <span className="font-mono">{rfdetrInspectResult.class_symbol}</span>{rfdetrInspectResult.is_legacy ? " (legacy)" : ""}</p>
+                <div className="space-y-1">
+                  <p>Detected: <span className="font-mono">{rfdetrInspectResult.class_symbol}</span>{rfdetrInspectResult.is_legacy ? " (legacy)" : ""}</p>
+                  {formatRfDetrGeometrySummary(rfdetrInspectResult) && (
+                    <p className="text-xs text-amber-800">{formatRfDetrGeometrySummary(rfdetrInspectResult)}</p>
+                  )}
+                </div>
               )}
               {rfdetrInspectStatus === "failed" && (
                 <div className="space-y-3">
@@ -2706,6 +2733,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           trusted: rfdetrTrustConfirmedPath === sourcePath,
           recommendedImgsz: rfdetrInspectResult?.recommended_imgsz ?? null,
           patchSize: rfdetrInspectResult?.patch_size ?? null,
+          numWindows: rfdetrInspectResult?.num_windows ?? null,
+          requiredMultiple: rfdetrInspectResult?.required_multiple ?? null,
+          resolutionSource: rfdetrInspectResult?.resolution_source ?? null,
         } : null}
       />
 

@@ -15,7 +15,13 @@ pub struct RfDetrInspectResult {
     pub is_legacy: bool,
     pub recommended_imgsz: Option<u32>,
     pub patch_size: Option<u32>,
+    #[serde(default)]
+    pub num_windows: Option<u32>,
+    #[serde(default)]
+    pub required_multiple: Option<u32>,
     pub token_grid: Option<u32>,
+    #[serde(default)]
+    pub resolution_source: Option<String>,
     pub error: Option<String>,
 }
 
@@ -95,13 +101,37 @@ mod tests {
     #[test]
     fn parses_inspect_json_from_last_json_line() {
         let result = parse_inspect_stdout(br#"noise
-{"success":true,"class_symbol":"RFDETRSmall","family":"detection","size":"small","requires_plus":false,"is_legacy":false,"recommended_imgsz":512,"patch_size":16,"token_grid":32,"error":null}
+{"success":true,"class_symbol":"RFDETRSmall","family":"detection","size":"small","requires_plus":false,"is_legacy":false,"recommended_imgsz":512,"patch_size":16,"num_windows":2,"required_multiple":32,"token_grid":32,"resolution_source":"saved_model_config","error":null}
 "#).expect("parse inspect json");
         assert_eq!(result.class_symbol.as_deref(), Some("RFDETRSmall"));
         assert_eq!(result.recommended_imgsz, Some(512));
         assert_eq!(result.patch_size, Some(16));
+        assert_eq!(result.num_windows, Some(2));
+        assert_eq!(result.required_multiple, Some(32));
         assert_eq!(result.token_grid, Some(32));
+        assert_eq!(
+            result.resolution_source.as_deref(),
+            Some("saved_model_config")
+        );
         assert!(result.success);
+    }
+
+    #[test]
+    fn parses_legacy_inspect_json_without_geometry_fields() {
+        let result = parse_inspect_stdout(br#"{"success":true,"class_symbol":"RFDETRSmall","family":"detection","size":"small","requires_plus":false,"is_legacy":false,"recommended_imgsz":512,"patch_size":16,"token_grid":32,"error":null}
+"#).expect("parse legacy inspect json");
+        assert_eq!(result.num_windows, None);
+        assert_eq!(result.required_multiple, None);
+        assert_eq!(result.resolution_source, None);
+    }
+
+    #[test]
+    fn parses_incomplete_geometry_inspect_json() {
+        let result = parse_inspect_stdout(br#"{"success":true,"class_symbol":"RFDETRSmall","family":"detection","size":"small","requires_plus":false,"is_legacy":false,"recommended_imgsz":null,"patch_size":null,"num_windows":null,"required_multiple":null,"token_grid":null,"resolution_source":null,"error":null}
+"#).expect("parse incomplete geometry json");
+        assert!(result.success);
+        assert_eq!(result.recommended_imgsz, None);
+        assert_eq!(result.resolution_source, None);
     }
 
     #[test]
