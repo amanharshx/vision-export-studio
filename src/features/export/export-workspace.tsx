@@ -110,6 +110,7 @@ import { ExportModal } from "./export-modal";
 import { RouteGrid } from "./route-grid";
 import { getEffectiveHostSupportResult, getHostSupportResult } from "./host-support";
 import { normalizeOptionsForRoute } from "./options/normalize";
+import { validateRfDetrImgsz } from "./rfdetr-image-size";
 
 type WorkspaceView = "drop" | "formats";
 type RuntimeInstallPhase = "idle" | "installing" | "ready" | "failed";
@@ -645,6 +646,15 @@ function isRfDetrExportReady(
     return manualClassSymbol.trim().length > 0;
   }
   return inspectStatus === "detected";
+}
+
+export function getRfDetrExportImgszError(
+  providerId: ProviderId,
+  imgsz: number,
+  inspect: RfDetrInspectResult | null,
+): string | null {
+  if (providerId !== "rfdetr") return null;
+  return validateRfDetrImgsz(imgsz, inspect?.required_multiple ?? null);
 }
 
 type EnvCardStatus = "ok" | "error" | "loading";
@@ -1567,6 +1577,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       setInvokeError("Select an RF-DETR variant before export.");
       return;
     }
+    const rfdetrImgszError = getRfDetrExportImgszError(selectedProviderId, options.imgsz, rfdetrInspectResult);
+    if (rfdetrImgszError) {
+      setInvokeError(rfdetrImgszError);
+      return;
+    }
     setInvokeError(null);
     setCompletedOutputDir(null);
     setExportStatus("starting");
@@ -1666,6 +1681,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       setInvokeError("Dependency check not ready. Resolve dependency check before export.");
       return;
     }
+    const rfdetrImgszError = getRfDetrExportImgszError(selectedProviderId, options.imgsz, rfdetrInspectResult);
+    if (rfdetrImgszError) {
+      failExportStart(rfdetrImgszError);
+      return;
+    }
 
     if (missingPackageNames.length > 0) {
       setInvokeError(null);
@@ -1712,6 +1732,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       routeId: selectedRoute.id,
       exportFormat: selectedRoute.targetFormat,
     };
+    const rfdetrImgszError = getRfDetrExportImgszError(selectedProviderId, options.imgsz, rfdetrInspectResult);
+    if (rfdetrImgszError) {
+      setInstallPhase("idle");
+      setInvokeError(rfdetrImgszError);
+      setExportStatus("failed");
+      setLogLines(["[error] " + rfdetrImgszError]);
+      return;
+    }
     const missingPkgs = getInstallableMissingPackages(depResults);
 
     if (missingPkgs.length === 0) {
@@ -2709,6 +2737,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           trusted: rfdetrTrustConfirmedPath === sourcePath,
           recommendedImgsz: rfdetrInspectResult?.recommended_imgsz ?? null,
           patchSize: rfdetrInspectResult?.patch_size ?? null,
+          requiredMultiple: rfdetrInspectResult?.required_multiple ?? null,
         } : null}
       />
 

@@ -523,6 +523,95 @@ class RfDetrExportHelperTests(unittest.TestCase):
             "batch_size": 2,
         })
 
+    def test_validate_export_imgsz_covers_native_divisible_and_invalid(self):
+        self.assertIsNone(helper.validate_export_imgsz(512, 32, 16, 2))
+        self.assertIsNone(helper.validate_export_imgsz(640, 32, 16, 2))
+        self.assertIsNone(helper.validate_export_imgsz(560, 56, 14, 4))
+
+        error = helper.validate_export_imgsz(500, 32, 16, 2)
+        self.assertIn("divisible by 32", error)
+        self.assertIn("16", error)
+
+        self.assertIn("64 and 8192", helper.validate_export_imgsz(32, 32, 16, 2))
+        self.assertIn("64 and 8192", helper.validate_export_imgsz(9000, 32, 16, 2))
+        self.assertIn("integer", helper.validate_export_imgsz(512.5, 32, 16, 2))
+
+    def test_validate_export_imgsz_without_known_multiple_checks_range_only(self):
+        self.assertIsNone(helper.validate_export_imgsz(500, None))
+        self.assertIn("64 and 8192", helper.validate_export_imgsz(30, None))
+
+    def _export_args(self, imgsz):
+        return SimpleNamespace(
+            checkpoint="/tmp/model.pth", output_dir="/tmp/out", route_id="rfdetr.pth.onnx",
+            imgsz=imgsz, batch=1, opset=None, precision="fp32",
+            variant_mode="auto", manual_class_symbol=None,
+        )
+
+    def test_export_rejects_non_divisible_size_without_substitution(self):
+        export = Mock()
+        geometry = {"required_multiple": 32, "patch_size": 16, "num_windows": 2}
+        with patch.object(helper, "resolve_model", return_value=SimpleNamespace(export=export)):
+            with patch.object(helper, "infer_native_export_shape", return_value=geometry):
+                with patch.object(helper.os, "makedirs"):
+                    result = helper.export_checkpoint(self._export_args(500))
+
+        self.assertEqual(result, 1)
+        export.assert_not_called()
+
+    def test_export_allows_divisible_non_native_without_substitution(self):
+        export = Mock()
+        geometry = {"required_multiple": 32, "patch_size": 16, "num_windows": 2}
+        with patch.object(helper, "resolve_model", return_value=SimpleNamespace(export=export)):
+            with patch.object(helper, "infer_native_export_shape", return_value=geometry):
+                with patch.object(helper.os, "makedirs"):
+                    result = helper.export_checkpoint(self._export_args(640))
+
+        self.assertEqual(result, 0)
+        self.assertEqual(export.call_args.kwargs["shape"], (640, 640))
+
+    def test_export_allows_custom_resolution_when_divisible(self):
+        export = Mock()
+        geometry = {
+            "recommended_imgsz": 640, "required_multiple": 32,
+            "patch_size": 16, "num_windows": 2,
+        }
+        with patch.object(helper, "resolve_model", return_value=SimpleNamespace(export=export)):
+            with patch.object(helper, "infer_native_export_shape", return_value=geometry):
+                with patch.object(helper.os, "makedirs"):
+                    result = helper.export_checkpoint(self._export_args(640))
+
+        self.assertEqual(result, 0)
+        self.assertEqual(export.call_args.kwargs["shape"], (640, 640))
+
+    def test_export_uses_fallback_preset_when_native_unknown(self):
+        export = Mock()
+        geometry = {
+            "recommended_imgsz": None, "required_multiple": 32,
+            "patch_size": 16, "num_windows": 2,
+        }
+        with patch.object(helper, "resolve_model", return_value=SimpleNamespace(export=export)):
+            with patch.object(helper, "infer_native_export_shape", return_value=geometry):
+                with patch.object(helper.os, "makedirs"):
+                    valid = helper.export_checkpoint(self._export_args(384))
+        self.assertEqual(valid, 0)
+        self.assertEqual(export.call_args.kwargs["shape"], (384, 384))
+
+        export.reset_mock()
+        with patch.object(helper, "resolve_model", return_value=SimpleNamespace(export=export)):
+            with patch.object(helper, "infer_native_export_shape", return_value=geometry):
+                with patch.object(helper.os, "makedirs"):
+                    invalid = helper.export_checkpoint(self._export_args(500))
+        self.assertEqual(invalid, 1)
+        export.assert_not_called()
+
+    def test_export_rejects_out_of_range_before_loading_model(self):
+        with patch.object(helper, "resolve_model") as resolve_model:
+            with patch.object(helper.os, "makedirs"):
+                result = helper.export_checkpoint(self._export_args(30))
+
+        self.assertEqual(result, 1)
+        resolve_model.assert_not_called()
+
     def test_parse_args_defaults_tensorrt_precision_to_fp32(self):
         with patch("sys.argv", [
             "rfdetr_export_helper.py", "export", "--checkpoint", "/tmp/model.pth",
