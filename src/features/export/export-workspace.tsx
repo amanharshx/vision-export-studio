@@ -2570,9 +2570,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
               {rfdetrInspectStatus === "detected" && rfdetrInspectResult && (
                 <div className="space-y-1">
                   <p>Detected: <span className="font-mono">{rfdetrInspectResult.class_symbol}</span>{rfdetrInspectResult.is_legacy ? " (legacy)" : ""}</p>
-                  {formatRfDetrGeometrySummary(rfdetrInspectResult) && (
-                    <p className="text-xs text-amber-800">{formatRfDetrGeometrySummary(rfdetrInspectResult)}</p>
-                  )}
+                  {(() => {
+                    const geometrySummary = formatRfDetrGeometrySummary(rfdetrInspectResult);
+                    return geometrySummary ? (
+                      <p className="text-xs text-amber-800">{geometrySummary}</p>
+                    ) : null;
+                  })()}
                 </div>
               )}
               {rfdetrInspectStatus === "failed" && (
@@ -2733,9 +2736,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           trusted: rfdetrTrustConfirmedPath === sourcePath,
           recommendedImgsz: rfdetrInspectResult?.recommended_imgsz ?? null,
           patchSize: rfdetrInspectResult?.patch_size ?? null,
-          numWindows: rfdetrInspectResult?.num_windows ?? null,
           requiredMultiple: rfdetrInspectResult?.required_multiple ?? null,
-          resolutionSource: rfdetrInspectResult?.resolution_source ?? null,
         } : null}
       />
 

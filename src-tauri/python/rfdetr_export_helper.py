@@ -160,57 +160,6 @@ def _read_resolution_patch_windows(container, *, is_args=False):
     return (resolution, patch_size, num_windows)
 
 
-def _saved_model_config(checkpoint):
-    if not isinstance(checkpoint, dict):
-        return None
-    saved = checkpoint.get("model_config")
-    return saved if isinstance(saved, dict) else None
-
-
-def _iter_weight_dicts(checkpoint):
-    if not isinstance(checkpoint, dict):
-        return
-    for key in ("model", "state_dict"):
-        state = checkpoint.get(key)
-        if isinstance(state, dict):
-            yield state
-
-
-def _find_position_embeddings(checkpoint):
-    suffix = "embeddings.position_embeddings"
-    for state in _iter_weight_dicts(checkpoint):
-        for key, value in state.items():
-            if isinstance(key, str) and key.endswith(suffix):
-                return value
-    return None
-
-
-def _infer_patch_from_projection_weight(checkpoint):
-    suffix = "patch_embeddings.projection.weight"
-    for state in _iter_weight_dicts(checkpoint):
-        for key, value in state.items():
-            if isinstance(key, str) and key.endswith(suffix):
-                try:
-                    shape = value.shape
-                    patch = _as_positive_int(shape[-1])
-                    if patch is not None:
-                        return patch
-                except (AttributeError, IndexError, TypeError):
-                    continue
-    return None
-
-
-def resolve_patch_size(model):
-    model_config = getattr(model, "model_config", None)
-    patch_size = _as_positive_int(_field_from_container(model_config, "patch_size"))
-    return patch_size
-
-
-def resolve_num_windows(model):
-    model_config = getattr(model, "model_config", None)
-    return _as_positive_int(_field_from_container(model_config, "num_windows"))
-
-
 def _first_valid(*values):
     for value in values:
         if value is not None:
@@ -226,7 +175,11 @@ def infer_native_export_shape(checkpoint_path, model, checkpoint=None):
     except Exception:
         checkpoint = None
 
-    saved_container = _saved_model_config(checkpoint) if checkpoint is not None else None
+    saved_container = None
+    if isinstance(checkpoint, dict):
+        saved_candidate = checkpoint.get("model_config")
+        if isinstance(saved_candidate, dict):
+            saved_container = saved_candidate
     saved_resolution, saved_patch, saved_windows = _read_resolution_patch_windows(saved_container)
 
     model_container = getattr(model, "model_config", None) if model is not None else None
@@ -240,8 +193,6 @@ def infer_native_export_shape(checkpoint_path, model, checkpoint=None):
     # Strongest wins per field; weaker sources only fill gaps.
     patch_size = _first_valid(saved_patch, model_patch, args_patch)
     num_windows = _first_valid(saved_windows, model_windows, args_windows)
-    if patch_size is None and checkpoint is not None:
-        patch_size = _infer_patch_from_projection_weight(checkpoint)
 
     resolution = _first_valid(saved_resolution, model_resolution, args_resolution)
     resolution_source = None
@@ -257,7 +208,17 @@ def infer_native_export_shape(checkpoint_path, model, checkpoint=None):
         token_grid = None
         # Weakest source: derive resolution from position embeddings.
         try:
-            pos_emb = _find_position_embeddings(checkpoint) if checkpoint is not None else None
+            pos_emb = None
+            if isinstance(checkpoint, dict):
+                for weight_key in ("model", "state_dict"):
+                    state = checkpoint.get(weight_key)
+                    if isinstance(state, dict):
+                        for key, value in state.items():
+                            if isinstance(key, str) and key.endswith("embeddings.position_embeddings"):
+                                pos_emb = value
+                                break
+                        if pos_emb is not None:
+                            break
             if pos_emb is not None and patch_size:
                 num_tokens = int(pos_emb.shape[1]) - 1
                 if num_tokens > 0:
