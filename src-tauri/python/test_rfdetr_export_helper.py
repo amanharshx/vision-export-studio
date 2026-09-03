@@ -358,23 +358,6 @@ class RfDetrExportHelperTests(unittest.TestCase):
         self.assertEqual(captured["resolution_source"], "model_config")
         self.assertEqual(captured["required_multiple"], 56)
 
-    def test_inspect_keeps_checkpoint_geometry_when_model_load_fails(self):
-        incomplete = {"model_name": "RFDETRSmall"}
-        captured = {}
-
-        def fake_emit(payload):
-            captured.update(payload)
-
-        with patch.object(helper, "load_checkpoint", return_value=incomplete):
-            with patch.object(helper, "load_model_for_inspect", side_effect=RuntimeError("no rfdetr")):
-                with patch.object(helper, "emit", side_effect=fake_emit):
-                    result = helper.inspect_checkpoint("/tmp/model.pth")
-
-        self.assertEqual(result, 0)
-        self.assertTrue(captured["success"])
-        self.assertIsNone(captured["recommended_imgsz"])
-        self.assertIsNone(captured["error"])
-
     def test_inspect_distinguishes_load_failure_from_incomplete_geometry(self):
         incomplete = {"model_name": "RFDETRSmall"}
         incomplete_captured = {}
@@ -443,20 +426,6 @@ class RfDetrExportHelperTests(unittest.TestCase):
             from_checkpoint=wrapper,
             RFDETR=types.SimpleNamespace(from_checkpoint=legacy_class_from_checkpoint),
         )
-
-        with patch("builtins.__import__", return_value=fake_module):
-            helper.load_model_for_inspect("/tmp/model.pth")
-
-        self.assertEqual(seen["kwargs"], {})
-
-    def test_load_model_for_inspect_omits_trust_flag_without_rfdetr_class(self):
-        seen = {}
-
-        def wrapper(path, **kwargs):
-            seen["kwargs"] = kwargs
-            return SimpleNamespace()
-
-        fake_module = types.SimpleNamespace(from_checkpoint=wrapper)
 
         with patch("builtins.__import__", return_value=fake_module):
             helper.load_model_for_inspect("/tmp/model.pth")

@@ -87,31 +87,20 @@ def resolve_model_class_symbol(checkpoint):
     return None
 
 
-def _from_checkpoint_accepts_trust_flag(module, from_checkpoint):
-    """Check the supported upstream signature for trust_checkpoint.
-
-    Modern RF-DETR declares trust_checkpoint on RFDETR.from_checkpoint while
-    the public rfdetr.from_checkpoint wrapper keeps (path, **kwargs) and
-    forwards. Older releases only forward **kwargs into strict model
-    configuration, so the flag must be detected on the class method, not
-    the wrapper.
-    """
-    rfdetr_class = getattr(module, "RFDETR", None)
-    class_method = getattr(rfdetr_class, "from_checkpoint", None)
-    target = class_method if callable(class_method) else from_checkpoint
-    try:
-        return "trust_checkpoint" in inspect.signature(target).parameters
-    except (TypeError, ValueError):
-        return False
-
-
 def load_model_for_inspect(checkpoint_path, checkpoint=None):
     module = __import__("rfdetr", fromlist=["from_checkpoint"])
     from_checkpoint = getattr(module, "from_checkpoint", None)
     if callable(from_checkpoint):
         # The Rust command only runs inspect after explicit user trust, so
-        # forward that confirmed trust when the supported signature accepts it.
-        if _from_checkpoint_accepts_trust_flag(module, from_checkpoint):
+        # forward that confirmed trust when RFDETR.from_checkpoint declares
+        # it. The public wrapper keeps (path, **kwargs) and forwards.
+        try:
+            declares_trust = "trust_checkpoint" in inspect.signature(
+                module.RFDETR.from_checkpoint
+            ).parameters
+        except (TypeError, ValueError, AttributeError):
+            declares_trust = False
+        if declares_trust:
             return from_checkpoint(checkpoint_path, trust_checkpoint=True)
         return from_checkpoint(checkpoint_path)
 
@@ -163,11 +152,12 @@ def _read_resolution_patch_windows(container, *, is_args=False):
     return (resolution, patch_size, num_windows)
 
 
-def _first_valid(*values):
-    for value in values:
+def _first_present(*pairs):
+    """Return (value, source) for the first pair whose value is not None."""
+    for value, source in pairs:
         if value is not None:
-            return value
-    return None
+            return (value, source)
+    return (None, None)
 
 
 def infer_native_export_shape(checkpoint_path, model, checkpoint=None):
@@ -198,24 +188,16 @@ def infer_native_export_shape(checkpoint_path, model, checkpoint=None):
     # training resolutions survive; patch/windows prefer the loaded model
     # over args. The selected resolution is validated against the final
     # patch_size * num_windows below.
-    patch_size = _first_valid(saved_patch, model_patch, args_patch)
-    if saved_patch is not None:
-        patch_source = "saved_model_config"
-    elif model_patch is not None:
-        patch_source = "model_config"
-    elif args_patch is not None:
-        patch_source = "args"
-    else:
-        patch_source = None
-    num_windows = _first_valid(saved_windows, model_windows, args_windows)
-    if saved_windows is not None:
-        num_windows_source = "saved_model_config"
-    elif model_windows is not None:
-        num_windows_source = "model_config"
-    elif args_windows is not None:
-        num_windows_source = "args"
-    else:
-        num_windows_source = None
+    patch_size, patch_source = _first_present(
+        (saved_patch, "saved_model_config"),
+        (model_patch, "model_config"),
+        (args_patch, "args"),
+    )
+    num_windows, num_windows_source = _first_present(
+        (saved_windows, "saved_model_config"),
+        (model_windows, "model_config"),
+        (args_windows, "args"),
+    )
     required_multiple = (
         patch_size * num_windows
         if patch_size is not None and num_windows is not None
