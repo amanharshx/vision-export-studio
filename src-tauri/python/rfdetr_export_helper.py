@@ -94,7 +94,9 @@ def load_model_for_inspect(checkpoint_path, checkpoint=None):
         # forward that confirmed trust to upstream loading.
         try:
             return from_checkpoint(checkpoint_path, trust_checkpoint=True)
-        except TypeError:
+        except TypeError as exc:
+            if "trust_checkpoint" not in str(exc):
+                raise
             return from_checkpoint(checkpoint_path)
 
     checkpoint = checkpoint if checkpoint is not None else load_checkpoint(checkpoint_path)
@@ -178,19 +180,33 @@ def infer_native_export_shape(checkpoint_path, model, checkpoint=None):
     # Strongest wins per field; weaker sources only fill gaps.
     patch_size = _first_valid(saved_patch, model_patch, args_patch)
     num_windows = _first_valid(saved_windows, model_windows, args_windows)
+    required_multiple = (
+        patch_size * num_windows
+        if patch_size is not None and num_windows is not None
+        else None
+    )
 
-    resolution = _first_valid(saved_resolution, model_resolution, args_resolution)
+    # Every resolution candidate must satisfy the block size. An invalid
+    # stronger candidate falls through to the next valid source.
+    candidates = []
+    if saved_resolution is not None:
+        candidates.append((saved_resolution, "saved_model_config"))
+    if model_resolution is not None:
+        candidates.append((model_resolution, "model_config"))
+    if args_resolution is not None:
+        candidates.append((args_resolution, "args"))
+
+    resolution = None
     resolution_source = None
-    if resolution is not None:
-        if saved_resolution is not None:
-            resolution_source = "saved_model_config"
-        elif model_resolution is not None:
-            resolution_source = "model_config"
-        else:
-            resolution_source = "args"
+    token_grid = None
+    for value, source in candidates:
+        if required_multiple is not None and value % required_multiple != 0:
+            continue
+        resolution = value
+        resolution_source = source
         token_grid = resolution // patch_size if patch_size else None
-    else:
-        token_grid = None
+        break
+    if resolution is None:
         # Weakest source: derive resolution from position embeddings. Only
         # accept it when divisible by the model block size; e.g. RF-DETR
         # Base reports 37x37 tokens at patch 14 (518px) but requires
@@ -226,22 +242,11 @@ def infer_native_export_shape(checkpoint_path, model, checkpoint=None):
             "recommended_imgsz": None,
             "patch_size": patch_size,
             "num_windows": num_windows,
-            "required_multiple": (
-                patch_size * num_windows
-                if patch_size is not None and num_windows is not None
-                else None
-            ),
+            "required_multiple": required_multiple,
             "token_grid": None,
             "resolution_source": None,
         }
 
-    required_multiple = (
-        patch_size * num_windows
-        if patch_size is not None and num_windows is not None
-        else None
-    )
-    if token_grid is None and patch_size:
-        token_grid = resolution // patch_size
     print(
         "[rfdetr-inspect] source={} resolution={} patch_size={} num_windows={} required_multiple={} token_grid={}".format(
             resolution_source, resolution, patch_size, num_windows, required_multiple, token_grid
@@ -283,12 +288,30 @@ def inspect_checkpoint(checkpoint_path):
             # Saved geometry is incomplete but the checkpoint class is known.
             # The Rust command only reaches here after explicit user trust,
             # which load_model_for_inspect forwards to from_checkpoint.
+            # Merge: keep already-resolved checkpoint values and use the
+            # loaded model only to fill missing fields.
             try:
                 model = load_model_for_inspect(checkpoint_path, checkpoint)
             except Exception:
                 model = None
             if model is not None:
-                native = infer_native_export_shape(checkpoint_path, model, checkpoint)
+                filled = infer_native_export_shape(checkpoint_path, model, checkpoint)
+                for key in ("recommended_imgsz", "patch_size", "num_windows"):
+                    if native[key] is None:
+                        native[key] = filled[key]
+                if native["recommended_imgsz"] is not None and native["resolution_source"] is None:
+                    native["resolution_source"] = filled["resolution_source"]
+                patch_size = native["patch_size"]
+                num_windows = native["num_windows"]
+                native["required_multiple"] = (
+                    patch_size * num_windows
+                    if patch_size is not None and num_windows is not None
+                    else None
+                )
+                if native["recommended_imgsz"] is not None and patch_size:
+                    native["token_grid"] = native["recommended_imgsz"] // patch_size
+                else:
+                    native["token_grid"] = None
         emit({
             "success": success,
             "class_symbol": class_symbol,
