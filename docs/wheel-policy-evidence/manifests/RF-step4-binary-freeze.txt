@@ -1,0 +1,1 @@
+# /private/tmp/h9-correct/RF_STEP4_BIN/bin/python -m pip install --only-binary=:all: rfdetr[executorch]>=1.9.0 torch>=2.13 -> rc=1

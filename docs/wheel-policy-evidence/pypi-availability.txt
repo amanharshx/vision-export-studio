@@ -1,0 +1,19 @@
+[PASS] antlr-4.9.3-sdist-only: files=['antlr4-python3-runtime-4.9.3.tar.gz']
+[PASS] antlr-no-4.9-wheel-anywhere: 4.9.* with wheel: []
+  [info] antlr versions WITH a wheel: ['4.11.0', '4.11.1', '4.12.0', '4.13.0', '4.13.1', '4.13.2']
+  [info] flatc releases: ['25.12.19rc0']
+[PASS] flatc-single-prerelease: releases=['25.12.19rc0']
+[PASS] flatc-no-sdist: packagetypes=['bdist_wheel']
+[PASS] flatc-three-wheels: files=['flatc-25.12.19rc0-py3-none-macosx_11_0_arm64.whl', 'flatc-25.12.19rc0-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl', 'flatc-25.12.19rc0-py3-none-win_amd64.whl']
+[PASS] flatc-no-macosx-x86_64: files=['flatc-25.12.19rc0-py3-none-macosx_11_0_arm64.whl', 'flatc-25.12.19rc0-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl', 'flatc-25.12.19rc0-py3-none-win_amd64.whl']
+[PASS] flatc-has-arm64-linux-win: files=['flatc-25.12.19rc0-py3-none-macosx_11_0_arm64.whl', 'flatc-25.12.19rc0-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl', 'flatc-25.12.19rc0-py3-none-win_amd64.whl']
+  [info] recent stable torch: ['2.10.0', '2.11.0', '2.12.0', '2.12.1', '2.13.0', '2.14.0']
+[PASS] torch-no-modern-macosx-x86_64: macosx-x86_64 wheels in ['2.10.0', '2.11.0', '2.12.0', '2.12.1', '2.13.0', '2.14.0']: {}
+[PASS] torch-no-cp313-macosx-x86_64-anywhere: versions=[]
+[PASS] torch-2.13.0-wheels-only-no-sdist: packagetypes=['bdist_wheel'] (no sdist: nothing to slow-build on macOS x86_64)
+[PASS] torch-2.14.0-wheels-only-no-sdist: packagetypes=['bdist_wheel'] (no sdist: nothing to slow-build on macOS x86_64)
+  [info] torch versions with ANY macosx x86_64 wheel: first=['1.0.0', '1.0.1', '1.1.0'] last=['2.2.0', '2.2.1', '2.2.2']
+[PASS] torch-x86_64-line-ends-at-2.2.x: count=32
+  [info] stringcase 1.2.0 files: ['stringcase-1.2.0.tar.gz']
+
+all PyPI assertions passed

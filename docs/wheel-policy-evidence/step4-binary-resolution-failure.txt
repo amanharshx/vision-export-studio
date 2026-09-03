@@ -1,0 +1,15 @@
+# RF_STEP4_BIN stable leg with --only-binary=:all: (rc=1): backtracking tail + resolver verdict (exact)
+ Downloading pyparsing-2.0.7-py2.py3-none-any.whl.metadata (936 bytes)
+ Downloading pyparsing-2.0.6-py2.py3-none-any.whl.metadata (936 bytes)
+ Downloading pyparsing-2.0.5-py2.py3-none-any.whl.metadata (936 bytes)
+ Downloading pyparsing-2.0.4-py2.py3-none-any.whl.metadata (936 bytes)
+ Downloading pyparsing-2.0.3-py2.py3-none-any.whl.metadata (987 bytes)
+Collecting packaging>=20.0 (from transformers<6.0.0,>=5.1.0->rfdetr>=1.9.0->rfdetr[executorch]>=1.9.0)
+ Downloading packaging-21.2-py3-none-any.whl.metadata (14 kB)
+ Downloading packaging-21.1-py3-none-any.whl.metadata (14 kB)
+error: resolution-too-deep
+× Dependency resolution exceeded maximum depth
+╰─> Pip cannot resolve the current dependencies as the dependency graph is too complex for pip to solve efficiently.
+hint: Try adding lower bounds to constrain your dependencies, for example: 'package>=2.0.0' instead of just 'package'.
+Link: https://pip.pypa.io/en/stable/topics/dependency-resolution/#handling-resolution-too-deep-errors
+# exact command: see step4-summary.json -> binary.stable_cmd (rc=1)

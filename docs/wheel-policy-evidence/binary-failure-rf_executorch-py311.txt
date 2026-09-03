@@ -1,0 +1,11 @@
+# rf_executorch py311 binary-only dry-run leg (rc=1): root-cause excerpt (exact)
+ hydra-core 1.3.6 depends on antlr4-python3-runtime==4.9.*
+ hydra-core 1.3.5 depends on antlr4-python3-runtime==4.9.*
+ hydra-core 1.3.4 depends on antlr4-python3-runtime==4.9.*
+ hydra-core 1.3.3 depends on antlr4-python3-runtime==4.9.*
+ hydra-core 1.3.2 depends on antlr4-python3-runtime==4.9.*
+ hydra-core 1.3.1 depends on antlr4-python3-runtime==4.9.*
+ hydra-core 1.3.2 depends on antlr4-python3-runtime==4.9.*
+ hydra-core 1.3.1 depends on antlr4-python3-runtime==4.9.*
+ hydra-core 1.3.0 depends on antlr4-python3-runtime==4.9.*
+ERROR: ResolutionImpossible: for help visit https://pip.pypa.io/en/latest/topics/dependency-resolution/#dealing-with-dependency-conflicts

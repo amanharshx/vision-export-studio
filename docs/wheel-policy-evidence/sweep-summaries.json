@@ -1,0 +1,884 @@
+{
+  "summary_py311.json": {
+    "tag": "py311",
+    "stack_state": "fresh",
+    "UL_ORD_freeze": 39,
+    "UL_BIN_freeze": 39,
+    "rows": [
+      {
+        "group": "ul_onnx",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 3,
+        "bin_delta": 3,
+        "ord_manifest": "ul_onnx_py311_ordinary.txt",
+        "bin_manifest": "ul_onnx_py311_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_openvino",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 17,
+        "bin_delta": 17,
+        "ord_manifest": "ul_openvino_py311_ordinary.txt",
+        "bin_manifest": "ul_openvino_py311_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_coreml",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 6,
+        "bin_delta": 6,
+        "ord_manifest": "ul_coreml_py311_ordinary.txt",
+        "bin_manifest": "ul_coreml_py311_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_ncnn",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 4,
+        "bin_delta": 4,
+        "ord_manifest": "ul_ncnn_py311_ordinary.txt",
+        "bin_manifest": "ul_ncnn_py311_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_mnn",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 4,
+        "bin_delta": 4,
+        "ord_manifest": "ul_mnn_py311_ordinary.txt",
+        "bin_manifest": "ul_mnn_py311_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_litert",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 47,
+        "bin_delta": 47,
+        "ord_manifest": "ul_litert_py311_ordinary.txt",
+        "bin_manifest": "ul_litert_py311_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_tfgraph",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 25,
+        "bin_delta": 25,
+        "ord_manifest": "ul_tfgraph_py311_ordinary.txt",
+        "bin_manifest": "ul_tfgraph_py311_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_paddle",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 5,
+        "bin_delta": 5,
+        "ord_manifest": "ul_paddle_py311_ordinary.txt",
+        "bin_manifest": "ul_paddle_py311_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_executorch",
+        "verdict": "divergent",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 34,
+        "bin_delta": 26,
+        "ord_manifest": "ul_executorch_py311_ordinary.txt",
+        "bin_manifest": "ul_executorch_py311_binary.txt",
+        "sdists_in_ordinary_delta": [
+          "antlr4-python3-runtime==4.9.3"
+        ]
+      },
+      {
+        "group": "rf_onnx",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 65,
+        "bin_delta": 65,
+        "ord_manifest": "rf_onnx_py311_ordinary.txt",
+        "bin_manifest": "rf_onnx_py311_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "rf_coreml",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 61,
+        "bin_delta": 61,
+        "ord_manifest": "rf_coreml_py311_ordinary.txt",
+        "bin_manifest": "rf_coreml_py311_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "rf_tflite",
+        "verdict": "gated-skipped",
+        "ord_rc": "skipped",
+        "bin_rc": "skipped"
+      },
+      {
+        "group": "rf_executorch",
+        "verdict": "binary failure",
+        "ord_rc": 0,
+        "bin_rc": 1,
+        "ord_delta": 84,
+        "bin_delta": 0,
+        "ord_manifest": "rf_executorch_py311_ordinary.txt",
+        "bin_manifest": "rf_executorch_py311_binary.txt",
+        "sdists_in_ordinary_delta": [
+          "antlr4-python3-runtime==4.9.3"
+        ]
+      },
+      {
+        "group": "rf_executorch_flatc_pre",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 1,
+        "bin_delta": 1,
+        "ord_manifest": "rf_executorch_flatc_pre_py311_ordinary.txt",
+        "bin_manifest": "rf_executorch_flatc_pre_py311_binary.txt",
+        "sdists_in_ordinary_delta": []
+      }
+    ]
+  },
+  "summary_py310.json": {
+    "tag": "py310",
+    "stack_state": "fresh",
+    "UL_ORD_freeze": 34,
+    "UL_BIN_freeze": 34,
+    "rows": [
+      {
+        "group": "ul_onnx",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 4,
+        "bin_delta": 4,
+        "ord_manifest": "ul_onnx_py310_ordinary.txt",
+        "bin_manifest": "ul_onnx_py310_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_openvino",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 16,
+        "bin_delta": 16,
+        "ord_manifest": "ul_openvino_py310_ordinary.txt",
+        "bin_manifest": "ul_openvino_py310_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_coreml",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 7,
+        "bin_delta": 7,
+        "ord_manifest": "ul_coreml_py310_ordinary.txt",
+        "bin_manifest": "ul_coreml_py310_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_ncnn",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 4,
+        "bin_delta": 4,
+        "ord_manifest": "ul_ncnn_py310_ordinary.txt",
+        "bin_manifest": "ul_ncnn_py310_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_mnn",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 5,
+        "bin_delta": 5,
+        "ord_manifest": "ul_mnn_py310_ordinary.txt",
+        "bin_manifest": "ul_mnn_py310_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_litert",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 52,
+        "bin_delta": 52,
+        "ord_manifest": "ul_litert_py310_ordinary.txt",
+        "bin_manifest": "ul_litert_py310_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_tfgraph",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 28,
+        "bin_delta": 28,
+        "ord_manifest": "ul_tfgraph_py310_ordinary.txt",
+        "bin_manifest": "ul_tfgraph_py310_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_paddle",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 10,
+        "bin_delta": 10,
+        "ord_manifest": "ul_paddle_py310_ordinary.txt",
+        "bin_manifest": "ul_paddle_py310_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_executorch",
+        "verdict": "divergent",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 41,
+        "bin_delta": 31,
+        "ord_manifest": "ul_executorch_py310_ordinary.txt",
+        "bin_manifest": "ul_executorch_py310_binary.txt",
+        "sdists_in_ordinary_delta": [
+          "antlr4-python3-runtime==4.9.3"
+        ]
+      },
+      {
+        "group": "rf_onnx",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 67,
+        "bin_delta": 67,
+        "ord_manifest": "rf_onnx_py310_ordinary.txt",
+        "bin_manifest": "rf_onnx_py310_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "rf_coreml",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 62,
+        "bin_delta": 62,
+        "ord_manifest": "rf_coreml_py310_ordinary.txt",
+        "bin_manifest": "rf_coreml_py310_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "rf_tflite",
+        "verdict": "gated-skipped",
+        "ord_rc": "skipped",
+        "bin_rc": "skipped"
+      },
+      {
+        "group": "rf_executorch",
+        "verdict": "binary failure",
+        "ord_rc": 0,
+        "bin_rc": 1,
+        "ord_delta": 85,
+        "bin_delta": 0,
+        "ord_manifest": "rf_executorch_py310_ordinary.txt",
+        "bin_manifest": "rf_executorch_py310_binary.txt",
+        "sdists_in_ordinary_delta": [
+          "antlr4-python3-runtime==4.9.3"
+        ]
+      },
+      {
+        "group": "rf_executorch_flatc_pre",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 1,
+        "bin_delta": 1,
+        "ord_manifest": "rf_executorch_flatc_pre_py310_ordinary.txt",
+        "bin_manifest": "rf_executorch_flatc_pre_py310_binary.txt",
+        "sdists_in_ordinary_delta": []
+      }
+    ]
+  },
+  "summary_py312fresh.json": {
+    "tag": "py312fresh",
+    "stack_state": "fresh",
+    "rows": [
+      {
+        "group": "rf_onnx",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 65,
+        "bin_delta": 65,
+        "ord_manifest": "rf_onnx_py312fresh_ordinary.txt",
+        "bin_manifest": "rf_onnx_py312fresh_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "rf_coreml",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 62,
+        "bin_delta": 62,
+        "ord_manifest": "rf_coreml_py312fresh_ordinary.txt",
+        "bin_manifest": "rf_coreml_py312fresh_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "rf_tflite",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 99,
+        "bin_delta": 99,
+        "ord_manifest": "rf_tflite_py312fresh_ordinary.txt",
+        "bin_manifest": "rf_tflite_py312fresh_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "rf_executorch",
+        "verdict": "timeout/non-convergence",
+        "ord_rc": 0,
+        "bin_rc": "timeout(300s)",
+        "ord_delta": 84,
+        "bin_delta": 0,
+        "ord_manifest": "rf_executorch_py312fresh_ordinary.txt",
+        "bin_manifest": "rf_executorch_py312fresh_binary.txt",
+        "sdists_in_ordinary_delta": [
+          "antlr4-python3-runtime==4.9.3"
+        ]
+      },
+      {
+        "group": "rf_executorch_flatc_pre",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 1,
+        "bin_delta": 1,
+        "ord_manifest": "rf_executorch_flatc_pre_py312fresh_ordinary.txt",
+        "bin_manifest": "rf_executorch_flatc_pre_py312fresh_binary.txt",
+        "sdists_in_ordinary_delta": []
+      }
+    ]
+  },
+  "summary_py313.json": {
+    "tag": "py313",
+    "stack_state": "fresh",
+    "UL_ORD_freeze": 40,
+    "UL_BIN_freeze": 40,
+    "rows": [
+      {
+        "group": "ul_onnx",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 3,
+        "bin_delta": 3,
+        "ord_manifest": "ul_onnx_py313_ordinary.txt",
+        "bin_manifest": "ul_onnx_py313_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_openvino",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 18,
+        "bin_delta": 18,
+        "ord_manifest": "ul_openvino_py313_ordinary.txt",
+        "bin_manifest": "ul_openvino_py313_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_coreml",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 6,
+        "bin_delta": 6,
+        "ord_manifest": "ul_coreml_py313_ordinary.txt",
+        "bin_manifest": "ul_coreml_py313_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_ncnn",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 4,
+        "bin_delta": 4,
+        "ord_manifest": "ul_ncnn_py313_ordinary.txt",
+        "bin_manifest": "ul_ncnn_py313_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_mnn",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 4,
+        "bin_delta": 4,
+        "ord_manifest": "ul_mnn_py313_ordinary.txt",
+        "bin_manifest": "ul_mnn_py313_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_litert",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 47,
+        "bin_delta": 47,
+        "ord_manifest": "ul_litert_py313_ordinary.txt",
+        "bin_manifest": "ul_litert_py313_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_tfgraph",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 41,
+        "bin_delta": 41,
+        "ord_manifest": "ul_tfgraph_py313_ordinary.txt",
+        "bin_manifest": "ul_tfgraph_py313_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_paddle",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 5,
+        "bin_delta": 5,
+        "ord_manifest": "ul_paddle_py313_ordinary.txt",
+        "bin_manifest": "ul_paddle_py313_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_executorch",
+        "verdict": "binary failure",
+        "ord_rc": 0,
+        "bin_rc": 1,
+        "ord_delta": 34,
+        "bin_delta": 0,
+        "ord_manifest": "ul_executorch_py313_ordinary.txt",
+        "bin_manifest": "ul_executorch_py313_binary.txt",
+        "sdists_in_ordinary_delta": [
+          "antlr4-python3-runtime==4.9.3"
+        ]
+      },
+      {
+        "group": "rf_onnx",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 65,
+        "bin_delta": 65,
+        "ord_manifest": "rf_onnx_py313_ordinary.txt",
+        "bin_manifest": "rf_onnx_py313_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "rf_coreml",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 62,
+        "bin_delta": 62,
+        "ord_manifest": "rf_coreml_py313_ordinary.txt",
+        "bin_manifest": "rf_coreml_py313_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "rf_tflite",
+        "verdict": "gated-skipped",
+        "ord_rc": "skipped",
+        "bin_rc": "skipped"
+      },
+      {
+        "group": "rf_executorch",
+        "verdict": "timeout/non-convergence",
+        "ord_rc": 0,
+        "bin_rc": "timeout(300s)",
+        "ord_delta": 84,
+        "bin_delta": 0,
+        "ord_manifest": "rf_executorch_py313_ordinary.txt",
+        "bin_manifest": "rf_executorch_py313_binary.txt",
+        "sdists_in_ordinary_delta": [
+          "antlr4-python3-runtime==4.9.3"
+        ]
+      },
+      {
+        "group": "rf_executorch_flatc_pre",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 1,
+        "bin_delta": 1,
+        "ord_manifest": "rf_executorch_flatc_pre_py313_ordinary.txt",
+        "bin_manifest": "rf_executorch_flatc_pre_py313_binary.txt",
+        "sdists_in_ordinary_delta": []
+      }
+    ]
+  },
+  "summary_py312.json": {
+    "tag": "py312",
+    "stack_state": "fresh",
+    "UL_ORD_freeze": 40,
+    "UL_BIN_freeze": 40,
+    "rows": [
+      {
+        "group": "ul_onnx",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 3,
+        "bin_delta": 3,
+        "ord_manifest": "ul_onnx_py312_ordinary.txt",
+        "bin_manifest": "ul_onnx_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_openvino",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 18,
+        "bin_delta": 18,
+        "ord_manifest": "ul_openvino_py312_ordinary.txt",
+        "bin_manifest": "ul_openvino_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_coreml",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 6,
+        "bin_delta": 6,
+        "ord_manifest": "ul_coreml_py312_ordinary.txt",
+        "bin_manifest": "ul_coreml_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_ncnn",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 4,
+        "bin_delta": 4,
+        "ord_manifest": "ul_ncnn_py312_ordinary.txt",
+        "bin_manifest": "ul_ncnn_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_mnn",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 4,
+        "bin_delta": 4,
+        "ord_manifest": "ul_mnn_py312_ordinary.txt",
+        "bin_manifest": "ul_mnn_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_litert",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 47,
+        "bin_delta": 47,
+        "ord_manifest": "ul_litert_py312_ordinary.txt",
+        "bin_manifest": "ul_litert_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_tfgraph",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 41,
+        "bin_delta": 41,
+        "ord_manifest": "ul_tfgraph_py312_ordinary.txt",
+        "bin_manifest": "ul_tfgraph_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_paddle",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 5,
+        "bin_delta": 5,
+        "ord_manifest": "ul_paddle_py312_ordinary.txt",
+        "bin_manifest": "ul_paddle_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_executorch",
+        "verdict": "divergent",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 34,
+        "bin_delta": 26,
+        "ord_manifest": "ul_executorch_py312_ordinary.txt",
+        "bin_manifest": "ul_executorch_py312_binary.txt",
+        "sdists_in_ordinary_delta": [
+          "antlr4-python3-runtime==4.9.3"
+        ]
+      },
+      {
+        "group": "rf_onnx",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 65,
+        "bin_delta": 65,
+        "ord_manifest": "rf_onnx_py312_ordinary.txt",
+        "bin_manifest": "rf_onnx_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "rf_coreml",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 62,
+        "bin_delta": 62,
+        "ord_manifest": "rf_coreml_py312_ordinary.txt",
+        "bin_manifest": "rf_coreml_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "rf_tflite",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 99,
+        "bin_delta": 99,
+        "ord_manifest": "rf_tflite_py312_ordinary.txt",
+        "bin_manifest": "rf_tflite_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "rf_executorch",
+        "verdict": "timeout/non-convergence",
+        "ord_rc": 0,
+        "bin_rc": "timeout(300s)",
+        "ord_delta": 84,
+        "bin_delta": 0,
+        "ord_manifest": "rf_executorch_py312_ordinary.txt",
+        "bin_manifest": "rf_executorch_py312_binary.txt",
+        "sdists_in_ordinary_delta": [
+          "antlr4-python3-runtime==4.9.3"
+        ]
+      },
+      {
+        "group": "rf_executorch_flatc_pre",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 1,
+        "bin_delta": 1,
+        "ord_manifest": "rf_executorch_flatc_pre_py312_ordinary.txt",
+        "bin_manifest": "rf_executorch_flatc_pre_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      }
+    ],
+    "rf_rows_superseded_by": [
+      "summary_py312fresh.json",
+      "summary_py312_onnxpop.json"
+    ]
+  },
+  "summary_py312_onnxpop.json": {
+    "tag": "py312",
+    "stack_state": "onnxpop",
+    "UL_ORD_freeze": 40,
+    "UL_BIN_freeze": 40,
+    "rows": [
+      {
+        "group": "ul_onnx",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 3,
+        "bin_delta": 3,
+        "ord_manifest": "ul_onnx_py312_ordinary.txt",
+        "bin_manifest": "ul_onnx_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_openvino",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 18,
+        "bin_delta": 18,
+        "ord_manifest": "ul_openvino_py312_ordinary.txt",
+        "bin_manifest": "ul_openvino_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_coreml",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 6,
+        "bin_delta": 6,
+        "ord_manifest": "ul_coreml_py312_ordinary.txt",
+        "bin_manifest": "ul_coreml_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_ncnn",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 4,
+        "bin_delta": 4,
+        "ord_manifest": "ul_ncnn_py312_ordinary.txt",
+        "bin_manifest": "ul_ncnn_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_mnn",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 4,
+        "bin_delta": 4,
+        "ord_manifest": "ul_mnn_py312_ordinary.txt",
+        "bin_manifest": "ul_mnn_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_litert",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 47,
+        "bin_delta": 47,
+        "ord_manifest": "ul_litert_py312_ordinary.txt",
+        "bin_manifest": "ul_litert_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_tfgraph",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 41,
+        "bin_delta": 41,
+        "ord_manifest": "ul_tfgraph_py312_ordinary.txt",
+        "bin_manifest": "ul_tfgraph_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_paddle",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 5,
+        "bin_delta": 5,
+        "ord_manifest": "ul_paddle_py312_ordinary.txt",
+        "bin_manifest": "ul_paddle_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "ul_executorch",
+        "verdict": "divergent",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 34,
+        "bin_delta": 26,
+        "ord_manifest": "ul_executorch_py312_ordinary.txt",
+        "bin_manifest": "ul_executorch_py312_binary.txt",
+        "sdists_in_ordinary_delta": [
+          "antlr4-python3-runtime==4.9.3"
+        ]
+      },
+      {
+        "group": "rf_onnx",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 0,
+        "bin_delta": 0,
+        "ord_manifest": "rf_onnx_py312_ordinary.txt",
+        "bin_manifest": "rf_onnx_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "rf_coreml",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 7,
+        "bin_delta": 7,
+        "ord_manifest": "rf_coreml_py312_ordinary.txt",
+        "bin_manifest": "rf_coreml_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "rf_tflite",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 41,
+        "bin_delta": 41,
+        "ord_manifest": "rf_tflite_py312_ordinary.txt",
+        "bin_manifest": "rf_tflite_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      },
+      {
+        "group": "rf_executorch",
+        "verdict": "timeout/non-convergence",
+        "ord_rc": 0,
+        "bin_rc": "timeout(300s)",
+        "ord_delta": 25,
+        "bin_delta": 0,
+        "ord_manifest": "rf_executorch_py312_ordinary.txt",
+        "bin_manifest": "rf_executorch_py312_binary.txt",
+        "sdists_in_ordinary_delta": [
+          "antlr4-python3-runtime==4.9.3"
+        ]
+      },
+      {
+        "group": "rf_executorch_flatc_pre",
+        "verdict": "identical",
+        "ord_rc": 0,
+        "bin_rc": 0,
+        "ord_delta": 1,
+        "bin_delta": 1,
+        "ord_manifest": "rf_executorch_flatc_pre_py312_ordinary.txt",
+        "bin_manifest": "rf_executorch_flatc_pre_py312_binary.txt",
+        "sdists_in_ordinary_delta": []
+      }
+    ]
+  }
+}

@@ -1,0 +1,46 @@
+# group=ul_mnn tag=py311 leg=binary rc=0
+# cmd: /private/tmp/h9-correct/UL_BIN_py311/bin/python -m pip install --dry-run --report /private/tmp/h9-correct/reports/ul_mnn_py311_binary.json --only-binary=:all: MNN onnx
+# base_freeze=39 delta=4 full=43
+anyio==4.15.0
+certifi==2026.7.22
+charset-normalizer==3.5.1
+contourpy==1.3.3
+cycler==0.12.1
+filelock==3.32.5
+fonttools==4.64.0
+fsspec==2026.7.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.19
+jinja2==3.1.6
+kiwisolver==1.5.1
+markupsafe==3.0.3
+matplotlib==3.11.1
+ml-dtypes==0.6.0
+mnn==3.6.1
+mpmath==1.3.0
+networkx==3.6.1
+numpy==2.4.6
+nvidia-ml-py==13.610.43
+onnx==1.22.0
+opencv-python==5.0.0.93
+packaging==26.3
+pillow==12.3.0
+polars==1.44.1
+polars-runtime-32==1.44.1
+protobuf==7.36.1
+psutil==7.2.2
+pyparsing==3.3.2
+python-dateutil==2.9.0.post0
+pyyaml==6.0.3
+requests==2.34.2
+six==1.17.0
+sympy==1.14.0
+torch==2.14.0
+torchvision==0.29.0
+typing-extensions==4.16.0
+ultralytics==8.4.138
+ultralytics-platform==0.1.21
+ultralytics-thop==2.1.6
+urllib3==2.7.0

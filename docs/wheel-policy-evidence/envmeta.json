@@ -1,0 +1,180 @@
+{
+  "py310": {
+    "tag": "py310",
+    "interpreter": "/Users/aman/.local/bin/python3.10",
+    "host": "Darwin Amans-MacBook-Air.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:26:22 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T8132 arm64",
+    "UL_ORD": {
+      "executable": "/private/tmp/h9-correct/UL_ORD_py310/bin/python",
+      "version": "3.10.19",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 23.0.1 from /private/tmp/h9-correct/UL_ORD_py310/lib/python3.10/site-packages/pip (python 3.10)",
+      "install_cmd": "/private/tmp/h9-correct/UL_ORD_py310/bin/python -m pip install ultralytics",
+      "install_rc": 0,
+      "freeze_count": 34
+    },
+    "UL_BIN": {
+      "executable": "/private/tmp/h9-correct/UL_BIN_py310/bin/python",
+      "version": "3.10.19",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 23.0.1 from /private/tmp/h9-correct/UL_BIN_py310/lib/python3.10/site-packages/pip (python 3.10)",
+      "install_cmd": "/private/tmp/h9-correct/UL_BIN_py310/bin/python -m pip install --only-binary=:all: ultralytics",
+      "install_rc": 0,
+      "freeze_count": 34
+    },
+    "RF_FRESH_ORD": {
+      "executable": "/private/tmp/h9-correct/RF_FRESH_ORD_py310/bin/python",
+      "version": "3.10.19",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 23.0.1 from /private/tmp/h9-correct/RF_FRESH_ORD_py310/lib/python3.10/site-packages/pip (python 3.10)"
+    },
+    "RF_FRESH_BIN": {
+      "executable": "/private/tmp/h9-correct/RF_FRESH_BIN_py310/bin/python",
+      "version": "3.10.19",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 23.0.1 from /private/tmp/h9-correct/RF_FRESH_BIN_py310/lib/python3.10/site-packages/pip (python 3.10)"
+    }
+  },
+  "py311": {
+    "tag": "py311",
+    "interpreter": "/Users/aman/.pyenv/versions/3.11.9/bin/python3.11",
+    "host": "Darwin Amans-MacBook-Air.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:26:22 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T8132 arm64",
+    "UL_ORD": {
+      "executable": "/private/tmp/h9-correct/UL_ORD_py311/bin/python",
+      "version": "3.11.9",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 24.0 from /private/tmp/h9-correct/UL_ORD_py311/lib/python3.11/site-packages/pip (python 3.11)",
+      "install_cmd": "/private/tmp/h9-correct/UL_ORD_py311/bin/python -m pip install ultralytics",
+      "install_rc": 0,
+      "freeze_count": 39
+    },
+    "UL_BIN": {
+      "executable": "/private/tmp/h9-correct/UL_BIN_py311/bin/python",
+      "version": "3.11.9",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 24.0 from /private/tmp/h9-correct/UL_BIN_py311/lib/python3.11/site-packages/pip (python 3.11)",
+      "install_cmd": "/private/tmp/h9-correct/UL_BIN_py311/bin/python -m pip install --only-binary=:all: ultralytics",
+      "install_rc": 0,
+      "freeze_count": 39
+    },
+    "RF_FRESH_ORD": {
+      "executable": "/private/tmp/h9-correct/RF_FRESH_ORD_py311/bin/python",
+      "version": "3.11.9",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 24.0 from /private/tmp/h9-correct/RF_FRESH_ORD_py311/lib/python3.11/site-packages/pip (python 3.11)"
+    },
+    "RF_FRESH_BIN": {
+      "executable": "/private/tmp/h9-correct/RF_FRESH_BIN_py311/bin/python",
+      "version": "3.11.9",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 24.0 from /private/tmp/h9-correct/RF_FRESH_BIN_py311/lib/python3.11/site-packages/pip (python 3.11)"
+    }
+  },
+  "py312": {
+    "tag": "py312",
+    "interpreter": "/opt/homebrew/bin/python3.12",
+    "host": "Darwin Amans-MacBook-Air.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:26:22 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T8132 arm64",
+    "UL_ORD": {
+      "executable": "/private/tmp/h9-correct/UL_ORD_py312/bin/python",
+      "version": "3.12.14",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 26.2.1 from /private/tmp/h9-correct/UL_ORD_py312/lib/python3.12/site-packages/pip (python 3.12)",
+      "install_cmd": "/private/tmp/h9-correct/UL_ORD_py312/bin/python -m pip install ultralytics",
+      "install_rc": 0,
+      "freeze_count": 40
+    },
+    "UL_BIN": {
+      "executable": "/private/tmp/h9-correct/UL_BIN_py312/bin/python",
+      "version": "3.12.14",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 26.2.1 from /private/tmp/h9-correct/UL_BIN_py312/lib/python3.12/site-packages/pip (python 3.12)",
+      "install_cmd": "/private/tmp/h9-correct/UL_BIN_py312/bin/python -m pip install --only-binary=:all: ultralytics",
+      "install_rc": 0,
+      "freeze_count": 40
+    },
+    "RF_FRESH_ORD": {
+      "executable": "/private/tmp/h9-correct/RF_FRESH_ORD_py312/bin/python",
+      "version": "3.12.14",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 26.2.1 from /private/tmp/h9-correct/RF_FRESH_ORD_py312/lib/python3.12/site-packages/pip (python 3.12)"
+    },
+    "RF_FRESH_BIN": {
+      "executable": "/private/tmp/h9-correct/RF_FRESH_BIN_py312/bin/python",
+      "version": "3.12.14",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 26.2.1 from /private/tmp/h9-correct/RF_FRESH_BIN_py312/lib/python3.12/site-packages/pip (python 3.12)"
+    }
+  },
+  "py313": {
+    "tag": "py313",
+    "interpreter": "/opt/homebrew/bin/python3.13",
+    "host": "Darwin Amans-MacBook-Air.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:26:22 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T8132 arm64",
+    "UL_ORD": {
+      "executable": "/private/tmp/h9-correct/UL_ORD_py313/bin/python",
+      "version": "3.13.7",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 25.2 from /private/tmp/h9-correct/UL_ORD_py313/lib/python3.13/site-packages/pip (python 3.13)",
+      "install_cmd": "/private/tmp/h9-correct/UL_ORD_py313/bin/python -m pip install ultralytics",
+      "install_rc": 0,
+      "freeze_count": 40
+    },
+    "UL_BIN": {
+      "executable": "/private/tmp/h9-correct/UL_BIN_py313/bin/python",
+      "version": "3.13.7",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 25.2 from /private/tmp/h9-correct/UL_BIN_py313/lib/python3.13/site-packages/pip (python 3.13)",
+      "install_cmd": "/private/tmp/h9-correct/UL_BIN_py313/bin/python -m pip install --only-binary=:all: ultralytics",
+      "install_rc": 0,
+      "freeze_count": 40
+    },
+    "RF_FRESH_ORD": {
+      "executable": "/private/tmp/h9-correct/RF_FRESH_ORD_py313/bin/python",
+      "version": "3.13.7",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 25.2 from /private/tmp/h9-correct/RF_FRESH_ORD_py313/lib/python3.13/site-packages/pip (python 3.13)"
+    },
+    "RF_FRESH_BIN": {
+      "executable": "/private/tmp/h9-correct/RF_FRESH_BIN_py313/bin/python",
+      "version": "3.13.7",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 25.2 from /private/tmp/h9-correct/RF_FRESH_BIN_py313/lib/python3.13/site-packages/pip (python 3.13)"
+    }
+  },
+  "onnxpop_py312": {
+    "ORD": {
+      "executable": "/private/tmp/h9-correct/RF_ONNX_ORD_py312/bin/python",
+      "version": "3.12.14",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 26.2.1 from /private/tmp/h9-correct/RF_ONNX_ORD_py312/lib/python3.12/site-packages/pip (python 3.12)",
+      "install_cmd": "/private/tmp/h9-correct/RF_ONNX_ORD_py312/bin/python -m pip install rfdetr[onnx]",
+      "install_rc": 0,
+      "freeze_count": 65
+    },
+    "BIN": {
+      "executable": "/private/tmp/h9-correct/RF_ONNX_BIN_py312/bin/python",
+      "version": "3.12.14",
+      "arch": "arm64",
+      "os": "Darwin 25.5.0",
+      "pip": "pip 26.2.1 from /private/tmp/h9-correct/RF_ONNX_BIN_py312/lib/python3.12/site-packages/pip (python 3.12)",
+      "install_cmd": "/private/tmp/h9-correct/RF_ONNX_BIN_py312/bin/python -m pip install --only-binary=:all: rfdetr[onnx]",
+      "install_rc": 0,
+      "freeze_count": 65
+    }
+  }
+}

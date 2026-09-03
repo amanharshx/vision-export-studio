@@ -1,0 +1,4 @@
+# group=rf_executorch_flatc_pre tag=py312fresh leg=binary rc=0
+# cmd: /private/tmp/h9-correct/RF_FRESH_BIN_py312/bin/python -m pip install --dry-run --report /private/tmp/h9-correct/reports/rf_executorch_flatc_pre_py312fresh_binary.json --pre --only-binary=:all: flatc
+# base_freeze=0 delta=1 full=1
+flatc==25.12.19rc0
