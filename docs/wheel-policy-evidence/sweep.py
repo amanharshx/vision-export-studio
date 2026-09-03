@@ -212,33 +212,27 @@ def persist_base_manifest(env_name, raw_lines, note=""):
 
 
 def report_delta(rep_path):
+    """Parse a pip --report file; None when missing/unreadable/malformed."""
     try:
-        r = json.load(open(rep_path))
-    except Exception:
+        with open(rep_path) as f:
+            r = json.load(f)
+    except (OSError, ValueError):
         return None, None
-    inst = r.get("install", [])
+    inst = r.get("install") if isinstance(r, dict) else None
+    if not isinstance(inst, list):
+        return None, None
     pkgs = {}
     sdists = []
-    for p in inst:
-        n = norm(p["metadata"]["name"])
-        pkgs[n] = p["metadata"]["version"]
-        url = p.get("download_info", {}).get("url", "")
-        if url.endswith((".tar.gz", ".zip")):
-            sdists.append(f"{n}=={pkgs[n]}")
+    try:
+        for p in inst:
+            n = norm(p["metadata"]["name"])
+            pkgs[n] = p["metadata"]["version"]
+            url = p.get("download_info", {}).get("url", "")
+            if url.endswith((".tar.gz", ".zip")):
+                sdists.append(f"{n}=={pkgs[n]}")
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None, None
     return pkgs, sorted(sdists)
-
-
-def write_delta_manifest(path, header, delta):
-    with open(path, "w") as f:
-        f.write(header + "\n")
-        for n in sorted(delta):
-            f.write(f"{n}=={delta[n]}\n")
-
-
-def reconstruct(base_freeze, delta):
-    full = dict(base_freeze)
-    full.update(delta or {})
-    return full
 
 
 def build(tag):
@@ -306,36 +300,31 @@ def resolve_leg(py, env_name, base_freeze, group, args, tag, policy,
     rc = run(cmd, logf, timeout=TIMEOUT)
     delta, sdists = ({}, None)
     if rc == 0:
+        # Fail closed: an exit-0 leg without a usable report must not become
+        # an empty delta (it could otherwise read as `identical`).
         delta, sdists = report_delta(rep)
         if delta is None:
-            delta, sdists = {}, None
-    full = reconstruct(base_freeze, delta)
+            sys.exit(f"[sweep] exit-0 leg has no usable report file: {rep} "
+                     f"(group={group} leg={leg}); refusing to record an empty delta")
+    full = dict(base_freeze)
+    full.update(delta)
     man_path = os.path.join(MAN, f"{group}_{ft}_{leg}.txt")
     header = (f"# group={group} tag={tag} filetag={ft} leg={leg} rc={rc}\n"
               f"# base: manifests/{base_file} "
               f"(full manifest = base with delta applied as overrides)\n"
               f"# cmd: {' '.join(cmd)}\n"
-              f"# base_freeze={len(base_freeze)} delta={len(delta or {})} full={len(full)}")
-    write_delta_manifest(man_path, header, delta or {})
-    return {"group": group, "rc": rc, "full_count": len(full),
-            "delta_count": len(delta or {}),
-            "sdists_in_delta": sdists if sdists is not None else "n/a",
-            "manifest": os.path.basename(man_path)}
+              f"# base_freeze={len(base_freeze)} delta={len(delta)} full={len(full)}")
+    with open(man_path, "w") as f:
+        f.write(header + "\n")
+        for n in sorted(delta):
+            f.write(f"{n}=={delta[n]}\n")
+    return ({"group": group, "rc": rc, "full_count": len(full),
+             "delta_count": len(delta),
+             "sdists_in_delta": sdists if sdists is not None else "n/a",
+             "manifest": os.path.basename(man_path)}, full)
 
 
-def delta_of_manifest(manifest_name):
-    """Delta dict read back from a written route manifest."""
-    delta = {}
-    with open(os.path.join(MAN, manifest_name)) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "==" in line:
-                n, v = line.split("==", 1)
-                delta[norm(n)] = v.strip()
-    return delta
-
-
-def classify(group, o, b, base_ord, base_bin):
+def classify(group, o, b, fo, fb):
     orc, brc = o["rc"], b["rc"]
     if isinstance(orc, str) or isinstance(brc, str):
         verdict = "timeout/non-convergence"
@@ -346,8 +335,6 @@ def classify(group, o, b, base_ord, base_bin):
     elif brc != 0:
         verdict = "binary failure"
     else:
-        fo = reconstruct(base_ord, delta_of_manifest(o["manifest"]))
-        fb = reconstruct(base_bin, delta_of_manifest(b["manifest"]))
         verdict = "identical" if fo == fb else "divergent"
     return {"group": group, "verdict": verdict,
             "ord_rc": orc, "bin_rc": brc,
@@ -373,9 +360,9 @@ def resolve_all(tag, onnxpop=False):
         persist_base_manifest(f"UL_ORD_{tag}", freeze_raw_text(ord_py))
         persist_base_manifest(f"UL_BIN_{tag}", freeze_raw_text(bin_py))
         for group, args in UL_ROUTES:
-            o = resolve_leg(ord_py, f"UL_ORD_{tag}", ul_ord_base, group, args, tag, "ord")
-            b = resolve_leg(bin_py, f"UL_BIN_{tag}", ul_bin_base, group, args, tag, "bin")
-            rows.append(classify(group, o, b, ul_ord_base, ul_bin_base))
+            o, fo = resolve_leg(ord_py, f"UL_ORD_{tag}", ul_ord_base, group, args, tag, "ord")
+            b, fb = resolve_leg(bin_py, f"UL_BIN_{tag}", ul_bin_base, group, args, tag, "bin")
+            rows.append(classify(group, o, b, fo, fb))
             print("  ", rows[-1])
     else:
         # Counts only (no UL legs in onnxpop mode); RF rows live in this summary.
@@ -383,7 +370,12 @@ def resolve_all(tag, onnxpop=False):
             upy = require_venv(f"UL_{leg}_{tag}")
             out[key] = len(freeze(upy))
     rf_env = "RF_ONNX" if onnxpop else "RF_FRESH"
-    ft = f"{tag}_{state}"
+    if onnxpop and tag != "py312":
+        sys.exit(f"[sweep] onnxpop state exists only for py312 "
+                 f"(rfdetr-default sharing was tested on 3.12 only); got {tag}")
+    # Tracked filename convention: plain <group>_<py>_<leg>.txt everywhere,
+    # except Python 3.12 RF rows which carry the stack state.
+    ft = f"{tag}_onnxpop" if onnxpop else (f"{tag}_fresh" if tag == "py312" else tag)
     ro_py = require_venv(f"{rf_env}_ORD_{tag}")
     rb_py = require_venv(f"{rf_env}_BIN_{tag}")
     ro_base = freeze(ro_py)
@@ -398,23 +390,34 @@ def resolve_all(tag, onnxpop=False):
             rows.append({"group": group, "verdict": "gated-skipped",
                          "ord_rc": "skipped", "bin_rc": "skipped"})
             continue
-        o = resolve_leg(ro_py, f"{rf_env}_ORD_{tag}", ro_base, group, args,
-                        tag, "ord", filetag=ft)
-        b = resolve_leg(rb_py, f"{rf_env}_BIN_{tag}", rb_base, group, args,
-                        tag, "bin", filetag=ft)
-        rows.append(classify(group, o, b, ro_base, rb_base))
+        o, fo = resolve_leg(ro_py, f"{rf_env}_ORD_{tag}", ro_base, group, args,
+                          tag, "ord", filetag=ft)
+        b, fb = resolve_leg(rb_py, f"{rf_env}_BIN_{tag}", rb_base, group, args,
+                          tag, "bin", filetag=ft)
+        rows.append(classify(group, o, b, fo, fb))
         print("  ", rows[-1])
     # flatc prerelease stage (exact app second stage: `pip install --pre flatc`).
-    o = resolve_leg(ro_py, f"{rf_env}_ORD_{tag}", ro_base, "rf_executorch_flatc_pre",
-                    ["flatc"], tag, "ord", pre=True, filetag=ft)
-    b = resolve_leg(rb_py, f"{rf_env}_BIN_{tag}", rb_base, "rf_executorch_flatc_pre",
-                    ["flatc"], tag, "bin", pre=True, filetag=ft)
-    rows.append(classify("rf_executorch_flatc_pre", o, b, ro_base, rb_base))
+    o, fo = resolve_leg(ro_py, f"{rf_env}_ORD_{tag}", ro_base, "rf_executorch_flatc_pre",
+                        ["flatc"], tag, "ord", pre=True, filetag=ft)
+    b, fb = resolve_leg(rb_py, f"{rf_env}_BIN_{tag}", rb_base, "rf_executorch_flatc_pre",
+                        ["flatc"], tag, "bin", pre=True, filetag=ft)
+    rows.append(classify("rf_executorch_flatc_pre", o, b, fo, fb))
     print("  ", rows[-1])
     out["rows"] = rows
     name = f"summary_{tag}{'_onnxpop' if onnxpop else ''}.json"
     json.dump(out, open(os.path.join(REP, name), "w"), indent=2)
     print(f"wrote {name}")
+
+
+# Canonical Step-4 raw artifacts (written by step4.py under its work dir) and
+# their tracked destinations: (work-relative source, evidence-relative dest).
+STEP4_ARTIFACTS = [
+    ("step4-summary.json", "step4-summary.json"),
+    ("RF-step4-ordinary-freeze.txt", "manifests/RF-step4-ordinary-freeze.txt"),
+    ("RF-step4-binary-freeze.txt", "manifests/RF-step4-binary-freeze.txt"),
+    ("step4-ordinary-antlr-build.txt", "step4-ordinary-antlr-build.txt"),
+    ("step4-binary-resolution-failure.txt", "step4-binary-resolution-failure.txt"),
+]
 
 
 def consolidate(out):
@@ -445,16 +448,19 @@ def consolidate(out):
     with open(os.path.join(out, "envmeta.json"), "w") as f:
         json.dump(env, f, indent=2)
     print(f"consolidated {len(sums)} summaries, {len(env)} envmeta records to {out}")
-
-
-def parse_interps(pairs):
-    interps = {}
-    for pair in pairs or []:
-        if "=" not in pair:
-            sys.exit(f"[sweep] bad --interp {pair!r}; expected TAG=PATH")
-        tag, path = pair.split("=", 1)
-        interps[tag] = path
-    return interps
+    included, missing = [], []
+    for src, dest in STEP4_ARTIFACTS:
+        src_path = os.path.join(REP, src)
+        if os.path.exists(src_path):
+            dest_path = os.path.join(out, dest)
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            shutil.copy(src_path, dest_path)
+            included.append(dest)
+        else:
+            missing.append(src)
+    print(f"step4 artifacts included: {included if included else 'none'}")
+    if missing:
+        print(f"step4 artifacts missing (not claimed): {missing}")
 
 
 def main(argv):
@@ -465,7 +471,6 @@ def main(argv):
     p.add_argument("--interp", action="append", default=[],
                    metavar="TAG=PATH",
                    help="interpreter per tag, repeatable (or H9_INTERPS JSON)")
-    p.add_argument("--out", default=None, help="consolidate destination dir")
     sub = p.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build", help="create base venvs + real installs")
     b.add_argument("tag")
@@ -473,7 +478,8 @@ def main(argv):
     r = sub.add_parser("resolve", help="dry-run resolution sweep")
     r.add_argument("tag")
     r.add_argument("state", nargs="?", default="fresh", choices=["fresh", "onnxpop"])
-    sub.add_parser("consolidate", help="merge outputs into the tracked layout")
+    c = sub.add_parser("consolidate", help="merge outputs into the tracked layout")
+    c.add_argument("--out", required=True, help="consolidate destination dir")
     args = p.parse_args(argv)
     if not args.work:
         p.error("no work directory: pass --work DIR or set H9_WORK")
@@ -482,7 +488,11 @@ def main(argv):
     except json.JSONDecodeError as e:
         sys.exit(f"[sweep] bad H9_INTERPS JSON: {e}")
     interps = dict(file_interps)
-    interps.update(parse_interps(args.interp))
+    for pair in args.interp:
+        if "=" not in pair:
+            sys.exit(f"[sweep] bad --interp {pair!r}; expected TAG=PATH")
+        tag, path = pair.split("=", 1)
+        interps[tag] = path
     configure(args.work, interps)
     if args.cmd == "build":
         build(args.tag)
@@ -491,8 +501,6 @@ def main(argv):
     elif args.cmd == "resolve":
         resolve_all(args.tag, onnxpop=(args.state == "onnxpop"))
     elif args.cmd == "consolidate":
-        if not args.out:
-            p.error("consolidate needs --out DIR")
         consolidate(args.out)
 
 

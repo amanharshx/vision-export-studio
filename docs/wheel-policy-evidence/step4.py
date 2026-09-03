@@ -26,6 +26,16 @@ Configuration (no source edits needed):
 Captures: exact commands, exit codes, decisive excerpts, final manifests
 (pip freeze), source-built package inventory.
 
+Canonical raw artifacts (under the work directory reports dir, copied verbatim
+by sweep.py `consolidate`):
+  step4-summary.json, RF-step4-ordinary-freeze.txt, RF-step4-binary-freeze.txt,
+  step4-ordinary-antlr-build.txt, step4-binary-resolution-failure.txt.
+Decisive excerpts are derived deterministically: the antlr excerpt keeps stable
+log lines matching /antlr/i plus the final `Successfully installed` line (only
+when the ordinary stable stage exits 0); the failure excerpt keeps the last 14
+non-blank stable log lines plus a command pointer (only when the binary stable
+stage exits nonzero). Absent excerpts are reported, never silently claimed.
+
 Usage:
   step4.py --work DIR [--interp PATH] [--timeout SEC]
 """
@@ -82,6 +92,35 @@ def tail(path, n=25):
     return "\n".join(lines[-n:])
 
 
+def excerpt_lines(path):
+    with open(path, errors="replace") as f:
+        return [l.rstrip("\n") for l in f]
+
+
+def write_ordinary_excerpt(stable_log):
+    """Deterministic antlr-build excerpt from an exit-0 ordinary stable log."""
+    lines = excerpt_lines(stable_log)
+    picked = [l for l in lines if "antlr" in l.lower()]
+    success = [l for l in lines if l.startswith("Successfully installed")]
+    with open(os.path.join(REP, "step4-ordinary-antlr-build.txt"), "w") as f:
+        f.write("# RF_STEP4_ORD stable leg: antlr4 sdist build lines + "
+                "final success line (exact)\n")
+        f.write("\n".join(picked) + "\n")
+        if success:
+            f.write("...\n" + success[-1] + "\n")
+
+
+def write_binary_excerpt(stable_log, rc):
+    """Deterministic resolver-failure excerpt from a failed binary stable log."""
+    nonempty = [l for l in excerpt_lines(stable_log) if l.strip()]
+    with open(os.path.join(REP, "step4-binary-resolution-failure.txt"), "w") as f:
+        f.write("# RF_STEP4_BIN stable leg with --only-binary=:all: "
+                f"(rc={rc}): backtracking tail + resolver verdict (exact)\n")
+        f.write("\n".join(nonempty[-14:]) + "\n")
+        f.write("# exact command: see step4-summary.json -> binary.stable_cmd "
+                f"(rc={rc})\n")
+
+
 def leg(name, policy_extra):
     dest = os.path.join(WORK, name)
     if os.path.exists(dest):
@@ -100,6 +139,9 @@ def leg(name, policy_extra):
     rec["stable_rc"], stable_log = run(stable, f"{name}_stable_install.log")
     rec["stable_log"] = os.path.basename(stable_log)
     if rec["stable_rc"] == 0:
+        if rec["policy"] == "ordinary":
+            write_ordinary_excerpt(stable_log)
+            rec["excerpt"] = "step4-ordinary-antlr-build.txt"
         pre = [py, "-m", "pip", "install", "--pre"] + policy_extra + ["flatc"]
         rec["pre_cmd"] = " ".join(pre)
         rec["pre_rc"], pre_log = run(pre, f"{name}_pre_flatc_install.log")
@@ -114,10 +156,14 @@ def leg(name, policy_extra):
         rec["probe_out"] = (pr.stdout + pr.stderr).strip()[-2000:]
     else:
         rec["stable_tail"] = tail(stable_log, 30)
+        if rec["policy"] == "binary":
+            write_binary_excerpt(stable_log, rec["stable_rc"])
+            rec["excerpt"] = "step4-binary-resolution-failure.txt"
     fr = subprocess.run([py, "-m", "pip", "freeze", "--exclude-editable"],
                         capture_output=True, text=True, env=ENV)
     rec["freeze_count"] = len([l for l in fr.stdout.splitlines() if "==" in l])
-    with open(os.path.join(REP, f"{name}_freeze.txt"), "w") as f:
+    rec["freeze_file"] = f"RF-step4-{rec['policy']}-freeze.txt"
+    with open(os.path.join(REP, rec["freeze_file"]), "w") as f:
         f.write(f"# {' '.join(stable)} -> rc={rec['stable_rc']}\n")
         f.write(fr.stdout)
     # source-built inventory: packages whose installed files came from an sdist
@@ -130,7 +176,7 @@ def main(argv=None):
         description="H9 decisive RF-DETR ExecuTorch real-install test")
     p.add_argument("--work", default=os.environ.get("H9_WORK"),
                    help="work directory (or H9_WORK); created if missing")
-    p.add_argument("--interp", default=os.environ.get("H9_INTERP"),
+    p.add_argument("--interp", default=os.environ.get("H9_INTERP"), metavar="PATH",
                    help="Python 3.12 interpreter (or H9_INTERP); "
                         "else python3.12 is looked up on PATH")
     p.add_argument("--timeout", type=int, default=3600,
@@ -146,7 +192,7 @@ def main(argv=None):
     out = {"host": f"{platform.system()} {platform.machine()}, real {interp}"}
     out["ordinary"] = leg("RF_STEP4_ORD", [])
     out["binary"] = leg("RF_STEP4_BIN", ["--only-binary=:all:"])
-    json.dump(out, open(os.path.join(REP, "step4_summary.json"), "w"), indent=2)
+    json.dump(out, open(os.path.join(REP, "step4-summary.json"), "w"), indent=2)
     print(json.dumps({k: {kk: v for kk, v in leg.items() if kk != "probe_out"}
                       for k, leg in out.items() if isinstance(leg, dict)}, indent=2))
     for k in ("ordinary", "binary"):

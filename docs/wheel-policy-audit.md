@@ -218,9 +218,9 @@ TFLite is gated to Python ≥3.12, <3.13; LiteRT needs Python ≥3.10.
   (`manifests/<group>_<py>_<ordinary|binary>.txt`; py312 RF files carry the
   stack state: `<group>_py312_fresh_<leg>.txt`,
   `<group>_py312_onnxpop_<leg>.txt`); exact command in each header.
-  (129 files; identical legs share delta bodies by construction, and each cell
-  keeps its own file so the command, result, base, and delta stay directly
-  mapped — see the evidence ledger.)
+  (129 files; the matching resolution results produced identical delta bodies,
+  and each cell keeps its own file so the command, result, base, and delta stay
+  directly mapped — see the evidence ledger.)
   Classification compares reconstructed full manifests, never bare exit-code pairs:
   - `identical`: both succeed with identical manifests;
   - `divergent`: both succeed with different manifests;
@@ -239,7 +239,10 @@ TFLite is gated to Python ≥3.12, <3.13; LiteRT needs Python ≥3.10.
   manifests/summaries/envmeta, exit 0). `pypi-availability.txt` is the captured
   output of the former. `sweep-summaries.json` and `envmeta.json` are produced
   from per-tag driver outputs by the deterministic `consolidate` step above —
-  no undocumented manual transformation.
+  no undocumented manual transformation. `consolidate` also copies the five
+  canonical Step-4 artifacts (`step4-summary.json`, the two `RF-step4-*-freeze.txt`
+  files, both decisive excerpts) into the same layout, explicitly reporting
+  which were included and which were absent.
 - Reproduction drivers refuse to reuse existing venv directories (fail fast on
   rerun into a used `WORK` dir), so a rerun always builds fresh environments.
 
@@ -477,7 +480,7 @@ Step-4 real-install protocol for RF-DETR ExecuTorch on Python 3.12.
 | E1 | Fresh runtime installs bare `ultralytics` | app source | — (code ref) | `export-workspace.tsx:1496` | code | observed (code) |
 | E2 | Route remedy pins `ultralytics>=8.4.80` (8.4.83 LiteRT) | app source | — (code ref) | `deps.rs:1210` | code | observed (code) |
 | E3 | Fresh UL bases install under both policies, identical | macOS ARM64, py 3.10–3.13, empty venvs | `pip install ultralytics` / `pip install --only-binary=:all: ultralytics` | rc 0 ×8, freezes byte-identical (34/39/40/40 pkgs) | `envmeta.json`, `manifests/UL-base-*.txt` | observed |
-| E4 | 8 UL + 3 RF payload groups are policy no-ops | populated UL envs / fresh RF stacks, 3.10–3.13 | `pip install --dry-run --report … [policy] <payload>` | rc 0/0, manifests byte-equal | `manifests/<group>_<py>_<leg>.txt`, `sweep-summaries.json` | observed |
+| E4 | 8 UL + 3 RF payload groups are policy no-ops | populated UL envs / fresh RF stacks, 3.10–3.13 | `pip install --dry-run --report … [policy] <payload>` | rc 0/0, reconstructed manifests equal | `manifests/<group>_<py>_<leg>.txt`, `sweep-summaries.json` | observed |
 | E5 | RF-DETR ExecuTorch installs cleanly today (3.12/ARM64) | disposable stack venv, brew py3.12.14, pip 26.2.1 | stable payload, `--pre flatc`, `pip check`, find_spec+floor probes | rc 0 ×4; rfdetr 1.9.4, executorch 1.4.1, torch 2.14.0, antlr 4.9.3 sdist-built | `step4-summary.json`, `manifests/RF-step4-ordinary-freeze.txt`, `step4-ordinary-antlr-build.txt` | observed |
 | E6 | Same payload rejected with the flag (3.12/ARM64) | disposable stack venv, same interpreter | stable payload + `--only-binary=:all:` | rc 1, `resolution-too-deep`, 0 pkgs installed, `--pre` stage never ran | `step4-summary.json`, `manifests/RF-step4-binary-freeze.txt`, `step4-binary-resolution-failure.txt` | observed |
 | E7 | antlr4 4.9.* has no wheel anywhere; flatc/torch facts | PyPI JSON API | `python3 check_pypi.py` | all assertions pass | `check_pypi.py`, `pypi-availability.txt` | metadata fact |
