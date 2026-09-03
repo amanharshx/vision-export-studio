@@ -118,8 +118,11 @@ Consequences:
   - `rfdetr-tflite` → `rfdetr.pth.tflite` (stack `python_requirement >=3.12, <3.13`)
 - Because `rfdetr-default` is shared, the ExecuTorch payload was tested in **two
   stack states** on Python 3.12: fresh (empty stack venv) and ONNX-populated
-  (stack venv with a real `rfdetr[onnx]` install). ONNX-populated states on
-  other Pythons are unverified.
+  (stack venv with a real `rfdetr[onnx]` install). Only the ExecuTorch payload
+  and its `flatc` stage are tested in that second state: RF-DETR CoreML, TFLite,
+  and TensorRT have separate stack environments, while the ONNX payload is
+  already satisfied. ONNX-populated ExecuTorch states on other Pythons are
+  unverified.
 
 ### Routes vs. payloads
 
@@ -188,6 +191,7 @@ TFLite is gated to Python ≥3.12, <3.13; LiteRT needs Python ≥3.10.
   interpreters via `--interp TAG=PATH` or `H9_INTERPS` JSON, with `python3.<minor>`
   PATH discovery and clear errors otherwise — e.g.
   `sweep.py --work DIR --interp py312=PATH build py312`,
+  `sweep.py --work DIR --interp py312=PATH build-onnxpop py312`,
   `sweep.py --work DIR resolve py312 [fresh|onnxpop]`,
   `sweep.py --work DIR consolidate --out DIR` (fresh empty directory; a nonempty
   destination is rejected before anything is written),
@@ -203,8 +207,9 @@ TFLite is gated to Python ≥3.12, <3.13; LiteRT needs Python ≥3.10.
   (`manifests/UL-base-<py>-<ORD|BIN>.txt`: ultralytics 8.4.138, torch 2.14.0) —
   so the proposed policy would not break the fresh runtime itself.
   Ultralytics route payloads resolved in these populated envs; RF-DETR payloads
-  in fresh stack venvs (`RF_FRESH_ORD|BIN_<py>`), plus ONNX-populated stack venvs
-  on 3.12 (`RF_ONNX_ORD|BIN_py312`, real `rfdetr[onnx]` install, exit 0 both legs).
+  in fresh stack venvs (`RF_FRESH_ORD|BIN_<py>`), plus the ExecuTorch payload in
+  ONNX-populated stack venvs on 3.12 (`RF_ONNX_ORD|BIN_py312`, real
+  `rfdetr[onnx]` install, exit 0 both legs).
 - Each payload was resolved twice — ordinary and `--only-binary=:all:` — via
   `pip install --dry-run --report <file>` with a 300s cap per leg, and, for the
   decisive route, installed for real. The binary policy was applied to both the
@@ -219,7 +224,7 @@ TFLite is gated to Python ≥3.12, <3.13; LiteRT needs Python ≥3.10.
   (`manifests/<group>_<py>_<ordinary|binary>.txt`; py312 RF files carry the
   stack state: `<group>_py312_fresh_<leg>.txt`,
   `<group>_py312_onnxpop_<leg>.txt`); exact command in each header.
-  (129 files; the matching resolution results produced identical delta bodies,
+  (123 files; the matching resolution results produced identical delta bodies,
   and each cell keeps its own file so the command, result, base, and delta stay
   directly mapped — see the evidence ledger.)
   Classification compares reconstructed full manifests, never bare exit-code pairs:
@@ -265,15 +270,17 @@ verdicts computed by manifest comparison (`sweep-summaries.json`).
 | ul_paddle | identical | identical | identical | — | identical | no-op |
 | ul_torchscript | identical¹ | identical¹ | identical¹ | — | identical¹ | no installer call |
 | ul_executorch | divergent | divergent | divergent | — | **binary failure** | policy changes resolution (3.10–3.12) / rejects (3.13) |
-| rf_onnx | identical | identical | identical | identical | identical | no-op |
-| rf_coreml | identical | identical | identical | identical | identical | no-op |
-| rf_tflite | —² | —² | identical | identical | —² | no-op (Python 3.12 gate) |
+| rf_onnx | identical | identical | identical | already installed³ | identical | no-op |
+| rf_coreml | identical | identical | identical | —³ | identical | no-op |
+| rf_tflite | —² | —² | identical | —³ | —² | no-op (Python 3.12 gate) |
 | rf_executorch | binary failure | binary failure | non-convergence | non-convergence | non-convergence | binary leg fails (3.10/3.11) or stalls past 300s (3.12/3.13) |
 | rf_executorch `--pre flatc` | identical | identical | identical | identical | identical | no-op (wheel exists) |
 
 ¹ `torchscript` declares no pip deps, so the installer is never invoked for it;
 `identical` is structural, not a pip observation.
 ² App Python gate (`>=3.12, <3.13`): not installable off 3.12, so no native cell.
+³ In the ONNX-populated `rfdetr-default` state, ONNX is already satisfied and
+does not invoke the installer; CoreML and TFLite use separate stack environments.
 
 Binary-only outcomes for `rf_executorch`: `ResolutionImpossible` (exit 1) on
 3.10 and 3.11, with the `hydra-core → antlr4==4.9.*` conflict quoted verbatim
@@ -459,12 +466,13 @@ removed from the decisive findings.
 
 Required CI matrix (no authorization exercised here — no CI was started, no
 workflow modified). Each cell needs a real interpreter on a native runner,
-following the tracked methodology (`sweep.py` / `step4.py`, adapted per OS for
-venv paths and activation — the tracked drivers are POSIX-oriented):
+following the tracked methodology (`sweep.py` / `step4.py`; the drivers select
+the native venv executable layout and reject an asserted target that differs
+from the runner's real OS/architecture):
 
 | Runner | Pythons | States per Python | Payloads |
 | --- | --- | --- | --- |
-| macOS x86_64 | 3.10–3.13 | ordinary-policy + binary-policy UL bases (bare-`ultralytics` real install); fresh RF stacks; ONNX-populated `rfdetr-default` | all native-table payload groups |
+| macOS x86_64 | 3.10–3.13 | ordinary-policy + binary-policy UL bases (bare-`ultralytics` real install); fresh RF stacks | all native-table payload groups (RF-DETR ExecuTorch is platform-gated off, so no ONNX-populated transition) |
 | Linux x86_64 (ubuntu-22.04) | 3.10–3.13 (TFLite: 3.12 only) | same states | native-table groups **plus** `ul_engine`, `ul_rknn`, `ul_imx`, `ul_axelera`, Edge TPU pip set, `rf_engine` |
 | Windows x86_64 | 3.10–3.13 (TFLite: 3.12 only) | same states | native-table groups **plus** `ul_engine`, `rf_engine`, `--pre flatc` stage |
 

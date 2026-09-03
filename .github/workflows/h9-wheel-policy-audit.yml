@@ -1,0 +1,236 @@
+# Temporary branch-only native audit. Remove after the H9 artifacts are captured.
+name: H9 native wheel-policy audit
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [docs/wheel-policy-audit]
+
+concurrency:
+  group: h9-wheel-policy-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolution:
+    name: Resolve • ${{ matrix.target }} • ${{ matrix.python }} • ${{ matrix.state }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - {target: macos-x86_64, runner: macos-15-intel, python: "3.10", tag: py310, state: fresh}
+          - {target: macos-x86_64, runner: macos-15-intel, python: "3.11", tag: py311, state: fresh}
+          - {target: macos-x86_64, runner: macos-15-intel, python: "3.12", tag: py312, state: fresh}
+          - {target: macos-x86_64, runner: macos-15-intel, python: "3.13", tag: py313, state: fresh}
+          - {target: linux-x86_64, runner: ubuntu-22.04, python: "3.10", tag: py310, state: fresh}
+          - {target: linux-x86_64, runner: ubuntu-22.04, python: "3.10", tag: py310, state: onnxpop}
+          - {target: linux-x86_64, runner: ubuntu-22.04, python: "3.11", tag: py311, state: fresh}
+          - {target: linux-x86_64, runner: ubuntu-22.04, python: "3.11", tag: py311, state: onnxpop}
+          - {target: linux-x86_64, runner: ubuntu-22.04, python: "3.12", tag: py312, state: fresh}
+          - {target: linux-x86_64, runner: ubuntu-22.04, python: "3.12", tag: py312, state: onnxpop}
+          - {target: linux-x86_64, runner: ubuntu-22.04, python: "3.13", tag: py313, state: fresh}
+          - {target: linux-x86_64, runner: ubuntu-22.04, python: "3.13", tag: py313, state: onnxpop}
+          - {target: windows-x86_64, runner: windows-2025, python: "3.10", tag: py310, state: fresh}
+          - {target: windows-x86_64, runner: windows-2025, python: "3.10", tag: py310, state: onnxpop}
+          - {target: windows-x86_64, runner: windows-2025, python: "3.11", tag: py311, state: fresh}
+          - {target: windows-x86_64, runner: windows-2025, python: "3.11", tag: py311, state: onnxpop}
+          - {target: windows-x86_64, runner: windows-2025, python: "3.12", tag: py312, state: fresh}
+          - {target: windows-x86_64, runner: windows-2025, python: "3.12", tag: py312, state: onnxpop}
+          - {target: windows-x86_64, runner: windows-2025, python: "3.13", tag: py313, state: fresh}
+          - {target: windows-x86_64, runner: windows-2025, python: "3.13", tag: py313, state: onnxpop}
+          - {target: macos-arm64, runner: macos-15, python: "3.10", tag: py310, state: onnxpop}
+          - {target: macos-arm64, runner: macos-15, python: "3.11", tag: py311, state: onnxpop}
+          - {target: macos-arm64, runner: macos-15, python: "3.13", tag: py313, state: onnxpop}
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PIP_NO_INPUT: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Runner identity
+        run: >-
+          python -c "import platform,sys;
+          print('executable',sys.executable);
+          print('version',platform.python_version());
+          print('system',platform.system());
+          print('machine',platform.machine())"
+
+      - name: Build fresh base environments
+        id: build
+        if: ${{ matrix.state == 'fresh' }}
+        continue-on-error: true
+        run: >-
+          python docs/wheel-policy-evidence/sweep.py
+          --work h9-work
+          --interp ${{ matrix.tag }}=python
+          --target ${{ matrix.target }}
+          build ${{ matrix.tag }}
+
+      - name: Reclaim fresh-base wheel cache
+        if: ${{ always() && matrix.state == 'fresh' && steps.build.outcome == 'success' }}
+        run: >-
+          python -c "import shutil;
+          shutil.rmtree('h9-work/cache', ignore_errors=True)"
+
+      - name: Resolve fresh stacks
+        id: fresh
+        if: ${{ always() && matrix.state == 'fresh' && steps.build.outcome == 'success' }}
+        continue-on-error: true
+        run: >-
+          python docs/wheel-policy-evidence/sweep.py
+          --work h9-work
+          --interp ${{ matrix.tag }}=python
+          --target ${{ matrix.target }}
+          resolve ${{ matrix.tag }} fresh
+
+      - name: Build ONNX-populated stack environments
+        id: onnx_build
+        if: ${{ matrix.state == 'onnxpop' }}
+        continue-on-error: true
+        run: >-
+          python docs/wheel-policy-evidence/sweep.py
+          --work h9-work
+          --interp ${{ matrix.tag }}=python
+          --target ${{ matrix.target }}
+          build-onnxpop ${{ matrix.tag }}
+
+      - name: Reclaim ONNX base wheel cache
+        if: ${{ always() && matrix.state == 'onnxpop' && steps.onnx_build.outcome == 'success' }}
+        run: >-
+          python -c "import shutil;
+          shutil.rmtree('h9-work/cache', ignore_errors=True)"
+
+      - name: Resolve ONNX-populated stacks
+        id: onnx_resolve
+        if: ${{ always() && matrix.state == 'onnxpop' && steps.onnx_build.outcome == 'success' }}
+        continue-on-error: true
+        run: >-
+          python docs/wheel-policy-evidence/sweep.py
+          --work h9-work
+          --interp ${{ matrix.tag }}=python
+          --target ${{ matrix.target }}
+          resolve ${{ matrix.tag }} onnxpop
+
+      - name: Upload resolution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: h9-resolution-${{ matrix.target }}-${{ matrix.tag }}-${{ matrix.state }}
+          path: |
+            h9-work/logs
+            h9-work/reports
+            h9-work/manifests
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Fail on driver error
+        if: >-
+          ${{ always() &&
+              ((matrix.state == 'fresh' && steps.build.outcome != 'success') ||
+               (matrix.state == 'fresh' && steps.fresh.outcome != 'success') ||
+               (matrix.state == 'onnxpop' && steps.onnx_build.outcome != 'success') ||
+               (matrix.state == 'onnxpop' && steps.onnx_resolve.outcome != 'success')) }}
+        run: exit 1
+
+  decisive-install:
+    name: Real install • ${{ matrix.target }} • Python 3.12
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - {target: linux-x86_64, runner: ubuntu-22.04}
+          - {target: windows-x86_64, runner: windows-2025}
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PIP_NO_INPUT: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Run ordinary and binary-only real installs
+        id: step4
+        continue-on-error: true
+        run: >-
+          python docs/wheel-policy-evidence/step4.py
+          --work h9-step4
+          --interp python
+          --target ${{ matrix.target }}
+          --timeout 1800
+
+      - name: Upload real-install evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: h9-step4-${{ matrix.target }}
+          path: |
+            h9-step4/logs
+            h9-step4/reports
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Fail on driver error
+        if: ${{ always() && steps.step4.outcome != 'success' }}
+        run: exit 1
+
+  summary:
+    name: Native audit summary
+    if: always()
+    needs: [resolution, decisive-install]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download available evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: h9-*
+          path: h9-artifacts
+
+      - name: Build audit summary
+        id: summarize
+        continue-on-error: true
+        run: >-
+          python docs/wheel-policy-evidence/ci_summary.py
+          --artifacts h9-artifacts
+          --out h9-native-summary.md
+
+      - name: Publish job summary
+        if: always()
+        run: cat h9-native-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload combined summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: h9-native-summary
+          path: h9-native-summary.md
+          retention-days: 30
+
+      - name: Fail if an audit job failed
+        if: >-
+          ${{ needs.resolution.result != 'success' ||
+              needs.decisive-install.result != 'success' ||
+              steps.summarize.outcome != 'success' }}
+        run: exit 1

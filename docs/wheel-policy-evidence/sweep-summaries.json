@@ -647,7 +647,7 @@
         "sdists_in_ordinary_delta": []
       }
     ],
-    "note": "UL rows + fresh-stack RF rows (py312_fresh manifests). ONNX-populated RF rows live in summary_py312_onnxpop.json (py312_onnxpop manifests)."
+    "note": "UL rows + fresh-stack RF rows (py312_fresh manifests). ONNX-populated RF-DETR ExecuTorch rows live in summary_py312_onnxpop.json (py312_onnxpop manifests)."
   },
   "summary_py312_onnxpop.json": {
     "tag": "py312",
@@ -655,39 +655,6 @@
     "UL_ORD_freeze": 40,
     "UL_BIN_freeze": 40,
     "rows": [
-      {
-        "group": "rf_onnx",
-        "verdict": "identical",
-        "ord_rc": 0,
-        "bin_rc": 0,
-        "ord_delta": 0,
-        "bin_delta": 0,
-        "ord_manifest": "rf_onnx_py312_onnxpop_ordinary.txt",
-        "bin_manifest": "rf_onnx_py312_onnxpop_binary.txt",
-        "sdists_in_ordinary_delta": []
-      },
-      {
-        "group": "rf_coreml",
-        "verdict": "identical",
-        "ord_rc": 0,
-        "bin_rc": 0,
-        "ord_delta": 7,
-        "bin_delta": 7,
-        "ord_manifest": "rf_coreml_py312_onnxpop_ordinary.txt",
-        "bin_manifest": "rf_coreml_py312_onnxpop_binary.txt",
-        "sdists_in_ordinary_delta": []
-      },
-      {
-        "group": "rf_tflite",
-        "verdict": "identical",
-        "ord_rc": 0,
-        "bin_rc": 0,
-        "ord_delta": 41,
-        "bin_delta": 41,
-        "ord_manifest": "rf_tflite_py312_onnxpop_ordinary.txt",
-        "bin_manifest": "rf_tflite_py312_onnxpop_binary.txt",
-        "sdists_in_ordinary_delta": []
-      },
       {
         "group": "rf_executorch",
         "verdict": "timeout/non-convergence",
@@ -713,6 +680,6 @@
         "sdists_in_ordinary_delta": []
       }
     ],
-    "note": "RF rows only: UL payloads resolve in the same UL_ORD/UL_BIN_py312 envs, already covered by summary_py312.json; the onnxpop rerun skipped them."
+    "note": "RF-DETR ExecuTorch rows only: ONNX and ExecuTorch share rfdetr-default; CoreML, TFLite, and TensorRT have separate stack environments. UL rows are already covered by summary_py312.json."
   }
 }

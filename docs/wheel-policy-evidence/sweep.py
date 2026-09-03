@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""H9 corrected sweep: populated-env dry-run resolution, macOS ARM64 native.
+"""H9 wheel-policy sweep: populated-env resolution on a native release target.
 
 Faithful modeling of the app at 3cbf09d:
   * Fresh Ultralytics runtime = `pip install ultralytics` (BARE name, as sent by
@@ -13,8 +13,9 @@ Faithful modeling of the app at 3cbf09d:
       UL_BIN_<tag>: venv + real `pip install --only-binary=:all: ultralytics`
     Ordinary legs resolve in ORD envs, binary legs in BIN envs.
   * RF-DETR stacks start empty: RF_FRESH_ORD/BIN_<tag> are empty venvs.
-  * rfdetr-default is shared by onnx and executorch: on 3.12 only, ONNX-populated
-    envs (real `pip install "rfdetr[onnx]"`) model the second state.
+  * rfdetr-default is shared by onnx and executorch: ONNX-populated envs (real
+    `pip install "rfdetr[onnx]"`) model the second state where that route is
+    native. The recorded local audit used 3.12; CI can supply any supported tag.
   * No --ignore-installed anywhere (the app never passes it).
   * Each leg: `pip install --dry-run --report <file> [policy] <payload>`,
     300s timeout. A timeout is recorded as did-not-converge, never as failure.
@@ -32,10 +33,12 @@ Configuration (no source edits needed):
   * Interpreters: `--interp TAG=PATH` (repeatable) or `H9_INTERPS` JSON object
     (e.g. '{"py312": "/usr/bin/python3.12"}'); otherwise `python3.<minor>` is
     looked up on PATH, else a clear error names the missing tag.
+  * Native target: auto-detected, or asserted with `--target`. An assertion that
+    does not match the real OS/architecture fails; this is never a simulation.
 
 Usage:
   sweep.py --work DIR [--interp TAG=PATH ...] build <tag>
-  sweep.py --work DIR [--interp TAG=PATH ...] build-onnxpop
+  sweep.py --work DIR [--interp TAG=PATH ...] build-onnxpop <tag>
   sweep.py --work DIR resolve <tag> [fresh|onnxpop]
   sweep.py --work DIR consolidate --out DIR
 Consolidate deterministically merges per-tag summaries and envmeta records plus
@@ -46,6 +49,7 @@ rejects a nonempty one before writing anything.
 import argparse
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -58,39 +62,83 @@ REP = None
 MAN = None
 ENV = None
 PYTHONS = {}
+TARGET = None
 
 # Notes embedded verbatim so `consolidate` output matches the tracked files.
 NOTE_PY312 = ("UL rows + fresh-stack RF rows (py312_fresh manifests). "
-              "ONNX-populated RF rows live in summary_py312_onnxpop.json "
+              "ONNX-populated RF-DETR ExecuTorch rows live in "
+              "summary_py312_onnxpop.json "
               "(py312_onnxpop manifests).")
-NOTE_ONNXPOP = ("RF rows only: UL payloads resolve in the same UL_ORD/UL_BIN_py312 "
-                "envs, already covered by summary_py312.json; the onnxpop rerun skipped them.")
+NOTE_ONNXPOP = ("RF-DETR ExecuTorch rows only: ONNX and ExecuTorch share rfdetr-default; "
+                "CoreML, TFLite, and TensorRT have separate stack environments. UL rows "
+                "are already covered by summary_py312.json.")
 
-# Native macOS payload groups (exact app install_package values; onnxslim excluded:
-# optional -> install_package None, dropped by getInstallableMissingPackages).
+# Exact app install_package values; onnxslim is optional and therefore omitted
+# by getInstallableMissingPackages. Target sets mirror route_platform_lock.
 UL_ROUTES = [
-    ("ul_onnx", ["onnx"]),
-    ("ul_openvino", ["openvino", "nncf"]),
-    ("ul_coreml", ["coremltools"]),
-    ("ul_ncnn", ["ncnn", "pnnx"]),
-    ("ul_mnn", ["MNN", "onnx"]),
-    ("ul_litert", ["litert-torch>=0.9.0", "ai-edge-litert>=2.1.4"]),
-    ("ul_tfgraph", ["tensorflow", "onnx2tf", "onnx", "onnxruntime"]),
-    ("ul_paddle", ["paddlepaddle", "x2paddle"]),
-    ("ul_executorch", ["executorch"]),
+    ("ul_onnx", ["onnx"], "all"),
+    ("ul_openvino", ["openvino", "nncf"], "all"),
+    ("ul_coreml", ["coremltools"], "macos-linux"),
+    ("ul_ncnn", ["ncnn", "pnnx"], "all"),
+    ("ul_mnn", ["MNN", "onnx"], "all"),
+    ("ul_litert", ["litert-torch>=0.9.0", "ai-edge-litert>=2.1.4"],
+     "macos-linux-x86_64"),
+    ("ul_tfgraph", ["tensorflow", "onnx2tf", "onnx", "onnxruntime"], "all"),
+    ("ul_paddle", ["paddlepaddle", "x2paddle"], "all"),
+    ("ul_executorch", ["executorch"], "all"),
+    ("ul_engine", ["tensorrt"], "linux-windows"),
+    ("ul_rknn", ["rknn-toolkit2", "onnx"], "linux"),
+    ("ul_imx", ["model-compression-toolkit", "sony-custom-layers",
+                "imx500-converter"], "linux"),
+    ("ul_axelera", ["axelera"], "linux"),
 ]
-# Fresh-stack RF routes native to macOS (rf_engine is Linux/Windows-gated: excluded
-# from the native table; rf_tflite gated to Python 3.12 by stack python_requirement).
 RF_ROUTES = [
-    ("rf_onnx", ["rfdetr[onnx]"]),
-    ("rf_coreml", ["rfdetr[coreml]"]),
-    ("rf_tflite", ["rfdetr[tflite]>=1.9.4"]),
-    ("rf_executorch", ["rfdetr[executorch]>=1.9.0", "torch>=2.13"]),
+    ("rf_onnx", ["rfdetr[onnx]"], "all"),
+    ("rf_coreml", ["rfdetr[coreml]"], "macos"),
+    ("rf_tflite", ["rfdetr[tflite]>=1.9.4"], "all"),
+    ("rf_executorch", ["rfdetr[executorch]>=1.9.0", "torch>=2.13"],
+     "macos-arm64-linux-windows-x86_64"),
+    ("rf_engine", ["rfdetr[tensorrt]"], "linux-windows"),
 ]
 
 
-def configure(work, interps):
-    global WORK, LOG, REP, MAN, ENV, PYTHONS
+def native_target():
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    arch = "arm64" if machine in ("arm64", "aarch64") else (
+        "x86_64" if machine in ("x86_64", "amd64") else machine)
+    os_name = {"darwin": "macos", "linux": "linux", "windows": "windows"}.get(
+        system, system)
+    target = f"{os_name}-{arch}"
+    supported = {"macos-arm64", "macos-x86_64", "linux-x86_64", "windows-x86_64"}
+    if target not in supported:
+        sys.exit(f"[sweep] unsupported native target {target} "
+                 f"(system={platform.system()} machine={platform.machine()})")
+    return target
+
+
+def route_allowed(lock):
+    os_name, arch = TARGET.rsplit("-", 1)
+    return {
+        "all": True,
+        "macos": os_name == "macos",
+        "linux": os_name == "linux",
+        "macos-linux": os_name in ("macos", "linux"),
+        "linux-windows": os_name in ("linux", "windows"),
+        "macos-linux-x86_64": os_name == "macos" or TARGET == "linux-x86_64",
+        "macos-arm64-linux-windows-x86_64": (
+            TARGET == "macos-arm64" or
+            (os_name in ("linux", "windows") and arch == "x86_64")
+        ),
+    }[lock]
+
+
+def configure(work, interps, expected_target=None):
+    global WORK, LOG, REP, MAN, ENV, PYTHONS, TARGET
+    TARGET = native_target()
+    if expected_target and expected_target != TARGET:
+        sys.exit(f"[sweep] --target asserted {expected_target}, but the native "
+                 f"interpreter reports {TARGET}; refusing cross-target simulation")
     WORK = work
     LOG = os.path.join(WORK, "logs")
     REP = os.path.join(WORK, "reports")
@@ -125,7 +173,9 @@ def run(cmd, logpath, timeout=1800):
 
 
 def venv_py(name):
-    return os.path.join(WORK, name, "bin", "python")
+    scripts = "Scripts" if os.name == "nt" else "bin"
+    executable = "python.exe" if os.name == "nt" else "python"
+    return os.path.join(WORK, name, scripts, executable)
 
 
 def require_venv(name):
@@ -240,7 +290,9 @@ def report_delta(rep_path):
 def build(tag):
     interp = interp_for(tag)
     meta = {"tag": tag, "interpreter": interp.replace(os.path.expanduser("~"), "~"),
-            "host": "Darwin arm64 (native runner; hostname not recorded)"}
+            "host": f"{platform.system()} {platform.machine()} "
+                    "(native runner; hostname not recorded)",
+            "target": TARGET}
     # UL ordinary base: exact fresh-runtime command (bare name).
     ord_py = ensure_venv(interp, f"UL_ORD_{tag}")
     meta["UL_ORD"] = envmeta(ord_py)
@@ -264,15 +316,21 @@ def build(tag):
         rf = ensure_venv(interp, f"RF_FRESH_{leg}_{tag}")
         meta[f"RF_FRESH_{leg}"] = envmeta(rf)
         persist_base_manifest(f"RF_FRESH_{leg}_{tag}", [])
+    failed = [leg for leg in ("UL_ORD", "UL_BIN")
+              if meta[leg]["install_rc"] != 0]
+    meta["base_failures"] = failed
     json.dump(meta, open(os.path.join(REP, f"envmeta_{tag}.json"), "w"), indent=2)
     print(json.dumps(meta, indent=2))
+    if failed:
+        print(f"[sweep] base installation failed for {failed}; "
+              "dependent UL route resolution will be recorded as unavailable")
 
 
-def build_onnxpop():
-    interp = interp_for("py312")
-    meta = {}
+def build_onnxpop(tag):
+    interp = interp_for(tag)
+    meta = {"tag": tag, "target": TARGET}
     for leg, extra in (("ORD", []), ("BIN", ["--only-binary=:all:"])):
-        name = f"RF_ONNX_{leg}_py312"
+        name = f"RF_ONNX_{leg}_{tag}"
         py = ensure_venv(interp, name)
         meta[leg] = envmeta(py)
         cmd = [py, "-m", "pip", "install"] + extra + ["rfdetr[onnx]"]
@@ -282,8 +340,13 @@ def build_onnxpop():
         meta[leg]["freeze_count"] = len(freeze(py))
         persist_base_manifest(name, freeze_raw_text(py),
                               note=f"real rfdetr[onnx] install, rc {rc}")
-    json.dump(meta, open(os.path.join(REP, "envmeta_onnxpop_py312.json"), "w"), indent=2)
+    failed = [leg for leg in ("ORD", "BIN") if meta[leg]["install_rc"] != 0]
+    meta["base_failures"] = failed
+    json.dump(meta, open(os.path.join(REP, f"envmeta_onnxpop_{tag}.json"), "w"), indent=2)
     print(json.dumps(meta, indent=2))
+    if failed:
+        print(f"[sweep] ONNX-populated base installation failed for {failed}; "
+              "the dependent ExecuTorch transition will be recorded as unavailable")
 
 
 def resolve_leg(py, env_name, base_freeze, group, args, tag, policy,
@@ -347,33 +410,69 @@ def classify(group, o, b, fo, fb):
 
 def resolve_all(tag, onnxpop=False):
     state = "onnxpop" if onnxpop else "fresh"
-    if onnxpop and tag != "py312":
-        sys.exit(f"[sweep] onnxpop state exists only for py312 "
-                 f"(rfdetr-default sharing was tested on 3.12 only); got {tag}")
     rows = []
-    out = {"tag": tag, "stack_state": state, "rows": rows}
+    out = {"tag": tag, "target": TARGET, "stack_state": state, "rows": rows}
+    if onnxpop:
+        out["platform_skipped"] = [
+            group for group, _, lock in RF_ROUTES
+            if group == "rf_executorch" and not route_allowed(lock)]
+        out["state_skipped"] = {
+            "rf_onnx": "already installed in the ONNX-populated base",
+            "rf_coreml": "separate rfdetr-coreml stack",
+            "rf_tflite": "separate rfdetr-tflite stack",
+            "rf_engine": "separate rfdetr-tensorrt stack",
+        }
+    else:
+        out["platform_skipped"] = [
+            group for group, _, lock in UL_ROUTES + RF_ROUTES
+            if not route_allowed(lock)]
+    meta_name = f"envmeta_onnxpop_{tag}.json" if onnxpop else f"envmeta_{tag}.json"
+    meta_path = os.path.join(REP, meta_name)
+    try:
+        with open(meta_path) as f:
+            base_meta = json.load(f)
+    except (OSError, ValueError) as exc:
+        sys.exit(f"[sweep] missing or invalid base metadata {meta_path}: {exc}")
     ul_ord_base = ul_bin_base = {}
     if not onnxpop:
         # UL legs run once (fresh mode); the onnxpop rerun covers RF stacks only,
         # so UL filenames never collide across stack states.
-        ord_py = require_venv(f"UL_ORD_{tag}")
-        bin_py = require_venv(f"UL_BIN_{tag}")
-        ul_ord_base = freeze(ord_py)
-        ul_bin_base = freeze(bin_py)
-        out["UL_ORD_freeze"] = len(ul_ord_base)
-        out["UL_BIN_freeze"] = len(ul_bin_base)
-        persist_base_manifest(f"UL_ORD_{tag}", freeze_raw_text(ord_py))
-        persist_base_manifest(f"UL_BIN_{tag}", freeze_raw_text(bin_py))
-        for group, args in UL_ROUTES:
-            o, fo = resolve_leg(ord_py, f"UL_ORD_{tag}", ul_ord_base, group, args, tag, "ord")
-            b, fb = resolve_leg(bin_py, f"UL_BIN_{tag}", ul_bin_base, group, args, tag, "bin")
-            rows.append(classify(group, o, b, fo, fb))
+        ul_base_failures = base_meta.get("base_failures", [])
+        if ul_base_failures:
+            rows.append({"group": "ul_base", "verdict": "base failure",
+                         "ord_rc": base_meta["UL_ORD"]["install_rc"],
+                         "bin_rc": base_meta["UL_BIN"]["install_rc"],
+                         "failed_legs": ul_base_failures})
             print("  ", rows[-1])
-    else:
-        # Counts only (no UL legs in onnxpop mode); RF rows live in this summary.
-        for leg, key in (("ORD", "UL_ORD_freeze"), ("BIN", "UL_BIN_freeze")):
-            upy = require_venv(f"UL_{leg}_{tag}")
-            out[key] = len(freeze(upy))
+        else:
+            ord_py = require_venv(f"UL_ORD_{tag}")
+            bin_py = require_venv(f"UL_BIN_{tag}")
+            ul_ord_base = freeze(ord_py)
+            ul_bin_base = freeze(bin_py)
+            out["UL_ORD_freeze"] = len(ul_ord_base)
+            out["UL_BIN_freeze"] = len(ul_bin_base)
+            persist_base_manifest(f"UL_ORD_{tag}", freeze_raw_text(ord_py))
+            persist_base_manifest(f"UL_BIN_{tag}", freeze_raw_text(bin_py))
+            for group, args, lock in UL_ROUTES:
+                if not route_allowed(lock):
+                    continue
+                o, fo = resolve_leg(ord_py, f"UL_ORD_{tag}", ul_ord_base,
+                                    group, args, tag, "ord")
+                b, fb = resolve_leg(bin_py, f"UL_BIN_{tag}", ul_bin_base,
+                                    group, args, tag, "bin")
+                rows.append(classify(group, o, b, fo, fb))
+                print("  ", rows[-1])
+    elif base_meta.get("base_failures"):
+        rows.append({"group": "rf_onnx_base", "verdict": "base failure",
+                     "ord_rc": base_meta["ORD"]["install_rc"],
+                     "bin_rc": base_meta["BIN"]["install_rc"],
+                     "failed_legs": base_meta["base_failures"]})
+        out["rows"] = rows
+        name = f"summary_{tag}_onnxpop.json"
+        json.dump(out, open(os.path.join(REP, name), "w"), indent=2)
+        print("  ", rows[-1])
+        print(f"wrote {name}")
+        return
     rf_env = "RF_ONNX" if onnxpop else "RF_FRESH"
     # Tracked filename convention: plain <group>_<py>_<leg>.txt everywhere,
     # except Python 3.12 RF rows which carry the stack state.
@@ -386,7 +485,13 @@ def resolve_all(tag, onnxpop=False):
                           note="real rfdetr[onnx] install" if onnxpop else "")
     persist_base_manifest(f"{rf_env}_BIN_{tag}", freeze_raw_text(rb_py),
                           note="real rfdetr[onnx] install" if onnxpop else "")
-    for group, args in RF_ROUTES:
+    selected_rf_groups = []
+    for group, args, lock in RF_ROUTES:
+        if onnxpop and group != "rf_executorch":
+            continue
+        if not route_allowed(lock):
+            continue
+        selected_rf_groups.append(group)
         if group == "rf_tflite" and tag != "py312":
             print(f"   {group}: skipped (app gates TFLite stack to Python >=3.12,<3.13)")
             rows.append({"group": group, "verdict": "gated-skipped",
@@ -398,13 +503,17 @@ def resolve_all(tag, onnxpop=False):
                           tag, "bin", filetag=ft)
         rows.append(classify(group, o, b, fo, fb))
         print("  ", rows[-1])
-    # flatc prerelease stage (exact app second stage: `pip install --pre flatc`).
-    o, fo = resolve_leg(ro_py, f"{rf_env}_ORD_{tag}", ro_base, "rf_executorch_flatc_pre",
-                        ["flatc"], tag, "ord", pre=True, filetag=ft)
-    b, fb = resolve_leg(rb_py, f"{rf_env}_BIN_{tag}", rb_base, "rf_executorch_flatc_pre",
-                        ["flatc"], tag, "bin", pre=True, filetag=ft)
-    rows.append(classify("rf_executorch_flatc_pre", o, b, fo, fb))
-    print("  ", rows[-1])
+    # flatc is the exact app second stage for RF-DETR ExecuTorch only. Do not
+    # simulate it on macOS x86_64, where the route is rejected before install.
+    if "rf_executorch" in selected_rf_groups:
+        o, fo = resolve_leg(ro_py, f"{rf_env}_ORD_{tag}", ro_base,
+                            "rf_executorch_flatc_pre", ["flatc"], tag, "ord",
+                            pre=True, filetag=ft)
+        b, fb = resolve_leg(rb_py, f"{rf_env}_BIN_{tag}", rb_base,
+                            "rf_executorch_flatc_pre", ["flatc"], tag, "bin",
+                            pre=True, filetag=ft)
+        rows.append(classify("rf_executorch_flatc_pre", o, b, fo, fb))
+        print("  ", rows[-1])
     out["rows"] = rows
     name = f"summary_{tag}{'_onnxpop' if onnxpop else ''}.json"
     json.dump(out, open(os.path.join(REP, name), "w"), indent=2)
@@ -481,10 +590,15 @@ def main(argv):
     p.add_argument("--interp", action="append", default=[],
                    metavar="TAG=PATH",
                    help="interpreter per tag, repeatable (or H9_INTERPS JSON)")
+    p.add_argument("--target",
+                   choices=["macos-arm64", "macos-x86_64", "linux-x86_64",
+                            "windows-x86_64"],
+                   help="assert the auto-detected native release target")
     sub = p.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build", help="create base venvs + real installs")
     b.add_argument("tag")
-    sub.add_parser("build-onnxpop", help="create ONNX-populated 3.12 stacks")
+    bo = sub.add_parser("build-onnxpop", help="create ONNX-populated stacks")
+    bo.add_argument("tag")
     r = sub.add_parser("resolve", help="dry-run resolution sweep")
     r.add_argument("tag")
     r.add_argument("state", nargs="?", default="fresh", choices=["fresh", "onnxpop"])
@@ -503,11 +617,11 @@ def main(argv):
             sys.exit(f"[sweep] bad --interp {pair!r}; expected TAG=PATH")
         tag, path = pair.split("=", 1)
         interps[tag] = path
-    configure(args.work, interps)
+    configure(args.work, interps, expected_target=args.target)
     if args.cmd == "build":
         build(args.tag)
     elif args.cmd == "build-onnxpop":
-        build_onnxpop()
+        build_onnxpop(args.tag)
     elif args.cmd == "resolve":
         resolve_all(args.tag, onnxpop=(args.state == "onnxpop"))
     elif args.cmd == "consolidate":

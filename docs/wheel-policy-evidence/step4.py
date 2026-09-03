@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""H9 Step 4: decisive real RF-DETR ExecuTorch test, Python 3.12 / macOS ARM64.
+"""H9 Step 4: decisive real RF-DETR ExecuTorch test on a native target.
 
 Two disposable stack venvs from a real Python 3.12 interpreter (bundled pip;
 the recorded audit used the machine's python3.12 — select with --interp).
@@ -22,6 +22,8 @@ Configuration (no source edits needed):
   * Interpreter: `--interp PATH` or `H9_INTERP`; otherwise `python3.12` is
     looked up on PATH, else a clear error is raised.
   * Per-stage pip timeout: `--timeout SEC` (default 3600).
+  * Native target: auto-detected, or asserted with `--target`. A mismatch fails
+    instead of silently turning the run into cross-platform simulation.
 
 Captures: exact commands, exit codes, decisive excerpts, and final manifests
 (pip freeze).
@@ -82,9 +84,13 @@ def run(cmd, logname):
     path = os.path.join(LOG, logname)
     with open(path, "w") as f:
         f.write("$ " + " ".join(cmd) + "\n")
-        r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT,
-                           timeout=TIMEOUT, env=ENV)
-    return r.returncode, path
+        try:
+            r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT,
+                               timeout=TIMEOUT, env=ENV)
+            return r.returncode, path
+        except subprocess.TimeoutExpired:
+            f.write(f"\n[step4] killed after {TIMEOUT}s (did not converge)\n")
+            return f"timeout({TIMEOUT}s)", path
 
 
 def tail(path, n=25):
@@ -99,13 +105,25 @@ def write_artifact(name, header, body_lines):
         f.write("\n".join(body_lines) + "\n")
 
 
+def native_target():
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    arch = "arm64" if machine in ("arm64", "aarch64") else (
+        "x86_64" if machine in ("x86_64", "amd64") else machine)
+    os_name = {"darwin": "macos", "linux": "linux", "windows": "windows"}.get(
+        system, system)
+    return f"{os_name}-{arch}"
+
+
 def leg(name, policy_extra):
     dest = os.path.join(WORK, name)
     if os.path.exists(dest):
         sys.exit(f"[step4] refusing to reuse existing {dest}; "
                  f"remove it for a fresh reproduction or use a new WORK dir")
     subprocess.run([INTERP, "-m", "venv", dest], check=True, env=ENV)
-    py = os.path.join(dest, "bin", "python")
+    scripts = "Scripts" if os.name == "nt" else "bin"
+    executable = "python.exe" if os.name == "nt" else "python"
+    py = os.path.join(dest, scripts, executable)
     rec = {"env": name, "policy": "binary" if policy_extra else "ordinary",
            "python": subprocess.run([py, "-V"], capture_output=True,
                                     text=True, env=ENV).stdout.strip(),
@@ -176,6 +194,10 @@ def main(argv=None):
                         "else python3.12 is looked up on PATH")
     p.add_argument("--timeout", type=int, default=3600,
                    help="per-stage pip timeout in seconds")
+    p.add_argument("--target",
+                   choices=["macos-arm64", "macos-x86_64", "linux-x86_64",
+                            "windows-x86_64"],
+                   help="assert the auto-detected native release target")
     args = p.parse_args(argv)
     if not args.work:
         p.error("no work directory: pass --work DIR or set H9_WORK")
@@ -183,8 +205,13 @@ def main(argv=None):
     if not interp:
         p.error("no interpreter: pass --interp PATH or set H9_INTERP "
                 "(looked for python3.12 on PATH)")
+    target = native_target()
+    if args.target and args.target != target:
+        p.error(f"--target asserted {args.target}, but the native interpreter "
+                f"reports {target}; refusing cross-target simulation")
     configure(args.work, interp, args.timeout)
-    out = {"host": f"{platform.system()} {platform.machine()}, real {interp}"}
+    out = {"host": f"{platform.system()} {platform.machine()}, real {interp}",
+           "target": target}
     out["ordinary"] = leg("RF_STEP4_ORD", [])
     out["binary"] = leg("RF_STEP4_BIN", ["--only-binary=:all:"])
     json.dump(out, open(os.path.join(REP, "step4-summary.json"), "w"), indent=2)
