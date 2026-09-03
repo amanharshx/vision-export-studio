@@ -87,15 +87,20 @@ def resolve_model_class_symbol(checkpoint):
     return None
 
 
-def _from_checkpoint_accepts_trust_flag(from_checkpoint):
+def _from_checkpoint_accepts_trust_flag(module, from_checkpoint):
     """Check the supported upstream signature for trust_checkpoint.
 
-    RF-DETR 1.9.0 declares trust_checkpoint explicitly; older releases only
-    forward **kwargs into strict model configuration, so the flag must not
-    be sent based on **kwargs presence.
+    Modern RF-DETR declares trust_checkpoint on RFDETR.from_checkpoint while
+    the public rfdetr.from_checkpoint wrapper keeps (path, **kwargs) and
+    forwards. Older releases only forward **kwargs into strict model
+    configuration, so the flag must be detected on the class method, not
+    the wrapper.
     """
+    rfdetr_class = getattr(module, "RFDETR", None)
+    class_method = getattr(rfdetr_class, "from_checkpoint", None)
+    target = class_method if callable(class_method) else from_checkpoint
     try:
-        return "trust_checkpoint" in inspect.signature(from_checkpoint).parameters
+        return "trust_checkpoint" in inspect.signature(target).parameters
     except (TypeError, ValueError):
         return False
 
@@ -106,7 +111,7 @@ def load_model_for_inspect(checkpoint_path, checkpoint=None):
     if callable(from_checkpoint):
         # The Rust command only runs inspect after explicit user trust, so
         # forward that confirmed trust when the supported signature accepts it.
-        if _from_checkpoint_accepts_trust_flag(from_checkpoint):
+        if _from_checkpoint_accepts_trust_flag(module, from_checkpoint):
             return from_checkpoint(checkpoint_path, trust_checkpoint=True)
         return from_checkpoint(checkpoint_path)
 
@@ -188,9 +193,29 @@ def infer_native_export_shape(checkpoint_path, model, checkpoint=None):
         args_container, is_args=True
     )
 
-    # Strongest wins per field; weaker sources only fill gaps.
+    # Strongest wins per field; weaker sources only fill gaps. Resolution
+    # keeps checkpoint args ahead of the loaded-model default so custom
+    # training resolutions survive; patch/windows prefer the loaded model
+    # over args. The selected resolution is validated against the final
+    # patch_size * num_windows below.
     patch_size = _first_valid(saved_patch, model_patch, args_patch)
+    if saved_patch is not None:
+        patch_source = "saved_model_config"
+    elif model_patch is not None:
+        patch_source = "model_config"
+    elif args_patch is not None:
+        patch_source = "args"
+    else:
+        patch_source = None
     num_windows = _first_valid(saved_windows, model_windows, args_windows)
+    if saved_windows is not None:
+        num_windows_source = "saved_model_config"
+    elif model_windows is not None:
+        num_windows_source = "model_config"
+    elif args_windows is not None:
+        num_windows_source = "args"
+    else:
+        num_windows_source = None
     required_multiple = (
         patch_size * num_windows
         if patch_size is not None and num_windows is not None
@@ -202,10 +227,10 @@ def infer_native_export_shape(checkpoint_path, model, checkpoint=None):
     candidates = []
     if saved_resolution is not None:
         candidates.append((saved_resolution, "saved_model_config"))
-    if model_resolution is not None:
-        candidates.append((model_resolution, "model_config"))
     if args_resolution is not None:
         candidates.append((args_resolution, "args"))
+    if model_resolution is not None:
+        candidates.append((model_resolution, "model_config"))
 
     resolution = None
     resolution_source = None
@@ -256,6 +281,8 @@ def infer_native_export_shape(checkpoint_path, model, checkpoint=None):
             "required_multiple": required_multiple,
             "token_grid": None,
             "resolution_source": None,
+            "patch_source": patch_source,
+            "num_windows_source": num_windows_source,
         }
 
     print(
@@ -272,6 +299,8 @@ def infer_native_export_shape(checkpoint_path, model, checkpoint=None):
         "required_multiple": required_multiple,
         "token_grid": token_grid,
         "resolution_source": resolution_source,
+        "patch_source": patch_source,
+        "num_windows_source": num_windows_source,
     }
 
 
@@ -287,16 +316,12 @@ def inspect_checkpoint(checkpoint_path):
         family = class_family(class_symbol)
         success = family is not None and not requires_plus
         native = infer_native_export_shape(checkpoint_path, model, checkpoint)
-        if (
-            model is None
-            and not requires_plus
-            and (
-                native["recommended_imgsz"] is None
-                or native["patch_size"] is None
-                or native["num_windows"] is None
-                or native["resolution_source"] not in ("saved_model_config", "model_config")
-            )
-        ):
+        fully_saved = (
+            native["resolution_source"] == "saved_model_config"
+            and native["patch_source"] == "saved_model_config"
+            and native["num_windows_source"] == "saved_model_config"
+        )
+        if model is None and not requires_plus and not fully_saved:
             # Checkpoint geometry is missing or weaker than the loaded model
             # configuration. The Rust command only reaches here after explicit
             # user trust, which load_model_for_inspect forwards when supported.

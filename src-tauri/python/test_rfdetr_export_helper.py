@@ -120,6 +120,8 @@ class RfDetrExportHelperTests(unittest.TestCase):
                 "recommended_imgsz": 512, "patch_size": 16, "num_windows": 2,
                 "required_multiple": 32, "token_grid": 32,
                 "resolution_source": "model_config",
+                "patch_source": "model_config",
+                "num_windows_source": "model_config",
             }),
             # Stronger saved config wins, including a custom 640 training
             # resolution that must not be replaced by a family preset.
@@ -184,6 +186,13 @@ class RfDetrExportHelperTests(unittest.TestCase):
                  "required_multiple": 32, "token_grid": 32,
                  "resolution_source": "model_config",
              }),
+            ("invalid_args_resolution_falls_through_to_model",
+             {"args": {"resolution": 518, "patch_size": 14, "num_windows": 4}},
+             model_512, {
+                 "recommended_imgsz": 512, "patch_size": 16, "num_windows": 2,
+                 "required_multiple": 32, "token_grid": 32,
+                 "resolution_source": "model_config",
+             }),
             ("incomplete", {}, None, {
                 "recommended_imgsz": None, "patch_size": None, "num_windows": None,
                 "required_multiple": None, "token_grid": None,
@@ -193,7 +202,7 @@ class RfDetrExportHelperTests(unittest.TestCase):
         for name, checkpoint, model, expected in cases:
             with self.subTest(name):
                 native = helper.infer_native_export_shape("/tmp/model.pth", model, checkpoint=checkpoint)
-                self.assertEqual(native, expected)
+                self.assertEqual({key: native[key] for key in expected}, expected)
 
     def test_infer_rejects_position_embedding_resolution_not_divisible_by_block(self):
         # RF-DETR Base: 37x37 tokens at patch 14 derives 518px, but the block
@@ -302,10 +311,10 @@ class RfDetrExportHelperTests(unittest.TestCase):
         self.assertEqual(captured["required_multiple"], 32)
         self.assertEqual(captured["resolution_source"], "model_config")
 
-    def test_inspect_prefers_valid_loaded_model_resolution_over_legacy_args(self):
-        # Legacy args carry 640 without patch info; the loaded model supplies
-        # 512/16/2. Precedence is saved > model > args with validity filtering,
-        # so the valid loaded-model resolution wins in a single re-resolve.
+    def test_inspect_preserves_custom_legacy_resolution_when_model_fills_constraints(self):
+        # Legacy args carry a custom 640 resolution without patch info; the
+        # loaded model supplies patch/windows. Resolution precedence is
+        # saved > args > model, so valid 640 survives a single re-resolve.
         checkpoint = {"model_name": "RFDETRSmall", "args": {"resolution": 640}}
         loaded = SimpleNamespace(
             model_config=SimpleNamespace(resolution=512, patch_size=16, num_windows=2)
@@ -321,11 +330,11 @@ class RfDetrExportHelperTests(unittest.TestCase):
                     result = helper.inspect_checkpoint("/tmp/model.pth")
 
         self.assertEqual(result, 0)
-        self.assertEqual(captured["recommended_imgsz"], 512)
-        self.assertEqual(captured["resolution_source"], "model_config")
+        self.assertEqual(captured["recommended_imgsz"], 640)
+        self.assertEqual(captured["resolution_source"], "args")
         self.assertEqual(captured["patch_size"], 16)
         self.assertEqual(captured["required_multiple"], 32)
-        self.assertEqual(captured["token_grid"], 32)
+        self.assertEqual(captured["token_grid"], 40)
 
     def test_inspect_rejects_invalid_legacy_resolution_after_model_load(self):
         # Args 518 against loaded 560/14/4 (block 56): 518 is invalid and
@@ -399,13 +408,21 @@ class RfDetrExportHelperTests(unittest.TestCase):
         self.assertIn("torch load boom", failure_captured["error"])
 
     def test_load_model_for_inspect_forwards_confirmed_trust(self):
+        # Modern RF-DETR: public wrapper keeps (path, **kwargs) and forwards
+        # while RFDETR.from_checkpoint declares trust_checkpoint explicitly.
         seen = {}
 
-        def from_checkpoint(path, trust_checkpoint=False):
-            seen["kwargs"] = {"trust_checkpoint": trust_checkpoint}
+        def wrapper(path, **kwargs):
+            seen["kwargs"] = kwargs
             return SimpleNamespace()
 
-        fake_module = types.SimpleNamespace(from_checkpoint=from_checkpoint)
+        def class_from_checkpoint(path, trust_checkpoint=False):
+            return SimpleNamespace()
+
+        fake_module = types.SimpleNamespace(
+            from_checkpoint=wrapper,
+            RFDETR=types.SimpleNamespace(from_checkpoint=class_from_checkpoint),
+        )
 
         with patch("builtins.__import__", return_value=fake_module):
             helper.load_model_for_inspect("/tmp/model.pth")
@@ -415,11 +432,31 @@ class RfDetrExportHelperTests(unittest.TestCase):
     def test_load_model_for_inspect_omits_trust_flag_on_legacy_signature(self):
         seen = {}
 
-        def from_checkpoint(path, **kwargs):
+        def wrapper(path, **kwargs):
             seen["kwargs"] = kwargs
             return SimpleNamespace()
 
-        fake_module = types.SimpleNamespace(from_checkpoint=from_checkpoint)
+        def legacy_class_from_checkpoint(path, **kwargs):
+            return SimpleNamespace()
+
+        fake_module = types.SimpleNamespace(
+            from_checkpoint=wrapper,
+            RFDETR=types.SimpleNamespace(from_checkpoint=legacy_class_from_checkpoint),
+        )
+
+        with patch("builtins.__import__", return_value=fake_module):
+            helper.load_model_for_inspect("/tmp/model.pth")
+
+        self.assertEqual(seen["kwargs"], {})
+
+    def test_load_model_for_inspect_omits_trust_flag_without_rfdetr_class(self):
+        seen = {}
+
+        def wrapper(path, **kwargs):
+            seen["kwargs"] = kwargs
+            return SimpleNamespace()
+
+        fake_module = types.SimpleNamespace(from_checkpoint=wrapper)
 
         with patch("builtins.__import__", return_value=fake_module):
             helper.load_model_for_inspect("/tmp/model.pth")
