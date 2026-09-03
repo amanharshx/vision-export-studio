@@ -64,7 +64,6 @@ interface ExportModalProps {
     trusted: boolean;
     recommendedImgsz?: number | null;
     patchSize?: number | null;
-    requiredMultiple?: number | null;
   } | null;
 }
 
@@ -229,11 +228,10 @@ export function ExportModal({
       return "Converting with current options";
     }
     const patch = rfdetrSummary.patchSize ? ` \u00b7 patch ${rfdetrSummary.patchSize}` : "";
-    const multiple = rfdetrSummary.requiredMultiple ? ` \u00b7 multiple ${rfdetrSummary.requiredMultiple}` : "";
     if (options.imgsz === rfdetrSummary.recommendedImgsz) {
-      return `Native settings applied: ${options.imgsz}px${patch}${multiple}`;
+      return `Native settings applied: ${options.imgsz}px${patch}`;
     }
-    return `Override active: ${options.imgsz}px \u00b7 native ${rfdetrSummary.recommendedImgsz}px${patch}${multiple}`;
+    return `Override active: ${options.imgsz}px \u00b7 native ${rfdetrSummary.recommendedImgsz}px${patch}`;
   })();
 
   const commandPreview = buildCommandPreview({
@@ -294,7 +292,7 @@ export function ExportModal({
                     : rfdetrSummary.detectedClass ?? "Auto"}
                 </span>
                 {rfdetrSummary.recommendedImgsz
-                  ? ` · native ${rfdetrSummary.recommendedImgsz}px${rfdetrSummary.patchSize ? ` · patch ${rfdetrSummary.patchSize}` : ""}${rfdetrSummary.requiredMultiple ? ` · multiple ${rfdetrSummary.requiredMultiple}` : ""}`
+                  ? ` · native ${rfdetrSummary.recommendedImgsz}px${rfdetrSummary.patchSize ? ` · patch ${rfdetrSummary.patchSize}` : ""}`
                   : ""}
               </p>
               <p className="mt-1">Use checkpoints from trusted sources only. Local checkpoint loading may execute Python pickle data.</p>

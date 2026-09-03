@@ -90,7 +90,12 @@ def load_model_for_inspect(checkpoint_path, checkpoint=None):
     module = __import__("rfdetr", fromlist=["from_checkpoint"])
     from_checkpoint = getattr(module, "from_checkpoint", None)
     if callable(from_checkpoint):
-        return from_checkpoint(checkpoint_path)
+        # The Rust command only runs inspect after explicit user trust, so
+        # forward that confirmed trust to upstream loading.
+        try:
+            return from_checkpoint(checkpoint_path, trust_checkpoint=True)
+        except TypeError:
+            return from_checkpoint(checkpoint_path)
 
     checkpoint = checkpoint if checkpoint is not None else load_checkpoint(checkpoint_path)
     class_symbol = resolve_model_class_symbol(checkpoint)
@@ -102,36 +107,16 @@ def load_model_for_inspect(checkpoint_path, checkpoint=None):
 
 
 def _as_positive_int(value):
-    """Return value as a positive int, or None when malformed.
+    """Return value when it is a positive int, else None.
 
-    Rejects bools, non-integral floats, and non-positive values instead of
-    truncating them, so malformed metadata falls through to weaker sources.
+    Anything else (strings, floats, bools, index-like objects) counts as
+    malformed metadata and falls through to weaker sources.
     """
     if isinstance(value, bool):
         return None
-    if isinstance(value, int):
-        return value if value > 0 else None
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return None
-        # Reject floats and scientific notation instead of truncating them.
-        if "." in text or "e" in text.lower():
-            return None
-        try:
-            parsed = int(text, 10)
-        except (ValueError, TypeError):
-            return None
-        return parsed if parsed > 0 else None
-    try:
-        import operator
-
-        parsed = operator.index(value)
-    except TypeError:
+    if type(value) is not int:
         return None
-    if isinstance(parsed, bool):
-        return None
-    return parsed if parsed > 0 else None
+    return value if value > 0 else None
 
 
 def _field_from_container(container, key):
@@ -206,7 +191,10 @@ def infer_native_export_shape(checkpoint_path, model, checkpoint=None):
         token_grid = resolution // patch_size if patch_size else None
     else:
         token_grid = None
-        # Weakest source: derive resolution from position embeddings.
+        # Weakest source: derive resolution from position embeddings. Only
+        # accept it when divisible by the model block size; e.g. RF-DETR
+        # Base reports 37x37 tokens at patch 14 (518px) but requires
+        # multiples of 14*4=56, so 518 must stay incomplete.
         try:
             pos_emb = None
             if isinstance(checkpoint, dict):
@@ -219,14 +207,16 @@ def infer_native_export_shape(checkpoint_path, model, checkpoint=None):
                                 break
                         if pos_emb is not None:
                             break
-            if pos_emb is not None and patch_size:
+            if pos_emb is not None and patch_size and num_windows:
                 num_tokens = int(pos_emb.shape[1]) - 1
                 if num_tokens > 0:
                     tokens = int(math.isqrt(num_tokens))
                     if tokens > 0 and tokens * tokens == num_tokens:
-                        resolution = tokens * patch_size
-                        token_grid = tokens
-                        resolution_source = "position_embeddings"
+                        candidate = tokens * patch_size
+                        if candidate % (patch_size * num_windows) == 0:
+                            resolution = candidate
+                            token_grid = tokens
+                            resolution_source = "position_embeddings"
         except (AttributeError, IndexError, TypeError, ValueError):
             pass
 
@@ -281,6 +271,24 @@ def inspect_checkpoint(checkpoint_path):
         family = class_family(class_symbol)
         success = family is not None and not requires_plus
         native = infer_native_export_shape(checkpoint_path, model, checkpoint)
+        if (
+            model is None
+            and not requires_plus
+            and (
+                native["recommended_imgsz"] is None
+                or native["patch_size"] is None
+                or native["num_windows"] is None
+            )
+        ):
+            # Saved geometry is incomplete but the checkpoint class is known.
+            # The Rust command only reaches here after explicit user trust,
+            # which load_model_for_inspect forwards to from_checkpoint.
+            try:
+                model = load_model_for_inspect(checkpoint_path, checkpoint)
+            except Exception:
+                model = None
+            if model is not None:
+                native = infer_native_export_shape(checkpoint_path, model, checkpoint)
         emit({
             "success": success,
             "class_symbol": class_symbol,

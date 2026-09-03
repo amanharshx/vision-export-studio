@@ -15,12 +15,9 @@ pub struct RfDetrInspectResult {
     pub is_legacy: bool,
     pub recommended_imgsz: Option<u32>,
     pub patch_size: Option<u32>,
-    #[serde(default)]
     pub num_windows: Option<u32>,
-    #[serde(default)]
     pub required_multiple: Option<u32>,
     pub token_grid: Option<u32>,
-    #[serde(default)]
     pub resolution_source: Option<String>,
     pub error: Option<String>,
 }
@@ -114,15 +111,6 @@ mod tests {
             Some("saved_model_config")
         );
         assert!(result.success);
-    }
-
-    #[test]
-    fn parses_legacy_inspect_json_without_geometry_fields() {
-        let result = parse_inspect_stdout(br#"{"success":true,"class_symbol":"RFDETRSmall","family":"detection","size":"small","requires_plus":false,"is_legacy":false,"recommended_imgsz":512,"patch_size":16,"token_grid":32,"error":null}
-"#).expect("parse legacy inspect json");
-        assert_eq!(result.num_windows, None);
-        assert_eq!(result.required_multiple, None);
-        assert_eq!(result.resolution_source, None);
     }
 
     #[test]
