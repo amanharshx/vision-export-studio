@@ -35,8 +35,9 @@ while the identical payload with `--only-binary=:all:` fails in the real
 installer path (`error: resolution-too-deep`, exit 1, nothing installed). The
 root cause is platform-independent package metadata — `hydra-core` (pulled via
 `executorch`) pins `antlr4-python3-runtime==4.9.*`, and no `4.9.x` wheel exists
-on PyPI for any platform — so the rejection generalizes beyond the tested host
-(inferred, from metadata; native runs on other targets remain pending CI).
+on PyPI for any platform. One native counterexample is sufficient to reject a
+*global* policy; behavior on other platforms remains inferred from that
+metadata and unverified by native runs (pending CI).
 
 Recommendations 2 and 3 are **not endorsed**: selective or allowlisted
 binary-only policies were not tested, and non-ARM64 targets have no native runs
@@ -182,9 +183,15 @@ TFLite is gated to Python ≥3.12, <3.13; LiteRT needs Python ≥3.10.
   | 3.12 | `/opt/homebrew/bin/python3.12` | 3.12.14 | arm64 | 26.2.1 |
   | 3.13 | `/opt/homebrew/bin/python3.13` | 3.13.7 | arm64 | 25.2 |
 
-- Temporary venvs only, under `/private/tmp/h9-correct` (drivers
-  `docs/wheel-policy-evidence/sweep.py` and `step4.py`; shared pip cache, since
-  removed from evidence). The managed runtime at `~/.vision-export-studio` was
+- Temporary venvs only, under a caller-selected work directory (the recorded
+  audit used `/private/tmp/h9-correct`; drivers take `--work DIR` or `H9_WORK`,
+  interpreters via `--interp TAG=PATH` or `H9_INTERPS` JSON, with `python3.<minor>`
+  PATH discovery and clear errors otherwise — e.g.
+  `sweep.py --work DIR --interp py312=PATH build py312`,
+  `sweep.py --work DIR resolve py312 [fresh|onnxpop]`,
+  `sweep.py --work DIR consolidate --out DIR`,
+  `step4.py --work DIR [--interp PATH]`; shared pip cache under the work dir,
+  since removed from evidence). The managed runtime at `~/.vision-export-studio` was
   never read, written, or touched.
 - Faithfulness rules: **no `--ignore-installed`** (the app never passes it);
   **separate ordinary-policy and binary-policy base envs per interpreter** —
@@ -211,6 +218,9 @@ TFLite is gated to Python ≥3.12, <3.13; LiteRT needs Python ≥3.10.
   (`manifests/<group>_<py>_<ordinary|binary>.txt`; py312 RF files carry the
   stack state: `<group>_py312_fresh_<leg>.txt`,
   `<group>_py312_onnxpop_<leg>.txt`); exact command in each header.
+  (129 files; identical legs share delta bodies by construction, and each cell
+  keeps its own file so the command, result, base, and delta stay directly
+  mapped — see the evidence ledger.)
   Classification compares reconstructed full manifests, never bare exit-code pairs:
   - `identical`: both succeed with identical manifests;
   - `divergent`: both succeed with different manifests;
@@ -227,7 +237,9 @@ TFLite is gated to Python ≥3.12, <3.13; LiteRT needs Python ≥3.10.
 - Validation: `check_pypi.py` (PyPI availability assertions, exit 0) and
   `check_manifests.py` (evidence-consistency assertions over the tracked
   manifests/summaries/envmeta, exit 0). `pypi-availability.txt` is the captured
-  output of the former.
+  output of the former. `sweep-summaries.json` and `envmeta.json` are produced
+  from per-tag driver outputs by the deterministic `consolidate` step above —
+  no undocumented manual transformation.
 - Reproduction drivers refuse to reuse existing venv directories (fail fast on
   rerun into a used `WORK` dir), so a rerun always builds fresh environments.
 
@@ -354,9 +366,11 @@ flatc-25.12.19rc0-py3-none-win_amd64.whl
 
 On macOS ARM64 all four interpreters resolve `flatc==25.12.19rc0` identically
 under both policies (single-entry manifests), and the Step-4 ordinary leg
-installed the wheel. There is **no macOS x86_64 flatc wheel and no sdist**, so
-on that target the flatc stage would fail regardless of policy — unverified
-natively, package-metadata fact only.
+installed the wheel. There is **no macOS x86_64 flatc wheel and no sdist**
+(package-metadata fact only) — hypothetically the flatc stage would fail there
+regardless of policy, but the RF-DETR ExecuTorch route is platform-rejected on
+macOS x86_64 before the installer ever runs, so that stage is unreachable on
+that target. Unverified natively.
 
 ### 5. The `torch` premise in #94, re-examined
 
@@ -391,10 +405,10 @@ package-metadata fact; macOS x86_64 install behavior itself unverified natively.
   `flatc 25.12.19rc0` is the only release (three named wheels, no sdist, no
   macOS x86_64 wheel); modern `torch` has no macOS x86_64 wheel and no sdist.
 - **Inferred:** the decisive breakage is caused by a package with zero
-  wheels on any platform, which suggests a blanket `--only-binary=:all:` would
-  also reject the ExecuTorch payloads on macOS x86_64, Linux x86_64, and
-  Windows x86_64 — but those outcomes are **unverified** natively and are not
-  claimed. The native macOS ARM64 counterexample alone carries Recommendation 1.
+  wheels on any platform. One native counterexample is sufficient to reject a
+  *global* policy; whether other platforms fail the same way remains inferred
+  and **unverified** (pending CI). The native macOS ARM64 counterexample alone
+  carries Recommendation 1.
 - **Unverified (needs native CI):** actual resolution/installation on macOS
   x86_64, Linux x86_64, Windows x86_64; wheel coverage of Linux/Windows-gated
   routes (`engine`, `rknn`, `imx`, `axelera`, Edge TPU, `rf_engine`) on their
@@ -414,10 +428,10 @@ removed from the decisive findings.
 
 ## Expected user impact
 
-- **Recommendation 1 (reject / close #94):** no change. Installer behavior is
-  exactly today's: every route installs as it currently does, including the
-  ExecuTorch routes (pip builds the 117 kB pure-Python `antlr4` sdist; observed
-  to build and install successfully in the Step-4 ordinary leg).
+- **Recommendation 1 (reject / close #94):** no change — Recommendation 1 leaves
+  installer behavior unchanged. On the natively tested target the ExecuTorch
+  routes keep installing as today (pip builds the 117 kB pure-Python `antlr4`
+  sdist; observed to build and install successfully in the Step-4 ordinary leg).
 - **If a blanket binary-only were adopted instead (not recommended):** on the
   natively tested target, the RF-DETR ExecuTorch binary leg fails on 3.10/3.11
   (exit-1 ResolutionImpossible, observed) and stalls past 300s on 3.12/3.13

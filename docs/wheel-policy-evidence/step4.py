@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """H9 Step 4: decisive real RF-DETR ExecuTorch test, Python 3.12 / macOS ARM64.
 
-Two disposable stack venvs from /opt/homebrew/bin/python3.12 (bundled pip).
+Two disposable stack venvs from a real Python 3.12 interpreter (bundled pip;
+the recorded audit used the machine's python3.12 — select with --interp).
 
 Ordinary leg (RF_STEP4_ORD):
   1. exact stable payload:  pip install "rfdetr[executorch]>=1.9.0" "torch>=2.13"
@@ -16,21 +17,31 @@ Binary leg (RF_STEP4_BIN): identical, with --only-binary=:all: applied to the
 stable payload first; the --pre flatc stage runs with the flag only if the
 stable stage succeeds. Same probes when installation succeeds.
 
+Configuration (no source edits needed):
+  * Work directory: `--work DIR` or `H9_WORK` (required; created if missing).
+  * Interpreter: `--interp PATH` or `H9_INTERP`; otherwise `python3.12` is
+    looked up on PATH, else a clear error is raised.
+  * Per-stage pip timeout: `--timeout SEC` (default 3600).
+
 Captures: exact commands, exit codes, decisive excerpts, final manifests
 (pip freeze), source-built package inventory.
+
+Usage:
+  step4.py --work DIR [--interp PATH] [--timeout SEC]
 """
+import argparse
 import json
 import os
+import platform
+import shutil
 import subprocess
 import sys
 
-WORK = "/private/tmp/h9-correct"
-LOG = os.path.join(WORK, "logs")
-REP = os.path.join(WORK, "reports")
-os.makedirs(LOG, exist_ok=True)
-os.makedirs(REP, exist_ok=True)
-ENV = dict(os.environ, PIP_CACHE_DIR=os.path.join(WORK, "cache"))
-INTERP = "/opt/homebrew/bin/python3.12"
+WORK = None
+LOG = None
+REP = None
+ENV = None
+INTERP = None
 TIMEOUT = 3600
 
 PROBE = (
@@ -43,6 +54,18 @@ PROBE = (
     "print('rfdetr-floor-ok', Version(m.version('rfdetr')) >= Version('1.9.0'));"
     "print('torch-floor-ok', Version(m.version('torch')) >= Version('2.13'))"
 )
+
+
+def configure(work, interp, timeout):
+    global WORK, LOG, REP, ENV, INTERP, TIMEOUT
+    WORK = work
+    LOG = os.path.join(WORK, "logs")
+    REP = os.path.join(WORK, "reports")
+    os.makedirs(LOG, exist_ok=True)
+    os.makedirs(REP, exist_ok=True)
+    ENV = dict(os.environ, PIP_CACHE_DIR=os.path.join(WORK, "cache"))
+    INTERP = interp
+    TIMEOUT = timeout
 
 
 def run(cmd, logname):
@@ -102,8 +125,25 @@ def leg(name, policy_extra):
     return rec
 
 
-def main():
-    out = {"host": "macOS ARM64 (Darwin), real /opt/homebrew/bin/python3.12"}
+def main(argv=None):
+    p = argparse.ArgumentParser(
+        description="H9 decisive RF-DETR ExecuTorch real-install test")
+    p.add_argument("--work", default=os.environ.get("H9_WORK"),
+                   help="work directory (or H9_WORK); created if missing")
+    p.add_argument("--interp", default=os.environ.get("H9_INTERP"),
+                   help="Python 3.12 interpreter (or H9_INTERP); "
+                        "else python3.12 is looked up on PATH")
+    p.add_argument("--timeout", type=int, default=3600,
+                   help="per-stage pip timeout in seconds")
+    args = p.parse_args(argv)
+    if not args.work:
+        p.error("no work directory: pass --work DIR or set H9_WORK")
+    interp = args.interp or shutil.which("python3.12")
+    if not interp:
+        p.error("no interpreter: pass --interp PATH or set H9_INTERP "
+                "(looked for python3.12 on PATH)")
+    configure(args.work, interp, args.timeout)
+    out = {"host": f"{platform.system()} {platform.machine()}, real {interp}"}
     out["ordinary"] = leg("RF_STEP4_ORD", [])
     out["binary"] = leg("RF_STEP4_BIN", ["--only-binary=:all:"])
     json.dump(out, open(os.path.join(REP, "step4_summary.json"), "w"), indent=2)

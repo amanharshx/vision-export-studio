@@ -18,36 +18,51 @@ Faithful modeling of the app at 3cbf09d:
   * No --ignore-installed anywhere (the app never passes it).
   * Each leg: `pip install --dry-run --report <file> [policy] <payload>`,
     300s timeout. A timeout is recorded as did-not-converge, never as failure.
-  * Manifests: normalized sorted `name==version` (freeze base UNION report delta).
-    Classification compares manifests, never bare exit-code pairs.
+  * Manifests (deduplicated, base-plus-delta): each shared base environment is
+    persisted once (UL-base-<tag>-<ORD|BIN>.txt, RF-fresh-base-empty.txt,
+    RF-onnx-base-<tag>-<ORD|BIN>.txt); each route manifest body holds only the
+    report delta with a `# base: manifests/<name>` header. A full closure is
+    reconstructed as base plus delta, delta versions overriding base versions.
+    Classification compares reconstructed full closures, never bare exit codes.
+    Failed/timed-out legs still record the base reference with an empty delta.
+
+Configuration (no source edits needed):
+  * Work directory: `--work DIR` or `H9_WORK` (required; created if missing).
+    A run refuses to reuse existing venv directories, so reruns need a fresh dir.
+  * Interpreters: `--interp TAG=PATH` (repeatable) or `H9_INTERPS` JSON object
+    (e.g. '{"py312": "/usr/bin/python3.12"}'); otherwise `python3.<minor>` is
+    looked up on PATH, else a clear error names the missing tag.
 
 Usage:
-  sweep.py build <tag>        # create UL_ORD/UL_BIN/RF_FRESH_* venvs + real installs
-  sweep.py build-onnxpop      # 3.12 only: RF_ONNX_ORD/BIN + real rfdetr[onnx]
-  sweep.py resolve <tag>      # dry-run sweep for one python tag
+  sweep.py --work DIR [--interp TAG=PATH ...] build <tag>
+  sweep.py --work DIR [--interp TAG=PATH ...] build-onnxpop
+  sweep.py --work DIR resolve <tag> [fresh|onnxpop]
+  sweep.py --work DIR consolidate --out DIR
+Consolidate deterministically merges per-tag summaries and envmeta records plus
+the manifest files into the layout validated by check_manifests.py.
 """
+import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 
-WORK = "/private/tmp/h9-correct"
-LOG = os.path.join(WORK, "logs")
-REP = os.path.join(WORK, "reports")
-MAN = os.path.join(WORK, "manifests")
-os.makedirs(LOG, exist_ok=True)
-os.makedirs(REP, exist_ok=True)
-os.makedirs(MAN, exist_ok=True)
-
 TIMEOUT = 300
-ENV = dict(os.environ, PIP_CACHE_DIR=os.path.join(WORK, "cache"))
 
-PYTHONS = {
-    "py310": "/Users/aman/.local/bin/python3.10",
-    "py311": "/Users/aman/.pyenv/versions/3.11.9/bin/python3.11",
-    "py312": "/opt/homebrew/bin/python3.12",
-    "py313": "/opt/homebrew/bin/python3.13",
-}
+WORK = None
+LOG = None
+REP = None
+MAN = None
+ENV = None
+PYTHONS = {}
+
+# Notes embedded verbatim so `consolidate` output matches the tracked files.
+NOTE_PY312 = ("UL rows + fresh-stack RF rows (py312_fresh manifests). "
+              "ONNX-populated RF rows live in summary_py312_onnxpop.json "
+              "(py312_onnxpop manifests).")
+NOTE_ONNXPOP = ("RF rows only: UL payloads resolve in the same UL_ORD/UL_BIN_py312 "
+                "envs, already covered by summary_py312.json; the onnxpop rerun skipped them.")
 
 # Native macOS payload groups (exact app install_package values; onnxslim excluded:
 # optional -> install_package None, dropped by getInstallableMissingPackages).
@@ -72,6 +87,29 @@ RF_ROUTES = [
 ]
 
 
+def configure(work, interps):
+    global WORK, LOG, REP, MAN, ENV, PYTHONS
+    WORK = work
+    LOG = os.path.join(WORK, "logs")
+    REP = os.path.join(WORK, "reports")
+    MAN = os.path.join(WORK, "manifests")
+    os.makedirs(LOG, exist_ok=True)
+    os.makedirs(REP, exist_ok=True)
+    os.makedirs(MAN, exist_ok=True)
+    ENV = dict(os.environ, PIP_CACHE_DIR=os.path.join(WORK, "cache"))
+    PYTHONS = dict(interps)
+
+
+def interp_for(tag):
+    if tag in PYTHONS:
+        return PYTHONS[tag]
+    guess = shutil.which(f"python{tag[2]}.{tag[3:]}")
+    if guess:
+        return guess
+    sys.exit(f"[sweep] no interpreter for {tag}: pass --interp {tag}=PATH "
+             f"or set H9_INTERPS JSON (looked for python{tag[2]}.{tag[3:]} on PATH)")
+
+
 def run(cmd, logpath, timeout=1800):
     with open(logpath, "w") as f:
         f.write("$ " + " ".join(cmd) + "\n")
@@ -86,6 +124,14 @@ def run(cmd, logpath, timeout=1800):
 
 def venv_py(name):
     return os.path.join(WORK, name, "bin", "python")
+
+
+def require_venv(name):
+    py = venv_py(name)
+    if not os.path.exists(py):
+        sys.exit(f"[sweep] missing environment {os.path.join(WORK, name)}; "
+                 f"run the build step first")
+    return py
 
 
 def ensure_venv(interp, name):
@@ -112,14 +158,17 @@ def envmeta(py):
     return out
 
 
-def freeze(py):
+def freeze_raw_text(py):
     r = subprocess.run([py, "-m", "pip", "freeze", "--exclude-editable"],
                        capture_output=True, text=True, env=ENV)
+    return [l.strip() for l in r.stdout.splitlines() if l.strip() and "==" in l]
+
+
+def freeze(py):
     pkgs = {}
-    for line in r.stdout.splitlines():
-        if "==" in line:
-            n, v = line.split("==", 1)
-            pkgs[norm(n)] = v.strip()
+    for line in freeze_raw_text(py):
+        n, v = line.split("==", 1)
+        pkgs[norm(n)] = v.strip()
     return pkgs
 
 
@@ -131,6 +180,35 @@ def norm(name):
     while "--" in s:
         s = s.replace("--", "-")
     return s.strip("-")
+
+
+def base_filename_for(env_name):
+    """Shared base-manifest filename for a venv dir name (no I/O)."""
+    if env_name.startswith("UL_"):
+        _, leg, tag = env_name.split("_", 2)
+        return f"UL-base-{tag}-{leg}.txt"
+    if env_name.startswith("RF_FRESH_"):
+        return "RF-fresh-base-empty.txt"
+    if env_name.startswith("RF_ONNX_"):
+        _, _, leg, tag = env_name.split("_", 3)
+        return f"RF-onnx-base-{tag}-{leg}.txt"
+    sys.exit(f"[sweep] unknown environment name: {env_name}")
+
+
+def persist_base_manifest(env_name, raw_lines, note=""):
+    """Write the shared base manifest; returns its filename. Idempotent."""
+    fname = base_filename_for(env_name)
+    if env_name.startswith("RF_FRESH_"):
+        text = ("# shared base: empty fresh stack venv "
+                "(pip freeze --exclude-editable reports no packages)\n")
+    elif env_name.startswith("RF_ONNX_"):
+        text = f"# base freeze of {env_name} ({note})\n"
+        text += "".join(l + "\n" for l in raw_lines)
+    else:
+        text = "".join(l + "\n" for l in raw_lines)
+    with open(os.path.join(MAN, fname), "w") as f:
+        f.write(text)
+    return fname
 
 
 def report_delta(rep_path):
@@ -150,15 +228,21 @@ def report_delta(rep_path):
     return pkgs, sorted(sdists)
 
 
-def write_manifest(path, header, pkgs):
+def write_delta_manifest(path, header, delta):
     with open(path, "w") as f:
         f.write(header + "\n")
-        for n in sorted(pkgs):
-            f.write(f"{n}=={pkgs[n]}\n")
+        for n in sorted(delta):
+            f.write(f"{n}=={delta[n]}\n")
+
+
+def reconstruct(base_freeze, delta):
+    full = dict(base_freeze)
+    full.update(delta or {})
+    return full
 
 
 def build(tag):
-    interp = PYTHONS[tag]
+    interp = interp_for(tag)
     meta = {"tag": tag, "interpreter": interp.replace(os.path.expanduser("~"), "~"),
             "host": "Darwin arm64 (native runner; hostname not recorded)"}
     # UL ordinary base: exact fresh-runtime command (bare name).
@@ -169,6 +253,7 @@ def build(tag):
         [ord_py, "-m", "pip", "install", "ultralytics"],
         os.path.join(LOG, f"UL_ORD_{tag}_base_install.log"), timeout=3600)
     meta["UL_ORD"]["freeze_count"] = len(freeze(ord_py))
+    persist_base_manifest(f"UL_ORD_{tag}", freeze_raw_text(ord_py))
     # UL binary base: same command under the proposed policy.
     bin_py = ensure_venv(interp, f"UL_BIN_{tag}")
     meta["UL_BIN"] = envmeta(bin_py)
@@ -177,16 +262,18 @@ def build(tag):
         [bin_py, "-m", "pip", "install", "--only-binary=:all:", "ultralytics"],
         os.path.join(LOG, f"UL_BIN_{tag}_base_install.log"), timeout=3600)
     meta["UL_BIN"]["freeze_count"] = len(freeze(bin_py))
+    persist_base_manifest(f"UL_BIN_{tag}", freeze_raw_text(bin_py))
     # RF fresh stacks: empty venvs (stacks start empty).
     for leg in ("ORD", "BIN"):
         rf = ensure_venv(interp, f"RF_FRESH_{leg}_{tag}")
         meta[f"RF_FRESH_{leg}"] = envmeta(rf)
+        persist_base_manifest(f"RF_FRESH_{leg}_{tag}", [])
     json.dump(meta, open(os.path.join(REP, f"envmeta_{tag}.json"), "w"), indent=2)
     print(json.dumps(meta, indent=2))
 
 
 def build_onnxpop():
-    interp = PYTHONS["py312"]
+    interp = interp_for("py312")
     meta = {}
     for leg, extra in (("ORD", []), ("BIN", ["--only-binary=:all:"])):
         name = f"RF_ONNX_{leg}_py312"
@@ -194,16 +281,20 @@ def build_onnxpop():
         meta[leg] = envmeta(py)
         cmd = [py, "-m", "pip", "install"] + extra + ["rfdetr[onnx]"]
         meta[leg]["install_cmd"] = " ".join(cmd)
-        meta[leg]["install_rc"] = run(
-            cmd, os.path.join(LOG, f"{name}_base_install.log"), timeout=3600)
+        rc = run(cmd, os.path.join(LOG, f"{name}_base_install.log"), timeout=3600)
+        meta[leg]["install_rc"] = rc
         meta[leg]["freeze_count"] = len(freeze(py))
+        persist_base_manifest(name, freeze_raw_text(py),
+                              note=f"real rfdetr[onnx] install, rc {rc}")
     json.dump(meta, open(os.path.join(REP, "envmeta_onnxpop_py312.json"), "w"), indent=2)
     print(json.dumps(meta, indent=2))
 
 
-def resolve_leg(py, base_freeze, group, args, tag, policy, pre=False, filetag=None):
+def resolve_leg(py, env_name, base_freeze, group, args, tag, policy,
+                pre=False, filetag=None):
     leg = "ordinary" if policy == "ord" else "binary"
     ft = filetag or tag
+    base_file = base_filename_for(env_name)
     rep = os.path.join(REP, f"{group}_{ft}_{leg}.json")
     logf = os.path.join(LOG, f"{group}_{ft}_{leg}.log")
     cmd = [py, "-m", "pip", "install", "--dry-run", "--report", rep]
@@ -218,65 +309,33 @@ def resolve_leg(py, base_freeze, group, args, tag, policy, pre=False, filetag=No
         delta, sdists = report_delta(rep)
         if delta is None:
             delta, sdists = {}, None
-    full = dict(base_freeze)
-    full.update(delta or {})
+    full = reconstruct(base_freeze, delta)
     man_path = os.path.join(MAN, f"{group}_{ft}_{leg}.txt")
     header = (f"# group={group} tag={tag} filetag={ft} leg={leg} rc={rc}\n"
+              f"# base: manifests/{base_file} "
+              f"(full manifest = base with delta applied as overrides)\n"
               f"# cmd: {' '.join(cmd)}\n"
               f"# base_freeze={len(base_freeze)} delta={len(delta or {})} full={len(full)}")
-    write_manifest(man_path, header, full)
+    write_delta_manifest(man_path, header, delta or {})
     return {"group": group, "rc": rc, "full_count": len(full),
             "delta_count": len(delta or {}),
             "sdists_in_delta": sdists if sdists is not None else "n/a",
             "manifest": os.path.basename(man_path)}
 
 
-def resolve_all(tag, onnxpop=False):
-    state = "onnxpop" if onnxpop else "fresh"
-    rows = []
-    out = {"tag": tag, "stack_state": state, "rows": rows}
-    if not onnxpop:
-        # UL legs run once (fresh mode); the onnxpop rerun covers RF stacks only,
-        # so UL filenames never collide across stack states.
-        ord_py = venv_py(f"UL_ORD_{tag}")
-        bin_py = venv_py(f"UL_BIN_{tag}")
-        ord_base = freeze(ord_py)
-        bin_base = freeze(bin_py)
-        out["UL_ORD_freeze"] = len(ord_base)
-        out["UL_BIN_freeze"] = len(bin_base)
-        for group, args in UL_ROUTES:
-            o = resolve_leg(ord_py, ord_base, group, args, tag, "ord")
-            b = resolve_leg(bin_py, bin_base, group, args, tag, "bin")
-            rows.append(classify(group, o, b))
-            print("  ", rows[-1])
-    rf_env = "RF_ONNX" if onnxpop else "RF_FRESH"
-    ft = f"{tag}_{state}"
-    ro_py = venv_py(f"{rf_env}_ORD_{tag}")
-    rb_py = venv_py(f"{rf_env}_BIN_{tag}")
-    ro_base = freeze(ro_py)
-    rb_base = freeze(rb_py)
-    for group, args in RF_ROUTES:
-        if group == "rf_tflite" and tag != "py312":
-            print(f"   {group}: skipped (app gates TFLite stack to Python >=3.12,<3.13)")
-            rows.append({"group": group, "verdict": "gated-skipped",
-                         "ord_rc": "skipped", "bin_rc": "skipped"})
-            continue
-        o = resolve_leg(ro_py, ro_base, group, args, tag, "ord", filetag=ft)
-        b = resolve_leg(rb_py, rb_base, group, args, tag, "bin", filetag=ft)
-        rows.append(classify(group, o, b))
-        print("  ", rows[-1])
-    # flatc prerelease stage (exact app second stage: `pip install --pre flatc`).
-    o = resolve_leg(ro_py, ro_base, "rf_executorch_flatc_pre", ["flatc"], tag, "ord", pre=True, filetag=ft)
-    b = resolve_leg(rb_py, rb_base, "rf_executorch_flatc_pre", ["flatc"], tag, "bin", pre=True, filetag=ft)
-    rows.append(classify("rf_executorch_flatc_pre", o, b))
-    print("  ", rows[-1])
-    out["rows"] = rows
-    name = f"summary_{tag}{'_onnxpop' if onnxpop else ''}.json"
-    json.dump(out, open(os.path.join(REP, name), "w"), indent=2)
-    print(f"wrote {name}")
+def delta_of_manifest(manifest_name):
+    """Delta dict read back from a written route manifest."""
+    delta = {}
+    with open(os.path.join(MAN, manifest_name)) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "==" in line:
+                n, v = line.split("==", 1)
+                delta[norm(n)] = v.strip()
+    return delta
 
 
-def classify(group, o, b):
+def classify(group, o, b, base_ord, base_bin):
     orc, brc = o["rc"], b["rc"]
     if isinstance(orc, str) or isinstance(brc, str):
         verdict = "timeout/non-convergence"
@@ -287,11 +346,9 @@ def classify(group, o, b):
     elif brc != 0:
         verdict = "binary failure"
     else:
-        mo = open(os.path.join(MAN, o["manifest"])).read().splitlines()
-        mb = open(os.path.join(MAN, b["manifest"])).read().splitlines()
-        bo = sorted(l for l in mo if l and not l.startswith("#"))
-        bb = sorted(l for l in mb if l and not l.startswith("#"))
-        verdict = "identical" if bo == bb else "divergent"
+        fo = reconstruct(base_ord, delta_of_manifest(o["manifest"]))
+        fb = reconstruct(base_bin, delta_of_manifest(b["manifest"]))
+        verdict = "identical" if fo == fb else "divergent"
     return {"group": group, "verdict": verdict,
             "ord_rc": orc, "bin_rc": brc,
             "ord_delta": o["delta_count"], "bin_delta": b["delta_count"],
@@ -299,12 +356,145 @@ def classify(group, o, b):
             "sdists_in_ordinary_delta": o["sdists_in_delta"]}
 
 
-if __name__ == "__main__":
-    if sys.argv[1] == "build":
-        build(sys.argv[2])
-    elif sys.argv[1] == "build-onnxpop":
-        build_onnxpop()
-    elif sys.argv[1] == "resolve":
-        resolve_all(sys.argv[2], onnxpop=(len(sys.argv) > 3 and sys.argv[3] == "onnxpop"))
+def resolve_all(tag, onnxpop=False):
+    state = "onnxpop" if onnxpop else "fresh"
+    rows = []
+    out = {"tag": tag, "stack_state": state, "rows": rows}
+    ul_ord_base = ul_bin_base = {}
+    if not onnxpop:
+        # UL legs run once (fresh mode); the onnxpop rerun covers RF stacks only,
+        # so UL filenames never collide across stack states.
+        ord_py = require_venv(f"UL_ORD_{tag}")
+        bin_py = require_venv(f"UL_BIN_{tag}")
+        ul_ord_base = freeze(ord_py)
+        ul_bin_base = freeze(bin_py)
+        out["UL_ORD_freeze"] = len(ul_ord_base)
+        out["UL_BIN_freeze"] = len(ul_bin_base)
+        persist_base_manifest(f"UL_ORD_{tag}", freeze_raw_text(ord_py))
+        persist_base_manifest(f"UL_BIN_{tag}", freeze_raw_text(bin_py))
+        for group, args in UL_ROUTES:
+            o = resolve_leg(ord_py, f"UL_ORD_{tag}", ul_ord_base, group, args, tag, "ord")
+            b = resolve_leg(bin_py, f"UL_BIN_{tag}", ul_bin_base, group, args, tag, "bin")
+            rows.append(classify(group, o, b, ul_ord_base, ul_bin_base))
+            print("  ", rows[-1])
     else:
-        sys.exit("usage: sweep.py [build <tag> | build-onnxpop | resolve <tag> [onnxpop]]")
+        # Counts only (no UL legs in onnxpop mode); RF rows live in this summary.
+        for leg, key in (("ORD", "UL_ORD_freeze"), ("BIN", "UL_BIN_freeze")):
+            upy = require_venv(f"UL_{leg}_{tag}")
+            out[key] = len(freeze(upy))
+    rf_env = "RF_ONNX" if onnxpop else "RF_FRESH"
+    ft = f"{tag}_{state}"
+    ro_py = require_venv(f"{rf_env}_ORD_{tag}")
+    rb_py = require_venv(f"{rf_env}_BIN_{tag}")
+    ro_base = freeze(ro_py)
+    rb_base = freeze(rb_py)
+    persist_base_manifest(f"{rf_env}_ORD_{tag}", freeze_raw_text(ro_py),
+                          note="real rfdetr[onnx] install" if onnxpop else "")
+    persist_base_manifest(f"{rf_env}_BIN_{tag}", freeze_raw_text(rb_py),
+                          note="real rfdetr[onnx] install" if onnxpop else "")
+    for group, args in RF_ROUTES:
+        if group == "rf_tflite" and tag != "py312":
+            print(f"   {group}: skipped (app gates TFLite stack to Python >=3.12,<3.13)")
+            rows.append({"group": group, "verdict": "gated-skipped",
+                         "ord_rc": "skipped", "bin_rc": "skipped"})
+            continue
+        o = resolve_leg(ro_py, f"{rf_env}_ORD_{tag}", ro_base, group, args,
+                        tag, "ord", filetag=ft)
+        b = resolve_leg(rb_py, f"{rf_env}_BIN_{tag}", rb_base, group, args,
+                        tag, "bin", filetag=ft)
+        rows.append(classify(group, o, b, ro_base, rb_base))
+        print("  ", rows[-1])
+    # flatc prerelease stage (exact app second stage: `pip install --pre flatc`).
+    o = resolve_leg(ro_py, f"{rf_env}_ORD_{tag}", ro_base, "rf_executorch_flatc_pre",
+                    ["flatc"], tag, "ord", pre=True, filetag=ft)
+    b = resolve_leg(rb_py, f"{rf_env}_BIN_{tag}", rb_base, "rf_executorch_flatc_pre",
+                    ["flatc"], tag, "bin", pre=True, filetag=ft)
+    rows.append(classify("rf_executorch_flatc_pre", o, b, ro_base, rb_base))
+    print("  ", rows[-1])
+    out["rows"] = rows
+    name = f"summary_{tag}{'_onnxpop' if onnxpop else ''}.json"
+    json.dump(out, open(os.path.join(REP, name), "w"), indent=2)
+    print(f"wrote {name}")
+
+
+def consolidate(out):
+    """Deterministically merge per-tag outputs into the tracked layout."""
+    man_out = os.path.join(out, "manifests")
+    os.makedirs(man_out, exist_ok=True)
+    for fname in sorted(os.listdir(MAN)):
+        if fname.endswith(".txt"):
+            shutil.copy(os.path.join(MAN, fname), os.path.join(man_out, fname))
+    sums = {}
+    for fname in sorted(os.listdir(REP)):
+        if fname.startswith("summary_") and fname.endswith(".json"):
+            with open(os.path.join(REP, fname)) as f:
+                sums[fname] = json.load(f)
+    if "summary_py312.json" in sums:
+        sums["summary_py312.json"]["note"] = NOTE_PY312
+    if "summary_py312_onnxpop.json" in sums:
+        sums["summary_py312_onnxpop.json"]["note"] = NOTE_ONNXPOP
+    with open(os.path.join(out, "sweep-summaries.json"), "w") as f:
+        json.dump(sums, f, indent=2)
+    env = {}
+    for fname in sorted(os.listdir(REP)):
+        if fname.startswith("envmeta_") and fname.endswith(".json"):
+            rest = fname[len("envmeta_"):-len(".json")]
+            key = "onnxpop_py312" if rest == "onnxpop_py312" else rest
+            with open(os.path.join(REP, fname)) as f:
+                env[key] = json.load(f)
+    with open(os.path.join(out, "envmeta.json"), "w") as f:
+        json.dump(env, f, indent=2)
+    print(f"consolidated {len(sums)} summaries, {len(env)} envmeta records to {out}")
+
+
+def parse_interps(pairs):
+    interps = {}
+    for pair in pairs or []:
+        if "=" not in pair:
+            sys.exit(f"[sweep] bad --interp {pair!r}; expected TAG=PATH")
+        tag, path = pair.split("=", 1)
+        interps[tag] = path
+    return interps
+
+
+def main(argv):
+    p = argparse.ArgumentParser(
+        description="H9 binary-wheel policy sweep (populated-env dry-run resolution)")
+    p.add_argument("--work", default=os.environ.get("H9_WORK"),
+                   help="work directory (or H9_WORK); created if missing")
+    p.add_argument("--interp", action="append", default=[],
+                   metavar="TAG=PATH",
+                   help="interpreter per tag, repeatable (or H9_INTERPS JSON)")
+    p.add_argument("--out", default=None, help="consolidate destination dir")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    b = sub.add_parser("build", help="create base venvs + real installs")
+    b.add_argument("tag")
+    sub.add_parser("build-onnxpop", help="create ONNX-populated 3.12 stacks")
+    r = sub.add_parser("resolve", help="dry-run resolution sweep")
+    r.add_argument("tag")
+    r.add_argument("state", nargs="?", default="fresh", choices=["fresh", "onnxpop"])
+    sub.add_parser("consolidate", help="merge outputs into the tracked layout")
+    args = p.parse_args(argv)
+    if not args.work:
+        p.error("no work directory: pass --work DIR or set H9_WORK")
+    try:
+        file_interps = json.loads(os.environ.get("H9_INTERPS", "{}"))
+    except json.JSONDecodeError as e:
+        sys.exit(f"[sweep] bad H9_INTERPS JSON: {e}")
+    interps = dict(file_interps)
+    interps.update(parse_interps(args.interp))
+    configure(args.work, interps)
+    if args.cmd == "build":
+        build(args.tag)
+    elif args.cmd == "build-onnxpop":
+        build_onnxpop()
+    elif args.cmd == "resolve":
+        resolve_all(args.tag, onnxpop=(args.state == "onnxpop"))
+    elif args.cmd == "consolidate":
+        if not args.out:
+            p.error("consolidate needs --out DIR")
+        consolidate(args.out)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
