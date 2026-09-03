@@ -89,10 +89,12 @@ def venv_py(name):
 
 
 def ensure_venv(interp, name):
-    py = venv_py(name)
-    if not os.path.exists(py):
-        subprocess.run([interp, "-m", "venv", os.path.join(WORK, name)], check=True, env=ENV)
-    return py
+    dest = os.path.join(WORK, name)
+    if os.path.exists(dest):
+        sys.exit(f"[sweep] refusing to reuse existing {dest}; "
+                 f"remove it for a fresh reproduction or use a new WORK dir")
+    subprocess.run([interp, "-m", "venv", dest], check=True, env=ENV)
+    return venv_py(name)
 
 
 def envmeta(py):
@@ -157,9 +159,8 @@ def write_manifest(path, header, pkgs):
 
 def build(tag):
     interp = PYTHONS[tag]
-    meta = {"tag": tag, "interpreter": interp,
-            "host": subprocess.run(["uname", "-a"], capture_output=True,
-                                   text=True).stdout.strip()}
+    meta = {"tag": tag, "interpreter": interp.replace(os.path.expanduser("~"), "~"),
+            "host": "Darwin arm64 (native runner; hostname not recorded)"}
     # UL ordinary base: exact fresh-runtime command (bare name).
     ord_py = ensure_venv(interp, f"UL_ORD_{tag}")
     meta["UL_ORD"] = envmeta(ord_py)
@@ -200,10 +201,11 @@ def build_onnxpop():
     print(json.dumps(meta, indent=2))
 
 
-def resolve_leg(py, base_freeze, group, args, tag, policy, pre=False):
+def resolve_leg(py, base_freeze, group, args, tag, policy, pre=False, filetag=None):
     leg = "ordinary" if policy == "ord" else "binary"
-    rep = os.path.join(REP, f"{group}_{tag}_{leg}.json")
-    logf = os.path.join(LOG, f"{group}_{tag}_{leg}.log")
+    ft = filetag or tag
+    rep = os.path.join(REP, f"{group}_{ft}_{leg}.json")
+    logf = os.path.join(LOG, f"{group}_{ft}_{leg}.log")
     cmd = [py, "-m", "pip", "install", "--dry-run", "--report", rep]
     if pre:
         cmd.append("--pre")
@@ -218,8 +220,8 @@ def resolve_leg(py, base_freeze, group, args, tag, policy, pre=False):
             delta, sdists = {}, None
     full = dict(base_freeze)
     full.update(delta or {})
-    man_path = os.path.join(MAN, f"{group}_{tag}_{leg}.txt")
-    header = (f"# group={group} tag={tag} leg={leg} rc={rc}\n"
+    man_path = os.path.join(MAN, f"{group}_{ft}_{leg}.txt")
+    header = (f"# group={group} tag={tag} filetag={ft} leg={leg} rc={rc}\n"
               f"# cmd: {' '.join(cmd)}\n"
               f"# base_freeze={len(base_freeze)} delta={len(delta or {})} full={len(full)}")
     write_manifest(man_path, header, full)
@@ -230,17 +232,25 @@ def resolve_leg(py, base_freeze, group, args, tag, policy, pre=False):
 
 
 def resolve_all(tag, onnxpop=False):
-    ord_py = venv_py(f"UL_ORD_{tag}")
-    bin_py = venv_py(f"UL_BIN_{tag}")
-    ord_base = freeze(ord_py)
-    bin_base = freeze(bin_py)
+    state = "onnxpop" if onnxpop else "fresh"
     rows = []
-    for group, args in UL_ROUTES:
-        o = resolve_leg(ord_py, ord_base, group, args, tag, "ord")
-        b = resolve_leg(bin_py, bin_base, group, args, tag, "bin")
-        rows.append(classify(group, o, b))
-        print("  ", rows[-1])
+    out = {"tag": tag, "stack_state": state, "rows": rows}
+    if not onnxpop:
+        # UL legs run once (fresh mode); the onnxpop rerun covers RF stacks only,
+        # so UL filenames never collide across stack states.
+        ord_py = venv_py(f"UL_ORD_{tag}")
+        bin_py = venv_py(f"UL_BIN_{tag}")
+        ord_base = freeze(ord_py)
+        bin_base = freeze(bin_py)
+        out["UL_ORD_freeze"] = len(ord_base)
+        out["UL_BIN_freeze"] = len(bin_base)
+        for group, args in UL_ROUTES:
+            o = resolve_leg(ord_py, ord_base, group, args, tag, "ord")
+            b = resolve_leg(bin_py, bin_base, group, args, tag, "bin")
+            rows.append(classify(group, o, b))
+            print("  ", rows[-1])
     rf_env = "RF_ONNX" if onnxpop else "RF_FRESH"
+    ft = f"{tag}_{state}"
     ro_py = venv_py(f"{rf_env}_ORD_{tag}")
     rb_py = venv_py(f"{rf_env}_BIN_{tag}")
     ro_base = freeze(ro_py)
@@ -251,19 +261,16 @@ def resolve_all(tag, onnxpop=False):
             rows.append({"group": group, "verdict": "gated-skipped",
                          "ord_rc": "skipped", "bin_rc": "skipped"})
             continue
-        o = resolve_leg(ro_py, ro_base, group, args, tag, "ord")
-        b = resolve_leg(rb_py, rb_base, group, args, tag, "bin")
+        o = resolve_leg(ro_py, ro_base, group, args, tag, "ord", filetag=ft)
+        b = resolve_leg(rb_py, rb_base, group, args, tag, "bin", filetag=ft)
         rows.append(classify(group, o, b))
         print("  ", rows[-1])
     # flatc prerelease stage (exact app second stage: `pip install --pre flatc`).
-    fz = {} if not onnxpop else freeze(ro_py)
-    o = resolve_leg(ro_py, ro_base, "rf_executorch_flatc_pre", ["flatc"], tag, "ord", pre=True)
-    b = resolve_leg(rb_py, rb_base, "rf_executorch_flatc_pre", ["flatc"], tag, "bin", pre=True)
+    o = resolve_leg(ro_py, ro_base, "rf_executorch_flatc_pre", ["flatc"], tag, "ord", pre=True, filetag=ft)
+    b = resolve_leg(rb_py, rb_base, "rf_executorch_flatc_pre", ["flatc"], tag, "bin", pre=True, filetag=ft)
     rows.append(classify("rf_executorch_flatc_pre", o, b))
     print("  ", rows[-1])
-    out = {"tag": tag, "stack_state": ("onnxpop" if onnxpop else "fresh"),
-           "UL_ORD_freeze": len(ord_base), "UL_BIN_freeze": len(bin_base),
-           "rows": rows}
+    out["rows"] = rows
     name = f"summary_{tag}{'_onnxpop' if onnxpop else ''}.json"
     json.dump(out, open(os.path.join(REP, name), "w"), indent=2)
     print(f"wrote {name}")
@@ -271,7 +278,6 @@ def resolve_all(tag, onnxpop=False):
 
 def classify(group, o, b):
     orc, brc = o["rc"], b["rc"]
-    timed = isinstance(orc, str) or isinstance(brc, str)
     if isinstance(orc, str) or isinstance(brc, str):
         verdict = "timeout/non-convergence"
     elif orc != 0 and brc != 0:

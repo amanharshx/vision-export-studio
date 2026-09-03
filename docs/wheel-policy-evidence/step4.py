@@ -60,10 +60,12 @@ def tail(path, n=25):
 
 
 def leg(name, policy_extra):
-    py = os.path.join(WORK, name, "bin", "python")
-    if not os.path.exists(py):
-        subprocess.run([INTERP, "-m", "venv", os.path.join(WORK, name)],
-                       check=True, env=ENV)
+    dest = os.path.join(WORK, name)
+    if os.path.exists(dest):
+        sys.exit(f"[step4] refusing to reuse existing {dest}; "
+                 f"remove it for a fresh reproduction or use a new WORK dir")
+    subprocess.run([INTERP, "-m", "venv", dest], check=True, env=ENV)
+    py = os.path.join(dest, "bin", "python")
     rec = {"env": name, "policy": "binary" if policy_extra else "ordinary",
            "python": subprocess.run([py, "-V"], capture_output=True,
                                     text=True, env=ENV).stdout.strip(),

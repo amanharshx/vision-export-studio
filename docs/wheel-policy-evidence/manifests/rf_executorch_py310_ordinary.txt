@@ -1,4 +1,5 @@
 # group=rf_executorch tag=py310 leg=ordinary rc=0
+# base: manifests/RF-fresh-base-empty.txt (full manifest = base with delta applied as overrides)
 # cmd: /private/tmp/h9-correct/RF_FRESH_ORD_py310/bin/python -m pip install --dry-run --report /private/tmp/h9-correct/reports/rf_executorch_py310_ordinary.json rfdetr[executorch]>=1.9.0 torch>=2.13
 # base_freeze=0 delta=85 full=85
 annotated-doc==0.0.5
@@ -49,8 +50,8 @@ parameterized==0.9.0
 pillow==12.3.0
 protobuf==7.36.1
 pyaml==26.7.0
-pydantic==2.13.5
 pydantic-core==2.46.5
+pydantic==2.13.5
 pydeprecate==0.9.0
 pygments==2.21.0
 pyparsing==3.3.2

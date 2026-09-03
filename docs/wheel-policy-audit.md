@@ -177,8 +177,8 @@ TFLite is gated to Python ≥3.12, <3.13; LiteRT needs Python ≥3.10.
 
   | Python | Interpreter path | Version | Arch | Venv pip |
   | --- | --- | --- | --- | --- |
-  | 3.10 | `/Users/aman/.local/bin/python3.10` | 3.10.19 | arm64 | 23.0.1 |
-  | 3.11 | `/Users/aman/.pyenv/versions/3.11.9/bin/python3.11` | 3.11.9 | arm64 | 24.0 |
+  | 3.10 | `~/.local/bin/python3.10` | 3.10.19 | arm64 | 23.0.1 |
+  | 3.11 | `~/.pyenv/versions/3.11.9/bin/python3.11` | 3.11.9 | arm64 | 24.0 |
   | 3.12 | `/opt/homebrew/bin/python3.12` | 3.12.14 | arm64 | 26.2.1 |
   | 3.13 | `/opt/homebrew/bin/python3.13` | 3.13.7 | arm64 | 25.2 |
 
@@ -201,11 +201,17 @@ TFLite is gated to Python ≥3.12, <3.13; LiteRT needs Python ≥3.10.
   `pip install --dry-run --report <file>` with a 300s cap per leg, and, for the
   decisive route, installed for real. The binary policy was applied to both the
   stable and the `--pre flatc` stages.
-- Manifests: normalized sorted `name==version` (lowercased, `base freeze UNION
-  report delta`), one file per cell
-  (`docs/wheel-policy-evidence/manifests/<group>_<py>_<ordinary|binary>.txt`,
-  exact command in each header). Classification compares manifests, never bare
-  exit-code pairs:
+- Manifests (deduplicated): each route manifest stores only the DELTA —
+  normalized sorted `name==version` lines the leg would newly install,
+  overrides included — while the shared base environment is stored once per
+  interpreter/policy (`manifests/UL-base-<py>-<ORD|BIN>.txt`,
+  `manifests/RF-fresh-base-empty.txt`, `manifests/RF-onnx-base-py312-<ORD|BIN>.txt`,
+  each `# base:` header names its base). Full manifest = base with delta applied
+  as overrides (delta wins on version conflicts). One file per cell
+  (`manifests/<group>_<py>_<ordinary|binary>.txt`; py312 RF files carry the
+  stack state: `<group>_py312_fresh_<leg>.txt`,
+  `<group>_py312_onnxpop_<leg>.txt`); exact command in each header.
+  Classification compares reconstructed full manifests, never bare exit-code pairs:
   - `identical`: both succeed with identical manifests;
   - `divergent`: both succeed with different manifests;
   - `binary failure`: ordinary succeeds, binary leg exits nonzero;
@@ -219,16 +225,11 @@ TFLite is gated to Python ≥3.12, <3.13; LiteRT needs Python ≥3.10.
   execution path. Their wheel coverage on their own platforms is unverified
   (needs native CI).
 - Validation: `check_pypi.py` (PyPI availability assertions, exit 0) and
-  `check_manifests.py` (290 evidence-consistency assertions over the tracked
+  `check_manifests.py` (evidence-consistency assertions over the tracked
   manifests/summaries/envmeta, exit 0). `pypi-availability.txt` is the captured
   output of the former.
-- Note on `summary_py312.json`: its RF rows describe the original fresh-stack
-  runs whose manifest files were later overwritten by the ONNX-populated rerun
-  (same filenames, headers record the `RF_ONNX_*` env). The tracked copy is
-  annotated (`rf_rows_superseded_by`): fresh-stack py312 RF evidence lives in
-  `summary_py312fresh.json` + `manifests/*_py312fresh_*.txt`, ONNX-populated
-  evidence in `summary_py312_onnxpop.json` + `manifests/rf_*_py312_*.txt`
-  (headers confirm the env). UL rows of `summary_py312.json` are unaffected.
+- Reproduction drivers refuse to reuse existing venv directories (fail fast on
+  rerun into a used `WORK` dir), so a rerun always builds fresh environments.
 
 ## Results — resolution sweep (macOS ARM64, native app path only)
 
@@ -251,23 +252,20 @@ verdicts computed by manifest comparison (`sweep-summaries.json`).
 | rf_onnx | identical | identical | identical | identical | identical | no-op |
 | rf_coreml | identical | identical | identical | identical | identical | no-op |
 | rf_tflite | —² | —² | identical | identical | —² | no-op (Python 3.12 gate) |
-| rf_executorch | **binary failure** | **binary failure** | timeout | timeout | timeout | **policy rejects on every Python** |
+| rf_executorch | binary failure | binary failure | non-convergence | non-convergence | non-convergence | binary leg fails (3.10/3.11) or stalls past 300s (3.12/3.13) |
 | rf_executorch `--pre flatc` | identical | identical | identical | identical | identical | no-op (wheel exists) |
 
 ¹ `torchscript` declares no pip deps, so the installer is never invoked for it;
 `identical` is structural, not a pip observation.
 ² App Python gate (`>=3.12, <3.13`): not installable off 3.12, so no native cell.
 
-Binary-only failure modes for `rf_executorch`: `ResolutionImpossible` (exit 1)
-on 3.10 and 3.11 with the `hydra-core → antlr4==4.9.*` conflict quoted verbatim
+Binary-only outcomes for `rf_executorch`: `ResolutionImpossible` (exit 1) on
+3.10 and 3.11, with the `hydra-core → antlr4==4.9.*` conflict quoted verbatim
 (`binary-failure-rf_executorch-py310.txt`,
 `binary-failure-rf_executorch-py311.txt`); did-not-converge within 300s on 3.12
-(fresh and ONNX-populated) and 3.13. `ul_executorch` binary leg fails with
-`ResolutionImpossible` (same cause) on 3
-(`binary-failure-rf_executorch-py310.txt`,
-`binary-failure-rf_executorch-py311.txt`); did-not-converge within 300s on 3.12
-(fresh and ONNX-populated) and 3.13. `ul_executorch` binary leg fails with
-`ResolutionImpossible` (same cause) on 3.13 (`binary-failure-ul_executorch-py313.txt`).
+(fresh and ONNX-populated stacks) and 3.13 — recorded as non-convergence, not
+rejection. `ul_executorch` binary leg fails with `ResolutionImpossible` (same
+cause) on 3.13 (`binary-failure-ul_executorch-py313.txt`).
 
 ## Decisive findings
 
@@ -336,10 +334,12 @@ torch 2.14.0. On 3.13 the same route's binary leg hard-fails with
 `ResolutionImpossible` (pip failure output, same antlr cause). Because the
 Ultralytics ExecuTorch route declares no minimum `executorch` version, this
 audit does **not** claim 0.6.0 is functionally broken; the provable harm is an
-unrequested silent mutation of a shared environment (3.10–3.12) or a hard
+unrequested silent mutation of a shared environment (3.10–3.12) or a pip
 rejection (3.13). The RF-DETR ExecuTorch route removes the ambiguity: its
-`torch>=2.13` floor forbids the downgrade escape, so the policy hard-fails
-there on every tested Python. Classification: observed.
+`torch>=2.13` floor forbids the downgrade escape, so the binary leg fails or
+stalls on every tested Python — `ResolutionImpossible` on 3.10/3.11,
+non-convergence within 300s on 3.12/3.13 dry-runs, `resolution-too-deep` on the
+3.12 real install. Classification: observed.
 
 ### 4. The `flatc` prerelease stage is a no-op under the policy
 
@@ -390,10 +390,11 @@ package-metadata fact; macOS x86_64 install behavior itself unverified natively.
   `antlr4-python3-runtime 4.9.*` has no wheels anywhere;
   `flatc 25.12.19rc0` is the only release (three named wheels, no sdist, no
   macOS x86_64 wheel); modern `torch` has no macOS x86_64 wheel and no sdist.
-- **Inferred:** because the decisive breakage is caused by a package with zero
-  wheels on any platform, a blanket `--only-binary=:all:` would reject the
-  ExecuTorch payloads identically on macOS x86_64, Linux x86_64, and Windows
-  x86_64. (Inference from platform-independent metadata, not a native run.)
+- **Inferred:** the decisive breakage is caused by a package with zero
+  wheels on any platform, which suggests a blanket `--only-binary=:all:` would
+  also reject the ExecuTorch payloads on macOS x86_64, Linux x86_64, and
+  Windows x86_64 — but those outcomes are **unverified** natively and are not
+  claimed. The native macOS ARM64 counterexample alone carries Recommendation 1.
 - **Unverified (needs native CI):** actual resolution/installation on macOS
   x86_64, Linux x86_64, Windows x86_64; wheel coverage of Linux/Windows-gated
   routes (`engine`, `rknn`, `imx`, `axelera`, Edge TPU, `rf_engine`) on their
@@ -418,12 +419,12 @@ removed from the decisive findings.
   ExecuTorch routes (pip builds the 117 kB pure-Python `antlr4` sdist; observed
   to build and install successfully in the Step-4 ordinary leg).
 - **If a blanket binary-only were adopted instead (not recommended):** on the
-  natively tested target, RF-DETR ExecuTorch would fail to install on every
-  supported Python (observed: exit-1 ResolutionImpossible on 3.10/3.11,
-  non-convergence within 300s on 3.12/3.13, real-install resolution-too-deep on
-  3.12); Ultralytics ExecuTorch would fail on 3.13 and silently resolve to an
-  older `executorch` with a shared-`torch` downgrade on 3.10–3.12 (observed).
-  Effects on other targets are unverified, not claimed.
+  natively tested target, the RF-DETR ExecuTorch binary leg fails on 3.10/3.11
+  (exit-1 ResolutionImpossible, observed) and stalls past 300s on 3.12/3.13
+  (non-convergence, observed; real-install resolution-too-deep on 3.12,
+  observed); Ultralytics ExecuTorch would fail on 3.13 and silently resolve to
+  an older `executorch` with a shared-`torch` downgrade on 3.10–3.12
+  (observed). Effects on other targets are unverified, not claimed.
 
 ## Limitations and remaining CI work
 
@@ -438,20 +439,22 @@ removed from the decisive findings.
 - Linux-only, Windows-including, and NVIDIA-only routes have no verdict on
   their own platforms.
 
-To finish the matrix natively (no authorization exercised here — no CI was
-started, no workflow modified), run on each target with a real interpreter,
-adapting `docs/wheel-policy-evidence/sweep.py` (`WORK` constant) and `step4.py`:
+Required CI matrix (no authorization exercised here — no CI was started, no
+workflow modified). Each cell needs a real interpreter on a native runner,
+following the tracked methodology (`sweep.py` / `step4.py`, adapted per OS for
+venv paths and activation — the tracked drivers are POSIX-oriented):
 
-```bash
-# Per target (macOS x86_64, Linux x86_64 ubuntu-22.04, Windows x86_64),
-# per Python 3.10–3.13 (TFLite: 3.12 only):
-python3.X -m venv /tmp/h9base && /tmp/h9base/bin/python -m pip install ultralytics  # bare, app-exact
-/tmp/h9base/bin/python -m pip install --dry-run --report ord.json <payload>
-/tmp/h9base/bin/python -m pip install --dry-run --report bin.json --only-binary=:all: <payload>
-# then compare normalized name==version manifests; run check_manifests.py equivalents.
-# Linux x86_64 additionally: ul_engine/ul_rknn/ul_imx/ul_axelera payloads + rf_engine.
-# Windows x86_64 additionally: ul_engine payload + rf_engine + flatc --pre stage.
-```
+| Runner | Pythons | States per Python | Payloads |
+| --- | --- | --- | --- |
+| macOS x86_64 | 3.10–3.13 | ordinary-policy + binary-policy UL bases (bare-`ultralytics` real install); fresh RF stacks; ONNX-populated `rfdetr-default` | all native-table payload groups |
+| Linux x86_64 (ubuntu-22.04) | 3.10–3.13 (TFLite: 3.12 only) | same states | native-table groups **plus** `ul_engine`, `ul_rknn`, `ul_imx`, `ul_axelera`, Edge TPU pip set, `rf_engine` |
+| Windows x86_64 | 3.10–3.13 (TFLite: 3.12 only) | same states | native-table groups **plus** `ul_engine`, `rf_engine`, `--pre flatc` stage |
+
+Per cell: resolve each payload twice (ordinary vs `--only-binary=:all:`) with
+`pip install --dry-run --report`, compare normalized `name==version` manifests
+(base freeze with report delta applied as overrides) with the `identical` / `divergent` /
+`binary failure` / `timeout/non-convergence` classification, and re-run the
+Step-4 real-install protocol for RF-DETR ExecuTorch on Python 3.12.
 
 ## Evidence ledger (claim → environment → command → result → artifact → class)
 
@@ -465,9 +468,9 @@ python3.X -m venv /tmp/h9base && /tmp/h9base/bin/python -m pip install ultralyti
 | E6 | Same payload rejected with the flag (3.12/ARM64) | disposable stack venv, same interpreter | stable payload + `--only-binary=:all:` | rc 1, `resolution-too-deep`, 0 pkgs installed, `--pre` stage never ran | `step4-summary.json`, `manifests/RF-step4-binary-freeze.txt`, `step4-binary-resolution-failure.txt` | observed |
 | E7 | antlr4 4.9.* has no wheel anywhere; flatc/torch facts | PyPI JSON API | `python3 check_pypi.py` | all assertions pass | `check_pypi.py`, `pypi-availability.txt` | metadata fact |
 | E8 | ul_executorch diverges (3.10–3.12) / fails (3.13) | populated UL envs | dry-run legs both policies | manifests differ (1.4.1+torch2.14 vs 0.6.0+torch2.7); 3.13 rc 1 ResolutionImpossible | `manifests/ul_executorch_*`, `binary-failure-ul_executorch-py313.txt` | observed |
-| E9 | rf_executorch rejected on all Pythons | fresh stacks (all), ONNX-pop stack (3.12) | dry-run legs both policies | rc 1 ResolutionImpossible (3.10/3.11); 300s non-convergence (3.12/3.13) | `manifests/rf_executorch_*`, `binary-failure-rf_executorch-py310.txt`, `-py311.txt` | observed |
+| E9 | rf_executorch binary leg fails/stalls on all tested Pythons | fresh stacks (all), ONNX-pop stack (3.12) | dry-run legs both policies | rc 1 ResolutionImpossible (3.10/3.11); 300s non-convergence (3.12/3.13) | `manifests/rf_executorch_*`, `binary-failure-rf_executorch-py310.txt`, `-py311.txt` | observed |
 | E10 | `flatc --pre` stage unaffected (ARM64) | fresh + ONNX-pop stacks | `pip install [--only-binary=:all:] --pre flatc` | rc 0/0, single-entry manifests | `manifests/rf_executorch_flatc_pre_*` | observed |
-| E11 | Cross-platform rejection | inference from E7 | — | no 4.9.* wheel on any platform | `pypi-availability.txt` | inferred |
+| E11 | Decisive package has no wheel on any platform | inference from E7 | — | no 4.9.* wheel on any platform; other-platform install outcomes unverified | `pypi-availability.txt` | inferred (not claimed as observed) |
 | E12 | Other targets' native behavior; gated-route coverage; selective policies | — | — (CI commands above) | none collected | — | unverified |
 
 ## Claims corrected or removed vs `60d0460`
@@ -492,7 +495,7 @@ python3.X -m venv /tmp/h9base && /tmp/h9base/bin/python -m pip install ultralyti
 9. ANTLR timing claim removed; replaced by sdist composition (117 kB,
    pure-Python) + observed successful build (E5).
 10. `stringcase` removed from decisive findings (gated-route-only artifact).
-11. Status corrected from "audit complete" to partial (E12); CI commands provided.
+11. Status corrected from "audit complete" to partial (E12); required CI matrix specified.
 12. Torch premise corrected: modern torch has **no sdist either**, so pip already
     fails fast on macOS x86_64 — the flag buys nothing there (E7).
 

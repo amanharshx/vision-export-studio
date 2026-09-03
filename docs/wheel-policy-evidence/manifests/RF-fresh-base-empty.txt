@@ -1,0 +1,1 @@
+# shared base: empty fresh stack venv (pip freeze --exclude-editable reports no packages)

@@ -1,8 +1,8 @@
 {
   "py310": {
     "tag": "py310",
-    "interpreter": "/Users/aman/.local/bin/python3.10",
-    "host": "Darwin Amans-MacBook-Air.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:26:22 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T8132 arm64",
+    "interpreter": "~/.local/bin/python3.10",
+    "host": "Darwin 25.5.0 arm64 (hostname redacted; see doc Method for host details)",
     "UL_ORD": {
       "executable": "/private/tmp/h9-correct/UL_ORD_py310/bin/python",
       "version": "3.10.19",
@@ -40,8 +40,8 @@
   },
   "py311": {
     "tag": "py311",
-    "interpreter": "/Users/aman/.pyenv/versions/3.11.9/bin/python3.11",
-    "host": "Darwin Amans-MacBook-Air.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:26:22 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T8132 arm64",
+    "interpreter": "~/.pyenv/versions/3.11.9/bin/python3.11",
+    "host": "Darwin 25.5.0 arm64 (hostname redacted; see doc Method for host details)",
     "UL_ORD": {
       "executable": "/private/tmp/h9-correct/UL_ORD_py311/bin/python",
       "version": "3.11.9",
@@ -80,7 +80,7 @@
   "py312": {
     "tag": "py312",
     "interpreter": "/opt/homebrew/bin/python3.12",
-    "host": "Darwin Amans-MacBook-Air.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:26:22 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T8132 arm64",
+    "host": "Darwin 25.5.0 arm64 (hostname redacted; see doc Method for host details)",
     "UL_ORD": {
       "executable": "/private/tmp/h9-correct/UL_ORD_py312/bin/python",
       "version": "3.12.14",
@@ -119,7 +119,7 @@
   "py313": {
     "tag": "py313",
     "interpreter": "/opt/homebrew/bin/python3.13",
-    "host": "Darwin Amans-MacBook-Air.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:26:22 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T8132 arm64",
+    "host": "Darwin 25.5.0 arm64 (hostname redacted; see doc Method for host details)",
     "UL_ORD": {
       "executable": "/private/tmp/h9-correct/UL_ORD_py313/bin/python",
       "version": "3.13.7",

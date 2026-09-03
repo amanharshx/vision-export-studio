@@ -1,3 +1,4 @@
 # group=rf_executorch tag=py310 leg=binary rc=1
+# base: manifests/RF-fresh-base-empty.txt (full manifest = base with delta applied as overrides)
 # cmd: /private/tmp/h9-correct/RF_FRESH_BIN_py310/bin/python -m pip install --dry-run --report /private/tmp/h9-correct/reports/rf_executorch_py310_binary.json --only-binary=:all: rfdetr[executorch]>=1.9.0 torch>=2.13
 # base_freeze=0 delta=0 full=0

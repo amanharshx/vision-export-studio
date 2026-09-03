@@ -1,0 +1,4 @@
+# group=rf_onnx tag=py312 leg=binary rc=0
+# base: manifests/RF-onnx-base-py312-BIN.txt (full manifest = base with delta applied as overrides)
+# cmd: /private/tmp/h9-correct/RF_ONNX_BIN_py312/bin/python -m pip install --dry-run --report /private/tmp/h9-correct/reports/rf_onnx_py312_binary.json --only-binary=:all: rfdetr[onnx]
+# base_freeze=65 delta=0 full=65

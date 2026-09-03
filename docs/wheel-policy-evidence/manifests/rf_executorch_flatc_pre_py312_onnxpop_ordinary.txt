@@ -1,0 +1,5 @@
+# group=rf_executorch_flatc_pre tag=py312 leg=ordinary rc=0
+# base: manifests/RF-onnx-base-py312-ORD.txt (full manifest = base with delta applied as overrides)
+# cmd: /private/tmp/h9-correct/RF_ONNX_ORD_py312/bin/python -m pip install --dry-run --report /private/tmp/h9-correct/reports/rf_executorch_flatc_pre_py312_ordinary.json --pre flatc
+# base_freeze=65 delta=1 full=66
+flatc==25.12.19rc0

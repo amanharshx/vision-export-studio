@@ -1,0 +1,45 @@
+# group=rf_tflite tag=py312 leg=binary rc=0
+# base: manifests/RF-onnx-base-py312-BIN.txt (full manifest = base with delta applied as overrides)
+# cmd: /private/tmp/h9-correct/RF_ONNX_BIN_py312/bin/python -m pip install --dry-run --report /private/tmp/h9-correct/reports/rf_tflite_py312_binary.json --only-binary=:all: rfdetr[tflite]>=1.9.4
+# base_freeze=65 delta=41 full=99
+absl-py==2.5.0
+ai-edge-litert==2.1.2
+astunparse==1.6.3
+backports-strenum==1.2.8
+gast==0.7.0
+google-pasta==0.2.0
+grpcio==1.83.1
+h5py==3.12.1
+iniconfig==2.3.0
+keras==3.15.1
+libclang==18.1.1
+markdown==3.10.3
+ml-dtypes==0.5.1
+namex==0.1.0
+numpy==1.26.4
+onnx-ir==1.0.0
+onnx2tf==2.4.3
+onnx==1.20.1
+onnxoptimizer==0.4.2
+onnxruntime==1.24.3
+onnxscript==0.6.2
+onnxsim-prebuilt==0.4.39.post2
+opencv-python==4.11.0.86
+opt-einsum==3.4.0
+optree==0.20.0
+pluggy==1.6.0
+protobuf==4.25.5
+psutil==5.9.5
+pytest==9.0.2
+scipy==1.17.1
+sne4onnx==2.0.1
+sng4onnx==2.0.1
+tensorboard-data-server==0.7.2
+tensorboard==2.19.0
+tensorflow==2.19.1
+termcolor==3.3.0
+tf-keras==2.19.0
+tqdm==4.67.1
+werkzeug==3.1.8
+wheel==0.48.0
+wrapt==2.4.0
