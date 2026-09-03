@@ -189,7 +189,8 @@ TFLite is gated to Python ≥3.12, <3.13; LiteRT needs Python ≥3.10.
   PATH discovery and clear errors otherwise — e.g.
   `sweep.py --work DIR --interp py312=PATH build py312`,
   `sweep.py --work DIR resolve py312 [fresh|onnxpop]`,
-  `sweep.py --work DIR consolidate --out DIR`,
+  `sweep.py --work DIR consolidate --out DIR` (fresh empty directory; a nonempty
+  destination is rejected before anything is written),
   `step4.py --work DIR [--interp PATH]`; shared pip cache under the work dir,
   since removed from evidence). The managed runtime at `~/.vision-export-studio` was
   never read, written, or touched.

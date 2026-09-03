@@ -23,8 +23,8 @@ Configuration (no source edits needed):
     looked up on PATH, else a clear error is raised.
   * Per-stage pip timeout: `--timeout SEC` (default 3600).
 
-Captures: exact commands, exit codes, decisive excerpts, final manifests
-(pip freeze), source-built package inventory.
+Captures: exact commands, exit codes, decisive excerpts, and final manifests
+(pip freeze).
 
 Canonical raw artifacts (under the work directory reports dir, copied verbatim
 by sweep.py `consolidate`):
@@ -92,33 +92,11 @@ def tail(path, n=25):
     return "\n".join(lines[-n:])
 
 
-def excerpt_lines(path):
-    with open(path, errors="replace") as f:
-        return [l.rstrip("\n") for l in f]
-
-
-def write_ordinary_excerpt(stable_log):
-    """Deterministic antlr-build excerpt from an exit-0 ordinary stable log."""
-    lines = excerpt_lines(stable_log)
-    picked = [l for l in lines if "antlr" in l.lower()]
-    success = [l for l in lines if l.startswith("Successfully installed")]
-    with open(os.path.join(REP, "step4-ordinary-antlr-build.txt"), "w") as f:
-        f.write("# RF_STEP4_ORD stable leg: antlr4 sdist build lines + "
-                "final success line (exact)\n")
-        f.write("\n".join(picked) + "\n")
-        if success:
-            f.write("...\n" + success[-1] + "\n")
-
-
-def write_binary_excerpt(stable_log, rc):
-    """Deterministic resolver-failure excerpt from a failed binary stable log."""
-    nonempty = [l for l in excerpt_lines(stable_log) if l.strip()]
-    with open(os.path.join(REP, "step4-binary-resolution-failure.txt"), "w") as f:
-        f.write("# RF_STEP4_BIN stable leg with --only-binary=:all: "
-                f"(rc={rc}): backtracking tail + resolver verdict (exact)\n")
-        f.write("\n".join(nonempty[-14:]) + "\n")
-        f.write("# exact command: see step4-summary.json -> binary.stable_cmd "
-                f"(rc={rc})\n")
+def write_artifact(name, header, body_lines):
+    """Write one canonical excerpt artifact under the reports dir."""
+    with open(os.path.join(REP, name), "w") as f:
+        f.write(header + "\n")
+        f.write("\n".join(body_lines) + "\n")
 
 
 def leg(name, policy_extra):
@@ -140,8 +118,19 @@ def leg(name, policy_extra):
     rec["stable_log"] = os.path.basename(stable_log)
     if rec["stable_rc"] == 0:
         if rec["policy"] == "ordinary":
-            write_ordinary_excerpt(stable_log)
-            rec["excerpt"] = "step4-ordinary-antlr-build.txt"
+            log_lines = open(stable_log, errors="replace").read().splitlines()
+            evidence = [l for l in log_lines if "antlr" in l.lower()
+                        and not l.startswith("Successfully installed")]
+            success = [l for l in log_lines if l.startswith("Successfully installed")]
+            if evidence:
+                write_artifact("step4-ordinary-antlr-build.txt",
+                               "# RF_STEP4_ORD stable leg: antlr4 sdist build lines + "
+                               "final success line (exact)",
+                               evidence + (["...", success[-1]] if success else []))
+                rec["excerpt"] = "step4-ordinary-antlr-build.txt"
+            else:
+                rec["excerpt"] = None
+                rec["excerpt_missing"] = "no antlr build lines in ordinary stable log"
         pre = [py, "-m", "pip", "install", "--pre"] + policy_extra + ["flatc"]
         rec["pre_cmd"] = " ".join(pre)
         rec["pre_rc"], pre_log = run(pre, f"{name}_pre_flatc_install.log")
@@ -157,7 +146,15 @@ def leg(name, policy_extra):
     else:
         rec["stable_tail"] = tail(stable_log, 30)
         if rec["policy"] == "binary":
-            write_binary_excerpt(stable_log, rec["stable_rc"])
+            log_lines = open(stable_log, errors="replace").read().splitlines()
+            nonempty = [l for l in log_lines if l.strip()]
+            write_artifact("step4-binary-resolution-failure.txt",
+                           "# RF_STEP4_BIN stable leg with --only-binary=:all: "
+                           f"(rc={rec['stable_rc']}): backtracking tail + "
+                           "resolver verdict (exact)",
+                           nonempty[-14:] + [
+                               "# exact command: see step4-summary.json -> binary.stable_cmd "
+                               f"(rc={rec['stable_rc']})"])
             rec["excerpt"] = "step4-binary-resolution-failure.txt"
     fr = subprocess.run([py, "-m", "pip", "freeze", "--exclude-editable"],
                         capture_output=True, text=True, env=ENV)
@@ -166,8 +163,6 @@ def leg(name, policy_extra):
     with open(os.path.join(REP, rec["freeze_file"]), "w") as f:
         f.write(f"# {' '.join(stable)} -> rc={rec['stable_rc']}\n")
         f.write(fr.stdout)
-    # source-built inventory: packages whose installed files came from an sdist
-    # (approximated via pip index unavailable offline; use freeze + direct_url.json).
     return rec
 
 

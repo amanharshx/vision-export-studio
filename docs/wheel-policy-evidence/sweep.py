@@ -40,6 +40,8 @@ Usage:
   sweep.py --work DIR consolidate --out DIR
 Consolidate deterministically merges per-tag summaries and envmeta records plus
 the manifest files into the layout validated by check_manifests.py.
+Consolidate requires a fresh output directory (nonexistent or empty) and
+rejects a nonempty one before writing anything.
 """
 import argparse
 import json
@@ -345,6 +347,9 @@ def classify(group, o, b, fo, fb):
 
 def resolve_all(tag, onnxpop=False):
     state = "onnxpop" if onnxpop else "fresh"
+    if onnxpop and tag != "py312":
+        sys.exit(f"[sweep] onnxpop state exists only for py312 "
+                 f"(rfdetr-default sharing was tested on 3.12 only); got {tag}")
     rows = []
     out = {"tag": tag, "stack_state": state, "rows": rows}
     ul_ord_base = ul_bin_base = {}
@@ -370,9 +375,6 @@ def resolve_all(tag, onnxpop=False):
             upy = require_venv(f"UL_{leg}_{tag}")
             out[key] = len(freeze(upy))
     rf_env = "RF_ONNX" if onnxpop else "RF_FRESH"
-    if onnxpop and tag != "py312":
-        sys.exit(f"[sweep] onnxpop state exists only for py312 "
-                 f"(rfdetr-default sharing was tested on 3.12 only); got {tag}")
     # Tracked filename convention: plain <group>_<py>_<leg>.txt everywhere,
     # except Python 3.12 RF rows which carry the stack state.
     ft = f"{tag}_onnxpop" if onnxpop else (f"{tag}_fresh" if tag == "py312" else tag)
@@ -421,7 +423,15 @@ STEP4_ARTIFACTS = [
 
 
 def consolidate(out):
-    """Deterministically merge per-tag outputs into the tracked layout."""
+    """Deterministically merge per-tag outputs into the tracked layout.
+
+    `--out` must be a fresh staging directory (nonexistent or empty); a
+    nonempty destination is rejected before anything is written, so a repeated
+    consolidation can never leave stale copies behind.
+    """
+    if os.path.exists(out) and os.listdir(out):
+        sys.exit(f"[sweep] refusing to consolidate into nonempty {out}; "
+                 f"use a fresh empty directory")
     man_out = os.path.join(out, "manifests")
     os.makedirs(man_out, exist_ok=True)
     for fname in sorted(os.listdir(MAN)):
