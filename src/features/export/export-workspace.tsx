@@ -11,7 +11,12 @@ import { architectureMatters, type AppOS, type AppPlatform, getOS, incompatibleR
 import { getAppTelemetryContext, getRoutePlatformSupport, type HostSupportResult } from "@/lib/tauri/app";
 import { createListenerGroup, type ListenerGroup } from "@/lib/tauri/listener-group";
 import { useSetupTask } from "@/features/setup/setup-task-context";
-import { runInstallStream, type InstallOutcome } from "@/features/setup/setup-task";
+import {
+  isSetupTaskActive,
+  runInstallStream,
+  SETUP_CONFLICT_MESSAGE,
+  type InstallOutcome,
+} from "@/features/setup/setup-task";
 import type {
   DepCheckResult,
   EnvironmentInfo,
@@ -727,6 +732,7 @@ export function EnvironmentGroups({
   onCleanupRfDetr,
   onCleanupRfDetrChild,
   cleanupDisabled = false,
+  disabledReason = null,
 }: {
   envInfo: EnvironmentInfo | null;
   envError: string | null;
@@ -742,6 +748,7 @@ export function EnvironmentGroups({
   onCleanupRfDetr?: () => void;
   onCleanupRfDetrChild?: (key: string) => void;
   cleanupDisabled?: boolean;
+  disabledReason?: string | null;
 }) {
   const ultralyticsGroupStatus = getUltralyticsGroupStatus(envInfo, envError, redetecting);
   const ultralyticsGroupSummary = ultralyticsGroupStatus[0].toUpperCase() + ultralyticsGroupStatus.slice(1);
@@ -800,7 +807,7 @@ export function EnvironmentGroups({
           {managedRuntimeUpgradeNudge && (
             <div className="mt-3 flex items-center justify-between gap-3 rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
               <span>{managedRuntimeUpgradeNudge}</span>
-              <Button size="sm" variant="outline" className="shrink-0" onClick={openManagedRuntimeUpgrade} disabled={!mayStartRuntimeUpgrade}>
+              <Button size="sm" variant="outline" className="shrink-0" onClick={openManagedRuntimeUpgrade} disabled={!mayStartRuntimeUpgrade} title={!mayStartRuntimeUpgrade && disabledReason ? disabledReason : undefined}>
                 Set up
               </Button>
             </div>
@@ -827,6 +834,7 @@ export function EnvironmentGroups({
               className="shrink-0"
               onClick={onCleanupUltralytics}
               disabled={cleanupDisabled}
+              title={cleanupDisabled && disabledReason ? disabledReason : undefined}
             >
               Reset runtime
             </Button>
@@ -849,7 +857,7 @@ export function EnvironmentGroups({
             <div className="flex flex-col gap-2 rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-600 sm:flex-row sm:items-center sm:justify-between">
               <span>{managedEnvironmentSizeLabel(rfdetrSize)}</span>
               {onCleanupRfDetr && (
-                <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={onCleanupRfDetr} disabled={cleanupDisabled}>
+                <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={onCleanupRfDetr} disabled={cleanupDisabled} title={cleanupDisabled && disabledReason ? disabledReason : undefined}>
                   Remove all
                 </Button>
               )}
@@ -857,7 +865,7 @@ export function EnvironmentGroups({
             {rfdetrSize?.status === "unavailable" && (
               <p className="px-1 text-[11px] text-amber-700">Cleanup size scan failed: {rfdetrSize.size_error}</p>
             )}
-            <StackEnvironmentCards stacks={stacks} sizes={managedEnvironmentSizes} onRemove={onCleanupRfDetrChild} cleanupDisabled={cleanupDisabled} />
+            <StackEnvironmentCards stacks={stacks} sizes={managedEnvironmentSizes} onRemove={onCleanupRfDetrChild} cleanupDisabled={cleanupDisabled} disabledReason={disabledReason} />
           </>
         ) : (
           <p className="rounded-xl border border-dashed border-zinc-300 bg-white/60 px-4 py-3 text-xs text-zinc-500">
@@ -940,17 +948,19 @@ export function StackEnvironmentCards({
   sizes = {},
   onRemove,
   cleanupDisabled = false,
+  disabledReason = null,
 }: {
   stacks: StackEnvironment[];
   defaultExpanded?: boolean;
   sizes?: Record<string, ManagedEnvironmentScanResult>;
   onRemove?: (key: string) => void;
   cleanupDisabled?: boolean;
+  disabledReason?: string | null;
 }) {
   return (
     <>
       {stacks.map((stack) => (
-        <StackEnvironmentRow key={stack.key} stack={stack} defaultExpanded={defaultExpanded} size={sizes[stack.key]} onRemove={onRemove} cleanupDisabled={cleanupDisabled} />
+        <StackEnvironmentRow key={stack.key} stack={stack} defaultExpanded={defaultExpanded} size={sizes[stack.key]} onRemove={onRemove} cleanupDisabled={cleanupDisabled} disabledReason={disabledReason} />
       ))}
     </>
   );
@@ -962,12 +972,14 @@ export function StackEnvironmentRow({
   size,
   onRemove,
   cleanupDisabled = false,
+  disabledReason = null,
 }: {
   stack: StackEnvironment;
   defaultExpanded?: boolean;
   size?: ManagedEnvironmentScanResult;
   onRemove?: (key: string) => void;
   cleanupDisabled?: boolean;
+  disabledReason?: string | null;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const pythonAvailable = stack.python_version.status === "available";
@@ -1006,7 +1018,7 @@ export function StackEnvironmentRow({
             Status: {status === "ok" ? "Ready" : "Error"}
           </p>
           {onRemove && (
-            <Button size="sm" variant="outline" onClick={() => onRemove(stack.key)} disabled={cleanupDisabled}>
+            <Button size="sm" variant="outline" onClick={() => onRemove(stack.key)} disabled={cleanupDisabled} title={cleanupDisabled && disabledReason ? disabledReason : undefined}>
               Remove
             </Button>
           )}
@@ -1027,6 +1039,50 @@ export async function refreshStackEnvironments(
   }
 }
 
+export interface EnvironmentPublishOutcome {
+  requestId: number;
+  /** Detected environment when this request won; null when superseded or failed. */
+  info: EnvironmentInfo | null;
+  /** True when this request won but detection failed (error published inside). */
+  failed: boolean;
+}
+
+/**
+ * Single generation-owning environment publication point. Later publishes
+ * invalidate earlier ones; only the latest applies the complete atomic
+ * transition (environment, error, loading): success clears stale errors,
+ * failure drops stale environments. Superseded requests resolve
+ * `{ info: null, failed: false }` without touching state.
+ */
+export function createEnvironmentPublisher(deps: {
+  detect: (pythonPath?: string) => Promise<EnvironmentInfo>;
+  setEnv: (info: EnvironmentInfo | null) => void;
+  setError: (message: string | null) => void;
+  setLoading: (loading: boolean) => void;
+}) {
+  let generation = 0;
+  const isCurrent = (requestId: number) => generation === requestId;
+  const publish = async (pythonPath?: string): Promise<EnvironmentPublishOutcome> => {
+    const requestId = generation + 1;
+    generation = requestId;
+    try {
+      const info = await deps.detect(pythonPath);
+      if (!isCurrent(requestId)) return { requestId, info: null, failed: false };
+      deps.setEnv(info);
+      deps.setError(null);
+      deps.setLoading(false);
+      return { requestId, info, failed: false };
+    } catch (error) {
+      if (!isCurrent(requestId)) return { requestId, info: null, failed: false };
+      deps.setError(String(error));
+      deps.setEnv(null);
+      deps.setLoading(false);
+      return { requestId, info: null, failed: true };
+    }
+  };
+  return { publish, isCurrent };
+}
+
 interface ExportWorkspaceProps {
   onBack: () => void;
   updatesEnabled: boolean;
@@ -1035,7 +1091,7 @@ interface ExportWorkspaceProps {
 }
 
 export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupCompleteChange }: ExportWorkspaceProps) {
-  const { task: setupTask, startRuntimeInstall, succeedTask, failTask, dismissTask } = useSetupTask();
+  const { task: setupTask, startRuntimeInstall, dismissTask } = useSetupTask();
   const [appPlatform, setAppPlatform] = useState<AppPlatform>({ os: getOS(), arch: UNKNOWN_ARCH });
   const [platformResolved, setPlatformResolved] = useState(false);
   const [view, setView] = useState<WorkspaceView>("drop");
@@ -1075,7 +1131,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   const scanProviderEnvironments = managedEnvironmentInventory.scanProvider;
   const invalidateManagedEnvironmentSizesForMutation = managedEnvironmentInventory.invalidate;
   const [cleanupBusy, setCleanupBusy] = useState(false);
-  const [cleanupError, setCleanupError] = useState<string | null>(null);
+  const [environmentPanelError, setEnvironmentPanelError] = useState<string | null>(null);
   const [cleanupConfirmation, setCleanupConfirmation] = useState<{
     keys: ManagedEnvironmentKey[];
     provider: string;
@@ -1174,9 +1230,27 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   }, [depResults]);
   const ultralyticsRuntimeReady = selectedProviderId !== "ultralytics" || Boolean(envInfo?.yolo_path);
   const ultralyticsRuntimeInstalling = runtimeInstallPhase === "installing";
+  const setupConflictMessage = isSetupTaskActive(setupTask) ? SETUP_CONFLICT_MESSAGE : null;
+  // Single shared guard for every setup-owned conflict (setup, export,
+  // cleanup, rebuild). Each handler passes its own inline error setter.
+  const blockOnSetupConflict = (setError: (message: string) => void): boolean => {
+    if (!setupConflictMessage) return false;
+    setError(setupConflictMessage);
+    return true;
+  };
+  // Navigation stays available while setup runs; only the setup-owned
+  // conflicts (setup/export/cleanup/rebuild) are blocked via the message.
+  // Route activation keeps its existing rebuild/redetect guards and drops
+  // only the setup restriction.
   const ultralyticsRuntimeBlocking =
-    selectedProviderId === "ultralytics" && (!ultralyticsRuntimeReady || ultralyticsRuntimeInstalling);
-  const routeActivationAllowed = !cleanupBusy && mayActivateRoute(exportStatus, installPhase);
+    selectedProviderId === "ultralytics" &&
+    !envInfo?.yolo_path &&
+    runtimeInstallPhase !== "installing";
+  const routeActivationAllowed =
+    !cleanupBusy &&
+    mayActivateRoute(exportStatus, installPhase) &&
+    !managedRuntimeRebuilding &&
+    !redetecting;
   const cleanupActionsDisabled = isManagedEnvironmentCleanupBlocked({
     cleanupBusy,
     exportStatus,
@@ -1205,6 +1279,20 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   const currentExportRouteRef = useRef<{ routeId: string; exportFormat: string } | null>(null);
   const currentExportOutputDirRef = useRef<string | null>(null);
 
+  // One shared environment publisher for mount, setup-terminal,
+  // Environment-panel, and post-install detection. Only the latest request
+  // publishes; stale requests resolve without touching state.
+  const envPublisherRef = useRef<ReturnType<typeof createEnvironmentPublisher> | null>(null);
+  if (!envPublisherRef.current) {
+    envPublisherRef.current = createEnvironmentPublisher({
+      detect: (pythonPath) => detectEnvironment(pythonPath),
+      setEnv: (info) => setEnvInfo(info),
+      setError: (message) => setEnvError(message),
+      setLoading: (loading) => setRedetecting(loading),
+    });
+  }
+  const environmentPublisher = envPublisherRef.current;
+
   // Load settings + detect environment on mount
   useEffect(() => {
     void getAppTelemetryContext()
@@ -1223,13 +1311,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           setOutputDirOverride(outOverride);
           setOutputDirInput(outOverride);
         }
-        return detectEnvironment(override.trim() || undefined);
+        return environmentPublisher.publish(override.trim() || undefined);
       })
-      .then(setEnvInfo)
       .catch((e: unknown) => setEnvError(String(e)));
     void getManagedRuntimeRebuildEligibility().then(setManagedRuntimeUpgrade).catch(() => setManagedRuntimeUpgrade(null));
     void refreshStackEnvironmentCards();
-  }, [refreshStackEnvironmentCards]);
+  }, [environmentPublisher, refreshStackEnvironmentCards]);
 
   useEffect(() => {
     const requestId = hostSupportRequestRef.current + 1;
@@ -1288,7 +1375,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     }
   }, []);
 
-  // Check dependencies whenever the selected route or resolved python path changes
+  // Check dependencies whenever the selected route or resolved environment changes.
+  // Observes the environment object (not just its python path) so a fresh
+  // object published by setup completion refreshes whichever route is current.
   useEffect(() => {
     const pythonPath = envInfo?.python_path;
     if (!pythonPath || !selectedRouteId) {
@@ -1299,7 +1388,30 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     void refreshRouteDependencies(selectedRouteId, pythonPath).catch(() => {
       // State handled in helper; avoid unhandled promise noise.
     });
-  }, [selectedRouteId, envInfo?.python_path, refreshRouteDependencies]);
+  }, [selectedRouteId, envInfo, refreshRouteDependencies]);
+
+  // On setup terminal, publish the fresh environment and let the dependency
+  // effect above refresh the currently selected route. Detection uses the
+  // interpreter captured on the task, never the live editable Python input,
+  // so typing an unsaved path cannot publish the wrong environment. Keyed by
+  // task session/status; overlapping detections are generation-guarded.
+  const setupTerminalSession = ultralyticsSetupTask?.sessionId ?? null;
+  const setupTerminalStatus = ultralyticsSetupTask?.status ?? null;
+  const setupTerminalError = ultralyticsSetupTask?.error ?? null;
+  const setupTerminalDismissed = ultralyticsSetupTask?.dismissed ?? null;
+  const setupTerminalPythonPath = ultralyticsSetupTask?.pythonPath ?? null;
+  useEffect(() => {
+    if (!setupTerminalSession) return;
+    if (setupTerminalStatus !== "succeeded" && setupTerminalStatus !== "failed") return;
+    if (setupTerminalDismissed) return;
+    invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
+    if (setupTerminalStatus === "failed") {
+      setDepCheckError(setupTerminalError ?? "Setup failed.");
+      return;
+    }
+    if (!setupTerminalPythonPath) return;
+    void environmentPublisher.publish(setupTerminalPythonPath);
+  }, [environmentPublisher, invalidateManagedEnvironmentSizesForMutation, setupTerminalDismissed, setupTerminalError, setupTerminalPythonPath, setupTerminalSession, setupTerminalStatus]);
 
   // Register once; handlers filter events through the current session ref.
   useEffect(() => {
@@ -1416,14 +1528,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
 
   const handleInstallUltralyticsRuntime = useCallback(async () => {
     const pythonPath = envInfo?.python_path;
-    if (!pythonPath || ultralyticsRuntimeInstalling || cleanupBusy) return;
+    if (!pythonPath) return;
+    if (blockOnSetupConflict(setDepCheckError)) return;
+    if (cleanupBusy) return;
 
     setDepCheckLoading(true);
     setDepCheckError(null);
 
     try {
-      // Retrying explicitly acknowledges the previous terminal result, which
-      // the owner otherwise preserves until dismissed.
       if (
         ultralyticsSetupTask &&
         ultralyticsSetupTask.status !== "active" &&
@@ -1431,8 +1543,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       ) {
         dismissTask();
       }
-      // Listeners and the terminal promise live in the app-wide owner, so
-      // unmounting this screen cannot strand the activity bar.
+      // Install → verify → terminal lives in the app-wide owner, so
+      // unmounting (e.g. Landing navigation) cannot strand completion.
+      // Environment + current-route refresh happens in the terminal effect.
       const result = await startRuntimeInstall({
         provider: "ultralytics",
         routeId: null,
@@ -1441,36 +1554,16 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         pythonPath,
         summary: "Installing Ultralytics runtime…",
       });
-      invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
-
       if (!result.ok) {
+        setDepCheckError(result.error);
         return;
       }
-
-      invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
-      const freshEnv = await detectEnvironment(pythonPath);
-      setEnvInfo(freshEnv);
-
-      if (!freshEnv.yolo_path) {
-        failTask("Ultralytics runtime install finished, but YOLO CLI was still not detected.");
-        return;
-      }
-
-      try {
-        await refreshRouteDependencies(selectedRoute.id, freshEnv.python_path);
-      } catch (error) {
-        failTask("Ultralytics runtime installed, but dependency refresh failed. Re-detect environment and try again.");
-        return;
-      }
-
-      succeedTask("Ultralytics runtime ready");
     } catch (error) {
-      invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
-      failTask(String(error));
+      setDepCheckError(String(error));
     } finally {
       setDepCheckLoading(false);
     }
-  }, [cleanupBusy, dismissTask, envInfo?.python_path, failTask, invalidateManagedEnvironmentSizesForMutation, refreshRouteDependencies, selectedRoute.id, startRuntimeInstall, succeedTask, ultralyticsRuntimeInstalling, ultralyticsSetupTask]);
+  }, [blockOnSetupConflict, cleanupBusy, dismissTask, envInfo?.python_path, startRuntimeInstall, ultralyticsSetupTask]);
 
   const failExportStart = useCallback((message: string) => {
     setInstallPhase("idle");
@@ -1578,6 +1671,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
 
   // Export handler — gates on missing deps before starting
   const handleExport = async () => {
+    if (blockOnSetupConflict(setInvokeError)) return;
     if (cleanupBusy || !sourcePath || !envInfo?.python_path || exportStatus === "running" || exportStatus === "starting") return;
     const incompatibleMessage = getIncompatibleExportMessage(
       selectedRoute,
@@ -1632,6 +1726,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
 
   // Install missing deps then auto-start export
   const handleInstallAndExport = async () => {
+    if (blockOnSetupConflict(setInvokeError)) return;
     if (cleanupBusy || !mayActivateRoute(exportStatus, installPhase)) {
       setInvokeError("Another runtime operation is in progress. Wait for it to finish before installing dependencies.");
       return;
@@ -1747,10 +1842,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       }
 
       if (selectedProviderId === "ultralytics") {
-        try {
-          freshEnv = await detectEnvironment(pythonOverride.trim() || pythonPath);
-          setEnvInfo(freshEnv);
-        } catch {
+        const published = await environmentPublisher.publish(pythonOverride.trim() || pythonPath);
+        if (!environmentPublisher.isCurrent(published.requestId)) return;
+        if (published.failed || !published.info) {
           captureAnalyticsEvent("export_failed", {
             route_id: exportRoute.routeId,
             export_format: exportRoute.exportFormat,
@@ -1761,6 +1855,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           setInvokeError("Environment re-detect failed after install. Re-detect the environment before export.");
           return;
         }
+        freshEnv = published.info;
 
         if (!freshEnv.yolo_path) {
           captureAnalyticsEvent("export_failed", {
@@ -1927,9 +2022,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     }
   };
 
-  // Route row clicked — open modal for that route
+  // Route row clicked — open modal for that route. Route browsing stays
+  // available while setup runs; rebuild/redetect guards are retained.
   const handleActivateRoute = (routeId: string) => {
-    if (cleanupActionsDisabled || !mayActivateRoute(exportStatus, installPhase)) return;
+    if (!routeActivationAllowed) return;
     setSelectedRouteId(routeId);
 
     const saved = routeOptionsRef.current[routeId] ?? null;
@@ -1958,27 +2054,28 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     rfdetrInspectRequestRef.current += 1;
   };
 
-  // Re-detect environment with current override
+  // Re-detect environment with current override. Detection and loading-state
+  // publication go through the shared generation-owning path; the envInfo
+  // effect refreshes whichever route is current.
   const handleRedetect = useCallback(async (overridePath?: string, allowDuringCleanup = false) => {
     if (shouldSkipEnvironmentRedetection(cleanupBusy, allowDuringCleanup)) return;
     const trimmedOverride = overridePath?.trim();
     setRedetecting(true);
     setEnvInfo(null);
     setEnvError(null);
+    const outcome = await environmentPublisher.publish(trimmedOverride || undefined);
+    if (!environmentPublisher.isCurrent(outcome.requestId)) return;
+    if (outcome.failed) return;
     try {
-      const info = await detectEnvironment(trimmedOverride || undefined);
-      setEnvInfo(info);
-      await refreshRouteDependencies(selectedRouteId, info.python_path || null);
       setManagedRuntimeUpgrade(await getManagedRuntimeRebuildEligibility());
       await refreshStackEnvironmentCards();
     } catch (e: unknown) {
-      setEnvError(String(e));
-    } finally {
-      setRedetecting(false);
+      if (environmentPublisher.isCurrent(outcome.requestId)) setEnvironmentPanelError(String(e));
     }
-  }, [cleanupBusy, refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId]);
+  }, [cleanupBusy, environmentPublisher, refreshStackEnvironmentCards]);
 
   const handleRebuildManagedRuntime = useCallback(async () => {
+    if (blockOnSetupConflict(setManagedRuntimeRebuildError)) return;
     if (!mayStartRuntimeUpgrade) return;
     setManagedRuntimeRebuilding(true);
     setManagedRuntimeRebuildError(null);
@@ -2024,11 +2121,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     } finally {
       setManagedRuntimeRebuilding(false);
     }
-  }, [handleRedetect, invalidateManagedEnvironmentSizesForMutation, mayStartRuntimeUpgrade]);
+  }, [blockOnSetupConflict, handleRedetect, invalidateManagedEnvironmentSizesForMutation, mayStartRuntimeUpgrade]);
 
   const openManagedRuntimeUpgrade = useCallback(() => {
+    if (blockOnSetupConflict(setManagedRuntimeRebuildError)) return;
     if (mayStartRuntimeUpgrade) setManagedRuntimeUpgradeOpen(true);
-  }, [mayStartRuntimeUpgrade]);
+  }, [blockOnSetupConflict, mayStartRuntimeUpgrade]);
 
   // Save python path override and re-detect
   const handleSaveAndRedetect = useCallback(async () => {
@@ -2053,14 +2151,15 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   }, [cleanupBusy, handleRedetect]);
 
   const prepareCleanup = useCallback(async (providerId: ProviderId, singleKey?: ManagedEnvironmentKey) => {
+    if (blockOnSetupConflict(setEnvironmentPanelError)) return;
     if (cleanupActionsDisabled) return;
-    setCleanupError(null);
+    setEnvironmentPanelError(null);
     let scanned: ManagedEnvironmentScanResult[];
     try {
       scanned = await scanProviderEnvironments(providerId, singleKey);
     } catch (error: unknown) {
       setCleanupConfirmation(null);
-      setCleanupError(String(error));
+      setEnvironmentPanelError(String(error));
       return;
     }
     const scannedByKey = Object.fromEntries(scanned.map((row) => [row.key, row]));
@@ -2105,17 +2204,18 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       cleanupAllowed,
       ...cleanupState,
     });
-  }, [cleanupActionsDisabled, managedEnvironmentSizes, pythonOverride, scanProviderEnvironments, stackEnvironments]);
+  }, [blockOnSetupConflict, cleanupActionsDisabled, managedEnvironmentSizes, pythonOverride, scanProviderEnvironments, stackEnvironments]);
 
   const confirmCleanup = useCallback(async () => {
     if (!cleanupConfirmation || !cleanupConfirmation.cleanupAllowed || cleanupBusy) return;
+    if (blockOnSetupConflict(setEnvironmentPanelError)) return;
     const confirmation = cleanupConfirmation;
     setCleanupBusy(true);
-    setCleanupError(null);
+    setEnvironmentPanelError(null);
     try {
       const report: ManagedEnvironmentCleanupReport = await cleanupManagedEnvironments(confirmation.keys);
       const cleanupMessage = managedEnvironmentCleanupErrorMessage(report);
-      if (cleanupMessage) setCleanupError(cleanupMessage);
+      if (cleanupMessage) setEnvironmentPanelError(cleanupMessage);
       setCleanupConfirmation(null);
       invalidateManagedEnvironmentSizesForMutation(
         managedEnvironmentCacheKeysForCleanup(confirmation.keys, stackEnvironments.map((stack) => stack.key)),
@@ -2137,11 +2237,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         await refreshRouteDependencies(selectedRouteId, envInfo?.python_path ?? null).catch(() => {});
       }
     } catch (error: unknown) {
-      setCleanupError((current) => current ? `${current} ${String(error)}` : String(error));
+      setEnvironmentPanelError((current) => current ? `${current} ${String(error)}` : String(error));
     } finally {
       setCleanupBusy(false);
     }
-  }, [cleanupBusy, cleanupConfirmation, envInfo?.python_path, handleRedetect, invalidateManagedEnvironmentSizesForMutation, onSetupCompleteChange, pythonOverride, refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId, stackEnvironments]);
+  }, [blockOnSetupConflict, cleanupBusy, cleanupConfirmation, envInfo?.python_path, handleRedetect, invalidateManagedEnvironmentSizesForMutation, onSetupCompleteChange, pythonOverride, refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId, stackEnvironments]);
 
   // Save output dir override
   const handleSaveOutputDir = useCallback(async () => {
@@ -2237,14 +2337,15 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
                   const scans = providerId === "rfdetr"
                     ? stackEnvironments.map((stack) => scanProviderEnvironments("rfdetr", stack.key as ManagedEnvironmentKey))
                     : [scanProviderEnvironments(providerId)];
-                  void Promise.all(scans).catch((error: unknown) => setCleanupError(String(error)));
+                  void Promise.all(scans).catch((error: unknown) => setEnvironmentPanelError(String(error)));
                 }}
                 onCleanupUltralytics={() => { void prepareCleanup("ultralytics"); }}
                 onCleanupRfDetr={() => { void prepareCleanup("rfdetr"); }}
                 onCleanupRfDetrChild={(key) => { void prepareCleanup("rfdetr", key as ManagedEnvironmentKey); }}
                 cleanupDisabled={cleanupActionsDisabled}
+                disabledReason={setupConflictMessage}
               />
-              {cleanupError && <p className="text-xs text-red-700">{cleanupError}</p>}
+              {environmentPanelError && <p className="text-xs text-red-700">{environmentPanelError}</p>}
             </div>
 
             {/* Configuration */}
@@ -2385,7 +2486,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       candidateVersion={managedRuntimeUpgrade?.candidate_version ?? null}
       rebuilding={managedRuntimeRebuilding}
       lines={managedRuntimeRebuildLines}
-      error={managedRuntimeRebuildError}
+      error={managedRuntimeRebuildError ?? setupConflictMessage}
       mayStart={mayStartRuntimeUpgrade}
       onOpenChange={setManagedRuntimeUpgradeOpen}
       onContinue={handleRebuildManagedRuntime}
@@ -2417,9 +2518,17 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           {cleanupConfirmation.estimatedLogicalBytes === null && cleanupConfirmation.sizeError && <p className="text-amber-700">We could not calculate this environment’s size. You can still remove it.</p>}
         </div>
         <p className="text-xs text-zinc-500">Estimate; actual free-space change may differ.</p>
+        {setupConflictMessage && (
+          <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">{setupConflictMessage}</p>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={() => setCleanupConfirmation(null)} disabled={cleanupBusy}>Cancel</Button>
-          <Button variant="destructive" onClick={() => void confirmCleanup()} disabled={cleanupBusy || !cleanupConfirmation.cleanupAllowed}>
+          <Button
+            variant="destructive"
+            onClick={() => void confirmCleanup()}
+            disabled={cleanupBusy || !cleanupConfirmation.cleanupAllowed || Boolean(setupConflictMessage)}
+            title={setupConflictMessage ?? undefined}
+          >
             {cleanupBusy ? "Removing…" : cleanupConfirmation.provider === "Ultralytics YOLO" ? "Reset runtime" : cleanupConfirmation.keys.includes("rfdetr-all") ? "Remove all" : "Remove"}
           </Button>
         </DialogFooter>
@@ -2586,6 +2695,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         managedRuntimeUpgradeEligible={Boolean(managedRuntimeUpgrade?.eligible)}
         managedRuntimeUpgradeDisabled={!mayStartRuntimeUpgrade}
         onManagedRuntimeUpgrade={openManagedRuntimeUpgrade}
+        setupConflictMessage={setupConflictMessage}
         rfdetrSummary={selectedProviderId === "rfdetr" ? {
           variantMode: rfdetrVariantMode,
           detectedClass: rfdetrInspectResult?.class_symbol ?? null,

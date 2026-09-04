@@ -58,6 +58,7 @@ interface ExportModalProps {
   managedRuntimeUpgradeEligible: boolean;
   managedRuntimeUpgradeDisabled: boolean;
   onManagedRuntimeUpgrade: () => void;
+  setupConflictMessage?: string | null;
   rfdetrSummary?: {
     variantMode: RfDetrVariantMode;
     detectedClass?: string | null;
@@ -206,6 +207,7 @@ export function ExportModal({
   managedRuntimeUpgradeEligible,
   managedRuntimeUpgradeDisabled,
   onManagedRuntimeUpgrade,
+  setupConflictMessage,
   rfdetrSummary,
 }: ExportModalProps) {
   const format = formats[route.targetFormat];
@@ -217,11 +219,12 @@ export function ExportModal({
   const involvesUpdate = involvesPackageUpdate(depResults);
   const isStarting = exportStatus === "starting";
   const isRunning = exportStatus === "running";
+  const setupBlocked = Boolean(setupConflictMessage);
   const rfdetrImgszError =
     provider.id === "rfdetr" && rfdetrSummary
       ? validateRfDetrImgsz(options.imgsz, rfdetrSummary.requiredMultiple ?? null)
       : null;
-  const exportDisabled = isRunning || isStarting || !sourcePath || isInstalling || rfdetrImgszError !== null;
+  const exportDisabled = isRunning || isStarting || !sourcePath || isInstalling || setupBlocked || rfdetrImgszError !== null;
   const showLog = exportStatus !== "idle" || logLines.length > 0;
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const footerActions = getExportFooterActions({
@@ -368,6 +371,12 @@ export function ExportModal({
               </div>
             )}
 
+            {setupBlocked && setupConflictMessage && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+                <p className="text-sm text-amber-900">{setupConflictMessage}</p>
+              </div>
+            )}
+
             {errorMsg && (
               <div className="rounded-md border border-red-200 bg-red-50 p-3">
                 <p className="text-sm text-red-800">{errorMsg}</p>
@@ -408,7 +417,7 @@ export function ExportModal({
               Starting…
             </Button>
           ) : footerActions.secondary === "export_again" ? (
-            <Button variant="outline" onClick={onExport} disabled={isInstalling || rfdetrImgszError !== null}>
+            <Button variant="outline" onClick={onExport} disabled={isInstalling || setupBlocked || rfdetrImgszError !== null} title={setupBlocked && setupConflictMessage ? setupConflictMessage : undefined}>
               <Play className="mr-2 h-4 w-4" />
               Export Again
             </Button>
@@ -429,6 +438,7 @@ export function ExportModal({
             <Button
               disabled={exportDisabled}
               onClick={isPendingConsent ? onInstallAndExport : onExport}
+              title={setupBlocked && setupConflictMessage ? setupConflictMessage : undefined}
               className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
               <PrimaryExportActionLabel

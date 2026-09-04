@@ -4,6 +4,8 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Dialog } from "@/components/ui/dialog";
 import {
+  createEnvironmentPublisher,
+  EnvironmentGroups,
   getInstallStartFailureOutcome,
   getInstallableMissingPackages,
   getIncompatibleExportMessage,
@@ -14,8 +16,9 @@ import {
   mayActivateRoute,
   refreshStackEnvironments,
 } from "./export-workspace";
-import type { DepCheckResult, ExportStatus, InstallPhase, StackEnvironment } from "@/lib/types";
+import { SETUP_CONFLICT_MESSAGE } from "@/features/setup/setup-task";
 import { findRoute } from "@/lib/providers";
+import type { DepCheckResult, EnvironmentInfo, ExportStatus, InstallPhase, StackEnvironment } from "@/lib/types";
 
 describe("getInstallableMissingPackages", () => {
   test("returns explicit install_package values", () => {
@@ -254,5 +257,128 @@ describe("stack environment refresh", () => {
     }, async () => stacks);
 
     expect(received).toEqual(stacks);
+  });
+});
+
+describe("safe setup navigation (ticket 04)", () => {
+  function testEnv(yoloPath: string): EnvironmentInfo {
+    return {
+      python_path: "/tmp/python",
+      python_version: "Python 3.12.0",
+      yolo_path: yoloPath,
+      ultralytics_version: "8.4.80",
+      status: "ok",
+      warnings: [],
+    };
+  }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  function publishHarness(detect: (pythonPath?: string) => Promise<EnvironmentInfo>) {
+    const published: Array<[string, unknown]> = [];
+    const publisher = createEnvironmentPublisher({
+      detect,
+      setEnv: (info) => published.push(["env", info]),
+      setError: (message) => published.push(["error", message]),
+      setLoading: (loading) => published.push(["loading", loading]),
+    });
+    return { published, publisher };
+  }
+
+  test("a stale detection resolves without publishing anything", async () => {
+    const first = deferred<EnvironmentInfo>();
+    const second = deferred<EnvironmentInfo>();
+    const { published, publisher } = publishHarness((path) =>
+      path === "first" ? first.promise : second.promise,
+    );
+    const p1 = publisher.publish("first");
+    const p2 = publisher.publish("second");
+    second.resolve(testEnv("/tmp/yolo-new"));
+    const won = await p2;
+    expect(won.info?.yolo_path).toBe("/tmp/yolo-new");
+    expect(won.failed).toBe(false);
+    expect(publisher.isCurrent(won.requestId)).toBe(true);
+    first.resolve(testEnv("/tmp/yolo-old"));
+    const stale = await p1;
+    expect(stale.info).toBeNull();
+    expect(stale.failed).toBe(false);
+    expect(publisher.isCurrent(stale.requestId)).toBe(false);
+    expect(published).toEqual([
+      ["env", testEnv("/tmp/yolo-new")],
+      ["error", null],
+      ["loading", false],
+    ]);
+  });
+
+  test("a stale failure publishes nothing while the winner clears loading", async () => {
+    const first = deferred<EnvironmentInfo>();
+    const second = deferred<EnvironmentInfo>();
+    const { published, publisher } = publishHarness((path) =>
+      path === "first" ? first.promise : second.promise,
+    );
+    const p1 = publisher.publish("first");
+    const p2 = publisher.publish("second");
+    second.resolve(testEnv("/tmp/yolo"));
+    expect((await p2).failed).toBe(false);
+    first.reject(new Error("stale boom"));
+    const stale = await p1;
+    expect(stale.failed).toBe(false);
+    expect(stale.info).toBeNull();
+    expect(published).toEqual([
+      ["env", testEnv("/tmp/yolo")],
+      ["error", null],
+      ["loading", false],
+    ]);
+  });
+
+  test("a winning failure drops the environment and clears loading", async () => {
+    const pending = deferred<EnvironmentInfo>();
+    const published: Array<[string, unknown]> = [];
+    const publisher = createEnvironmentPublisher({
+      detect: () => pending.promise,
+      setEnv: (info) => published.push(["env", info]),
+      setError: (message) => published.push(["error", message]),
+      setLoading: (loading) => published.push(["loading", loading]),
+    });
+    const completed = publisher.publish("/tmp/python");
+    pending.reject(new Error("detect crashed"));
+    const outcome = await completed;
+    expect(outcome.failed).toBe(true);
+    expect(outcome.info).toBeNull();
+    expect(published).toEqual([
+      ["error", "Error: detect crashed"],
+      ["env", null],
+      ["loading", false],
+    ]);
+  });
+
+  test("disabled cleanup buttons expose the shared setup conflict as their title", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(EnvironmentGroups, {
+        envInfo: null,
+        envError: "boom",
+        redetecting: false,
+        managedRuntimeUpgradeNudge: null,
+        openManagedRuntimeUpgrade: () => {},
+        mayStartRuntimeUpgrade: false,
+        stacks: [],
+        managedEnvironmentSizes: {
+          "ultralytics-managed": { key: "ultralytics-managed", status: "available", estimated_logical_bytes: 10, size_error: null, exists: true },
+        } as never,
+        onCleanupUltralytics: () => {},
+        cleanupDisabled: true,
+        disabledReason: SETUP_CONFLICT_MESSAGE,
+        defaultExpanded: true,
+      }),
+    );
+    expect(html).toContain(SETUP_CONFLICT_MESSAGE);
   });
 });

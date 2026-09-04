@@ -31,12 +31,16 @@ export interface SetupTaskInput {
   provider: ProviderId;
   routeId: string | null;
   environmentKey: ManagedEnvironmentKey;
+  // Bootstrap interpreter captured when setup starts. Terminal refresh uses
+  // this stable path, never the live editable Python input.
+  pythonPath: string;
 }
 
 export interface SetupTask {
   provider: ProviderId;
   routeId: string | null;
   environmentKey: ManagedEnvironmentKey;
+  pythonPath: string;
   phase: SetupTaskPhase;
   summary: string;
   logs: string[];
@@ -90,6 +94,24 @@ export function setupTaskSummaryForPhase(
   return SETUP_TASK_PHASE_META[phase].summary(providerLabel);
 }
 
+/** Single consistent message for every action blocked while setup owns the guard. */
+export const SETUP_CONFLICT_MESSAGE =
+  "Setup is in progress. Wait for it to finish before starting another operation.";
+
+/** Warning shown before closing the app while setup is active. */
+export const SETUP_CLOSE_WARNING_MESSAGE =
+  "Setup is still in progress. Closing now will interrupt it. You can retry setup after restart.";
+
+/** True while a setup task owns the runtime operation guard. */
+export function isSetupTaskActive(task: SetupTask | null): boolean {
+  return task?.status === "active";
+}
+
+/** Close warning while setup is active, or null when idle. */
+export function getSetupCloseWarning(task: SetupTask | null): string | null {
+  return isSetupTaskActive(task) ? SETUP_CLOSE_WARNING_MESSAGE : null;
+}
+
 /** Visible while active and after terminal until explicitly dismissed. */
 export function isSetupTaskVisible(task: SetupTask | null): boolean {
   if (!task) return false;
@@ -106,6 +128,7 @@ export function createSetupTask(input: SetupTaskInput): SetupTask {
     provider: input.provider,
     routeId: input.routeId,
     environmentKey: input.environmentKey,
+    pythonPath: input.pythonPath,
     phase: "installing-packages",
     summary: setupTaskSummaryForPhase("installing-packages", input.provider),
     logs: [],
@@ -153,7 +176,7 @@ export interface InstallStreamSink {
  * is explicit at each call site.
  */
 export async function runInstallStream(
-  deps: InstallStreamDeps,
+  deps: InstallEventDeps,
   group: ListenerGroup,
   input: InstallStreamInput,
   sink: InstallStreamSink,
@@ -225,11 +248,10 @@ export async function runInstallStream(
 
 export interface RuntimeInstallRequest extends SetupTaskInput {
   packages: InstallableDependency[];
-  pythonPath: string;
   summary?: string;
 }
 
-export interface InstallStreamDeps {
+export interface InstallEventDeps {
   listenInstallEvent: <T>(
     event: string,
     handler: (ev: { payload: T }) => void,
@@ -241,13 +263,15 @@ export interface InstallStreamDeps {
   ) => Promise<string>;
 }
 
+export interface InstallStreamDeps extends InstallEventDeps {
+  verifyEnvironment: (pythonPath: string) => Promise<{ yoloPath: string | null }>;
+}
+
 export interface SetupTaskOwner {
   getState: () => SetupTask | null;
   subscribe: (listener: () => void) => () => void;
   dispose: () => void;
   startRuntimeInstall: (request: RuntimeInstallRequest) => Promise<InstallOutcome>;
-  succeedTask: (summary?: string) => void;
-  failTask: (error: string) => void;
   openDetails: () => void;
   closeDetails: () => void;
   dismissTask: () => void;
@@ -302,8 +326,7 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
       if (task?.status === "active") {
         return {
           ok: false,
-          error:
-            "Another runtime operation is in progress. Wait for it to finish before installing dependencies.",
+          error: SETUP_CONFLICT_MESSAGE,
         };
       }
       // Terminal results stay until viewed or dismissed; a replacement must
@@ -360,27 +383,37 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
         failActiveTask(outcome.error);
         return outcome;
       }
+      // Own the full install → verify → terminal lifecycle so an unmounted
+      // producer (e.g. Landing navigation) cannot strand completion.
       setTask({
         ...current,
         phase: "checking-environment",
         summary: setupTaskSummaryForPhase("checking-environment", current.provider),
       });
-      return outcome;
-    },
-
-    succeedTask: (summary) => {
-      if (!task || task.status !== "active") return;
+      let verified: { yoloPath: string | null };
+      try {
+        verified = await deps.verifyEnvironment(request.pythonPath);
+      } catch (error) {
+        const message = String(error);
+        failActiveTask(message);
+        return { ok: false, error: message };
+      }
+      const afterVerify = task;
+      if (!afterVerify || afterVerify.status !== "active") return outcome;
+      if (!verified.yoloPath) {
+        const message =
+          "Ultralytics runtime install finished, but YOLO CLI was still not detected.";
+        failActiveTask(message);
+        return { ok: false, error: message };
+      }
       setTask({
-        ...task,
+        ...afterVerify,
         phase: "ready",
         status: "succeeded",
         error: null,
-        summary: summary ?? setupTaskSummaryForPhase("ready", task.provider),
+        summary: setupTaskSummaryForPhase("ready", afterVerify.provider),
       });
-    },
-
-    failTask: (error) => {
-      failActiveTask(error);
+      return { ok: true };
     },
 
     openDetails: () => {
