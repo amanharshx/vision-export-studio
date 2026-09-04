@@ -1131,7 +1131,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   const scanProviderEnvironments = managedEnvironmentInventory.scanProvider;
   const invalidateManagedEnvironmentSizesForMutation = managedEnvironmentInventory.invalidate;
   const [cleanupBusy, setCleanupBusy] = useState(false);
-  const [cleanupError, setCleanupError] = useState<string | null>(null);
+  const [environmentPanelError, setEnvironmentPanelError] = useState<string | null>(null);
   const [cleanupConfirmation, setCleanupConfirmation] = useState<{
     keys: ManagedEnvironmentKey[];
     provider: string;
@@ -2070,7 +2070,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       setManagedRuntimeUpgrade(await getManagedRuntimeRebuildEligibility());
       await refreshStackEnvironmentCards();
     } catch (e: unknown) {
-      if (environmentPublisher.isCurrent(outcome.requestId)) setCleanupError(String(e));
+      if (environmentPublisher.isCurrent(outcome.requestId)) setEnvironmentPanelError(String(e));
     }
   }, [cleanupBusy, environmentPublisher, refreshStackEnvironmentCards]);
 
@@ -2151,15 +2151,15 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   }, [cleanupBusy, handleRedetect]);
 
   const prepareCleanup = useCallback(async (providerId: ProviderId, singleKey?: ManagedEnvironmentKey) => {
-    if (blockOnSetupConflict(setCleanupError)) return;
+    if (blockOnSetupConflict(setEnvironmentPanelError)) return;
     if (cleanupActionsDisabled) return;
-    setCleanupError(null);
+    setEnvironmentPanelError(null);
     let scanned: ManagedEnvironmentScanResult[];
     try {
       scanned = await scanProviderEnvironments(providerId, singleKey);
     } catch (error: unknown) {
       setCleanupConfirmation(null);
-      setCleanupError(String(error));
+      setEnvironmentPanelError(String(error));
       return;
     }
     const scannedByKey = Object.fromEntries(scanned.map((row) => [row.key, row]));
@@ -2208,14 +2208,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
 
   const confirmCleanup = useCallback(async () => {
     if (!cleanupConfirmation || !cleanupConfirmation.cleanupAllowed || cleanupBusy) return;
-    if (blockOnSetupConflict(setCleanupError)) return;
+    if (blockOnSetupConflict(setEnvironmentPanelError)) return;
     const confirmation = cleanupConfirmation;
     setCleanupBusy(true);
-    setCleanupError(null);
+    setEnvironmentPanelError(null);
     try {
       const report: ManagedEnvironmentCleanupReport = await cleanupManagedEnvironments(confirmation.keys);
       const cleanupMessage = managedEnvironmentCleanupErrorMessage(report);
-      if (cleanupMessage) setCleanupError(cleanupMessage);
+      if (cleanupMessage) setEnvironmentPanelError(cleanupMessage);
       setCleanupConfirmation(null);
       invalidateManagedEnvironmentSizesForMutation(
         managedEnvironmentCacheKeysForCleanup(confirmation.keys, stackEnvironments.map((stack) => stack.key)),
@@ -2237,7 +2237,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         await refreshRouteDependencies(selectedRouteId, envInfo?.python_path ?? null).catch(() => {});
       }
     } catch (error: unknown) {
-      setCleanupError((current) => current ? `${current} ${String(error)}` : String(error));
+      setEnvironmentPanelError((current) => current ? `${current} ${String(error)}` : String(error));
     } finally {
       setCleanupBusy(false);
     }
@@ -2337,7 +2337,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
                   const scans = providerId === "rfdetr"
                     ? stackEnvironments.map((stack) => scanProviderEnvironments("rfdetr", stack.key as ManagedEnvironmentKey))
                     : [scanProviderEnvironments(providerId)];
-                  void Promise.all(scans).catch((error: unknown) => setCleanupError(String(error)));
+                  void Promise.all(scans).catch((error: unknown) => setEnvironmentPanelError(String(error)));
                 }}
                 onCleanupUltralytics={() => { void prepareCleanup("ultralytics"); }}
                 onCleanupRfDetr={() => { void prepareCleanup("rfdetr"); }}
@@ -2345,7 +2345,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
                 cleanupDisabled={cleanupActionsDisabled}
                 disabledReason={setupConflictMessage}
               />
-              {cleanupError && <p className="text-xs text-red-700">{cleanupError}</p>}
+              {environmentPanelError && <p className="text-xs text-red-700">{environmentPanelError}</p>}
             </div>
 
             {/* Configuration */}
