@@ -1039,6 +1039,50 @@ export async function refreshStackEnvironments(
   }
 }
 
+export interface EnvironmentPublishOutcome {
+  requestId: number;
+  /** Detected environment when this request won; null when superseded or failed. */
+  info: EnvironmentInfo | null;
+  /** True when this request won but detection failed (error published inside). */
+  failed: boolean;
+}
+
+/**
+ * Single generation-owning environment publication point. Later publishes
+ * invalidate earlier ones; only the latest applies the complete atomic
+ * transition (environment, error, loading): success clears stale errors,
+ * failure drops stale environments. Superseded requests resolve
+ * `{ info: null, failed: false }` without touching state.
+ */
+export function createEnvironmentPublisher(deps: {
+  detect: (pythonPath?: string) => Promise<EnvironmentInfo>;
+  setEnv: (info: EnvironmentInfo | null) => void;
+  setError: (message: string | null) => void;
+  setLoading: (loading: boolean) => void;
+}) {
+  let generation = 0;
+  const isCurrent = (requestId: number) => generation === requestId;
+  const publish = async (pythonPath?: string): Promise<EnvironmentPublishOutcome> => {
+    const requestId = generation + 1;
+    generation = requestId;
+    try {
+      const info = await deps.detect(pythonPath);
+      if (!isCurrent(requestId)) return { requestId, info: null, failed: false };
+      deps.setEnv(info);
+      deps.setError(null);
+      deps.setLoading(false);
+      return { requestId, info, failed: false };
+    } catch (error) {
+      if (!isCurrent(requestId)) return { requestId, info: null, failed: false };
+      deps.setError(String(error));
+      deps.setEnv(null);
+      deps.setLoading(false);
+      return { requestId, info: null, failed: true };
+    }
+  };
+  return { publish, isCurrent };
+}
+
 interface ExportWorkspaceProps {
   onBack: () => void;
   updatesEnabled: boolean;
@@ -1235,30 +1279,19 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   const currentExportRouteRef = useRef<{ routeId: string; exportFormat: string } | null>(null);
   const currentExportOutputDirRef = useRef<string | null>(null);
 
-  // Single generation-owning environment publication path for mount,
-  // setup-terminal, and Environment-panel detection. Later requests
-  // invalidate earlier ones; only the latest publishes, and it publishes the
-  // complete atomic transition: environment, error, and loading. Success
-  // clears stale errors; failure drops stale environments. Resolves with its
-  // request id so callers can guard follow-up publication.
-  const envDetectRequestRef = useRef(0);
-  const publishEnvironment = useCallback(async (pythonPath?: string): Promise<number> => {
-    const requestId = envDetectRequestRef.current + 1;
-    envDetectRequestRef.current = requestId;
-    try {
-      const info = await detectEnvironment(pythonPath);
-      if (envDetectRequestRef.current !== requestId) return requestId;
-      setEnvInfo(info);
-      setEnvError(null);
-      setRedetecting(false);
-    } catch (error) {
-      if (envDetectRequestRef.current !== requestId) return requestId;
-      setEnvError(String(error));
-      setEnvInfo(null);
-      setRedetecting(false);
-    }
-    return requestId;
-  }, []);
+  // One shared environment publisher for mount, setup-terminal,
+  // Environment-panel, and post-install detection. Only the latest request
+  // publishes; stale requests resolve without touching state.
+  const envPublisherRef = useRef<ReturnType<typeof createEnvironmentPublisher> | null>(null);
+  if (!envPublisherRef.current) {
+    envPublisherRef.current = createEnvironmentPublisher({
+      detect: (pythonPath) => detectEnvironment(pythonPath),
+      setEnv: (info) => setEnvInfo(info),
+      setError: (message) => setEnvError(message),
+      setLoading: (loading) => setRedetecting(loading),
+    });
+  }
+  const environmentPublisher = envPublisherRef.current;
 
   // Load settings + detect environment on mount
   useEffect(() => {
@@ -1278,12 +1311,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           setOutputDirOverride(outOverride);
           setOutputDirInput(outOverride);
         }
-        return publishEnvironment(override.trim() || undefined);
+        return environmentPublisher.publish(override.trim() || undefined);
       })
       .catch((e: unknown) => setEnvError(String(e)));
     void getManagedRuntimeRebuildEligibility().then(setManagedRuntimeUpgrade).catch(() => setManagedRuntimeUpgrade(null));
     void refreshStackEnvironmentCards();
-  }, [publishEnvironment, refreshStackEnvironmentCards]);
+  }, [environmentPublisher, refreshStackEnvironmentCards]);
 
   useEffect(() => {
     const requestId = hostSupportRequestRef.current + 1;
@@ -1377,8 +1410,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       return;
     }
     if (!setupTerminalPythonPath) return;
-    void publishEnvironment(setupTerminalPythonPath);
-  }, [invalidateManagedEnvironmentSizesForMutation, publishEnvironment, setupTerminalDismissed, setupTerminalError, setupTerminalPythonPath, setupTerminalSession, setupTerminalStatus]);
+    void environmentPublisher.publish(setupTerminalPythonPath);
+  }, [environmentPublisher, invalidateManagedEnvironmentSizesForMutation, setupTerminalDismissed, setupTerminalError, setupTerminalPythonPath, setupTerminalSession, setupTerminalStatus]);
 
   // Register once; handlers filter events through the current session ref.
   useEffect(() => {
@@ -1809,10 +1842,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       }
 
       if (selectedProviderId === "ultralytics") {
-        try {
-          freshEnv = await detectEnvironment(pythonOverride.trim() || pythonPath);
-          setEnvInfo(freshEnv);
-        } catch {
+        const published = await environmentPublisher.publish(pythonOverride.trim() || pythonPath);
+        if (!environmentPublisher.isCurrent(published.requestId)) return;
+        if (published.failed || !published.info) {
           captureAnalyticsEvent("export_failed", {
             route_id: exportRoute.routeId,
             export_format: exportRoute.exportFormat,
@@ -1823,6 +1855,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           setInvokeError("Environment re-detect failed after install. Re-detect the environment before export.");
           return;
         }
+        freshEnv = published.info;
 
         if (!freshEnv.yolo_path) {
           captureAnalyticsEvent("export_failed", {
@@ -2030,14 +2063,16 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     setRedetecting(true);
     setEnvInfo(null);
     setEnvError(null);
-    const requestId = await publishEnvironment(trimmedOverride || undefined);
+    const outcome = await environmentPublisher.publish(trimmedOverride || undefined);
+    if (!environmentPublisher.isCurrent(outcome.requestId)) return;
+    if (outcome.failed) return;
     try {
       setManagedRuntimeUpgrade(await getManagedRuntimeRebuildEligibility());
       await refreshStackEnvironmentCards();
     } catch (e: unknown) {
-      if (envDetectRequestRef.current === requestId) setEnvError(String(e));
+      if (environmentPublisher.isCurrent(outcome.requestId)) setCleanupError(String(e));
     }
-  }, [cleanupBusy, publishEnvironment, refreshStackEnvironmentCards]);
+  }, [cleanupBusy, environmentPublisher, refreshStackEnvironmentCards]);
 
   const handleRebuildManagedRuntime = useCallback(async () => {
     if (blockOnSetupConflict(setManagedRuntimeRebuildError)) return;
