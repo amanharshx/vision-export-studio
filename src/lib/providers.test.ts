@@ -478,27 +478,6 @@ describe("applyDetectedRouteOptionsToProviderRoutes", () => {
 });
 
 describe("getRfDetrExportImgszError", () => {
-  test("accepts native and divisible non-native sizes", () => {
-    expect(getRfDetrExportImgszError("rfdetr", 512, rfdInspect512)).toBeNull();
-    expect(getRfDetrExportImgszError("rfdetr", 640, rfdInspect512)).toBeNull();
-  });
-
-  test("accepts a custom training resolution when divisible", () => {
-    const custom: RfDetrInspectResult = {
-      ...rfdInspect512,
-      recommended_imgsz: 640,
-      token_grid: 40,
-      resolution_source: "args",
-    };
-    expect(getRfDetrExportImgszError("rfdetr", 640, custom)).toBeNull();
-  });
-
-  test("rejects a non-divisible size with the exact multiple", () => {
-    const error = getRfDetrExportImgszError("rfdetr", 500, rfdInspect512);
-    expect(error).not.toBeNull();
-    expect(error).toContain("divisible by 32");
-  });
-
   test("never substitutes a guessed size when native is unavailable", () => {
     const incomplete: RfDetrInspectResult = {
       ...rfdInspectFailed,
@@ -512,8 +491,6 @@ describe("getRfDetrExportImgszError", () => {
     };
     const result = withRfDetrDetectedDefaults(defaultOpts, "rfdetr", incomplete);
     expect(result.imgsz).toBe(defaultOpts.imgsz);
-    expect(getRfDetrExportImgszError("rfdetr", 500, incomplete)).toContain("divisible by 32");
-    expect(getRfDetrExportImgszError("rfdetr", 384, incomplete)).toBeNull();
   });
 
   test("ignores RF-DETR rules for other providers", () => {

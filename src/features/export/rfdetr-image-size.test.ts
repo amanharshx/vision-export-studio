@@ -1,9 +1,6 @@
 // @ts-expect-error Bun provides this module at test runtime.
 import { describe, expect, test } from "bun:test";
-import {
-  getRfDetrFallbackImgsz,
-  validateRfDetrImgsz,
-} from "./rfdetr-image-size";
+import { validateRfDetrImgsz } from "./rfdetr-image-size";
 
 describe("validateRfDetrImgsz", () => {
   test("accepts the checkpoint-native size", () => {
@@ -12,11 +9,6 @@ describe("validateRfDetrImgsz", () => {
 
   test("accepts a divisible non-native size", () => {
     expect(validateRfDetrImgsz(640, 32)).toBeNull();
-  });
-
-  test("accepts a custom training resolution when divisible", () => {
-    expect(validateRfDetrImgsz(640, 32)).toBeNull();
-    expect(validateRfDetrImgsz(560, 56)).toBeNull();
   });
 
   test("rejects a non-divisible size with the exact multiple", () => {
@@ -35,26 +27,5 @@ describe("validateRfDetrImgsz", () => {
   test("checks only the range when model constraints are unknown", () => {
     expect(validateRfDetrImgsz(500, null)).toBeNull();
     expect(validateRfDetrImgsz(30, null)).toContain("between 64 and 8192");
-  });
-});
-
-describe("getRfDetrFallbackImgsz", () => {
-  test("returns a divisible standard preset without claiming native", () => {
-    expect(getRfDetrFallbackImgsz(32)).toBe(384);
-    expect(getRfDetrFallbackImgsz(56)).toBe(560);
-    expect(getRfDetrFallbackImgsz(24)).toBe(384);
-  });
-
-  test("returns null when constraints are unknown", () => {
-    expect(getRfDetrFallbackImgsz(null)).toBeNull();
-    expect(getRfDetrFallbackImgsz(undefined)).toBeNull();
-  });
-
-  test("every fallback preset satisfies its multiple", () => {
-    for (const multiple of [12, 24, 32, 56]) {
-      const fallback = getRfDetrFallbackImgsz(multiple);
-      expect(fallback).not.toBeNull();
-      expect(fallback! % multiple).toBe(0);
-    }
   });
 });

@@ -411,10 +411,10 @@ def export_checkpoint(args):
         if args.route_id == "rfdetr.pth.tflite":
             preload_tensorflow_before_rfdetr()
         model = resolve_model(args)
-        try:
-            geometry = infer_native_export_shape(args.checkpoint, model)
-        except Exception:
-            geometry = {"required_multiple": None, "patch_size": None, "num_windows": None}
+        # Fail closed: geometry comes from the checkpoint itself so
+        # bypassing the UI cannot start an invalid export. Inference
+        # errors propagate to the caller below; never substitute a size.
+        geometry = infer_native_export_shape(args.checkpoint, model)
         size_error = validate_export_imgsz(
             args.imgsz,
             geometry.get("required_multiple"),

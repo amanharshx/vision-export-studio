@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { RfDetrOptions } from "./rfdetr";
+import { RfDetrOptions, getRfDetrFallbackImgsz } from "./rfdetr";
 import { defaultRouteForProvider } from "@/lib/providers";
 import type { ExportOptions } from "@/lib/types";
 
@@ -35,11 +35,30 @@ function render(options: ExportOptions, extra?: Record<string, unknown>) {
   );
 }
 
+describe("getRfDetrFallbackImgsz", () => {
+  test("returns a divisible standard preset without claiming native", () => {
+    expect(getRfDetrFallbackImgsz(32)).toBe(384);
+    expect(getRfDetrFallbackImgsz(56)).toBe(560);
+    expect(getRfDetrFallbackImgsz(24)).toBe(384);
+  });
+
+  test("returns null when constraints are unknown", () => {
+    expect(getRfDetrFallbackImgsz(null)).toBeNull();
+    expect(getRfDetrFallbackImgsz(undefined)).toBeNull();
+  });
+});
+
 describe("RfDetrOptions image-size validation", () => {
   test("shows the exact required multiple in the control", () => {
     const html = render(baseOptions, { recommendedImgsz: 512, requiredMultiple: 32 });
     expect(html).toContain("must be divisible by 32");
     expect(html).not.toContain("must be divisible by 16");
+  });
+
+  test("aligns the native step base with the multiple", () => {
+    const html = render(baseOptions, { recommendedImgsz: null, requiredMultiple: 56 });
+    expect(html).toContain('min="112"');
+    expect(html).toContain('step="56"');
   });
 
   test("native size shows no error and no override copy", () => {

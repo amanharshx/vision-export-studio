@@ -353,7 +353,6 @@ export function ExportModal({
                   options={options}
                   onOptionsChange={onOptionsChange}
                   recommendedImgsz={rfdetrSummary?.recommendedImgsz}
-                  patchSize={rfdetrSummary?.patchSize}
                   requiredMultiple={rfdetrSummary?.requiredMultiple}
                 />
               )}

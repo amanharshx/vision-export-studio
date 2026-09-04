@@ -2,21 +2,37 @@ import { Input } from "@/components/ui/input";
 import { InputRow, type OptionsPanelProps } from "./_base";
 import { PrecisionOptions } from "./precision";
 import {
-  getRfDetrFallbackImgsz,
+  RFDETR_IMGSZ_MIN,
   validateRfDetrImgsz,
 } from "../rfdetr-image-size";
+
+/** Standard presets offered as an explicit fallback when native size is unknown. */
+const FALLBACK_PRESETS = [384, 512, 560, 576, 640, 704, 768];
+
+export function getRfDetrFallbackImgsz(
+  requiredMultiple?: number | null,
+): number | null {
+  if (requiredMultiple == null || requiredMultiple <= 0) return null;
+  for (const preset of FALLBACK_PRESETS) {
+    if (preset % requiredMultiple === 0) return preset;
+  }
+  return null;
+}
 
 export function RfDetrOptions({ route, options, onOptionsChange, recommendedImgsz, requiredMultiple }: OptionsPanelProps) {
   const multiple = requiredMultiple ?? null;
   const imgszError = validateRfDetrImgsz(options.imgsz, multiple);
   const isOverride = recommendedImgsz != null && options.imgsz !== recommendedImgsz;
   const fallback = recommendedImgsz == null ? getRfDetrFallbackImgsz(multiple) : null;
+  // Align the native step base with the multiple so the browser's own
+  // step validation agrees with the inline check (e.g. min 112 for 56).
+  const min = multiple ? Math.ceil(RFDETR_IMGSZ_MIN / multiple) * multiple : RFDETR_IMGSZ_MIN;
   return (
     <div className="space-y-4">
       <InputRow label="Image Size" description={`Input image size in pixels (64–8192${multiple ? `, must be divisible by ${multiple}` : ""})`}>
         <Input
           type="number"
-          min={64}
+          min={min}
           step={multiple ?? 1}
           value={options.imgsz}
           onChange={(e) => onOptionsChange({ ...options, imgsz: Number(e.target.value) })}
@@ -91,11 +107,6 @@ export function RfDetrOptions({ route, options, onOptionsChange, recommendedImgs
           />
         </InputRow>
       )}
-      <p className="text-xs leading-5 text-zinc-500">
-        {multiple
-          ? `RF-DETR image size must be divisible by ${multiple} (patch size × attention windows).`
-          : "Use checkpoint-native image size when possible."}
-      </p>
     </div>
   );
 }

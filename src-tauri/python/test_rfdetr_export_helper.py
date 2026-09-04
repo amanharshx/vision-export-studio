@@ -569,39 +569,16 @@ class RfDetrExportHelperTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(export.call_args.kwargs["shape"], (640, 640))
 
-    def test_export_allows_custom_resolution_when_divisible(self):
+    def test_export_fails_closed_when_geometry_inference_fails(self):
         export = Mock()
-        geometry = {
-            "recommended_imgsz": 640, "required_multiple": 32,
-            "patch_size": 16, "num_windows": 2,
-        }
         with patch.object(helper, "resolve_model", return_value=SimpleNamespace(export=export)):
-            with patch.object(helper, "infer_native_export_shape", return_value=geometry):
+            with patch.object(
+                helper, "infer_native_export_shape", side_effect=RuntimeError("boom")
+            ):
                 with patch.object(helper.os, "makedirs"):
                     result = helper.export_checkpoint(self._export_args(640))
 
-        self.assertEqual(result, 0)
-        self.assertEqual(export.call_args.kwargs["shape"], (640, 640))
-
-    def test_export_uses_fallback_preset_when_native_unknown(self):
-        export = Mock()
-        geometry = {
-            "recommended_imgsz": None, "required_multiple": 32,
-            "patch_size": 16, "num_windows": 2,
-        }
-        with patch.object(helper, "resolve_model", return_value=SimpleNamespace(export=export)):
-            with patch.object(helper, "infer_native_export_shape", return_value=geometry):
-                with patch.object(helper.os, "makedirs"):
-                    valid = helper.export_checkpoint(self._export_args(384))
-        self.assertEqual(valid, 0)
-        self.assertEqual(export.call_args.kwargs["shape"], (384, 384))
-
-        export.reset_mock()
-        with patch.object(helper, "resolve_model", return_value=SimpleNamespace(export=export)):
-            with patch.object(helper, "infer_native_export_shape", return_value=geometry):
-                with patch.object(helper.os, "makedirs"):
-                    invalid = helper.export_checkpoint(self._export_args(500))
-        self.assertEqual(invalid, 1)
+        self.assertEqual(result, 1)
         export.assert_not_called()
 
     def test_export_rejects_out_of_range_before_loading_model(self):

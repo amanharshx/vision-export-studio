@@ -5,7 +5,6 @@ export interface OptionsPanelProps {
   options: ExportOptions;
   onOptionsChange: (options: ExportOptions) => void;
   recommendedImgsz?: number | null;
-  patchSize?: number | null;
   requiredMultiple?: number | null;
 }
 
