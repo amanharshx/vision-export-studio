@@ -1829,7 +1829,7 @@ mod tests {
         std::fs::write(&bundled, "").unwrap();
         std::fs::write(
             lib.join("executorch-1.4.1.dist-info/RECORD"),
-            &format!("executorch/data/bin/{},,\n", bundled_name),
+            format!("executorch/data/bin/{},,\n", bundled_name),
         )
         .unwrap();
         let path_name = if cfg!(windows) { "flatc.exe" } else { "flatc" };
