@@ -9,21 +9,14 @@ import {
 /** Standard presets offered as an explicit fallback when native size is unknown. */
 const FALLBACK_PRESETS = [384, 512, 560, 576, 640, 704, 768];
 
-export function getRfDetrFallbackImgsz(
-  requiredMultiple?: number | null,
-): number | null {
-  if (requiredMultiple == null || requiredMultiple <= 0) return null;
-  for (const preset of FALLBACK_PRESETS) {
-    if (preset % requiredMultiple === 0) return preset;
-  }
-  return null;
-}
-
 export function RfDetrOptions({ route, options, onOptionsChange, recommendedImgsz, requiredMultiple }: OptionsPanelProps) {
   const multiple = requiredMultiple ?? null;
   const imgszError = validateRfDetrImgsz(options.imgsz, multiple);
   const isOverride = recommendedImgsz != null && options.imgsz !== recommendedImgsz;
-  const fallback = recommendedImgsz == null ? getRfDetrFallbackImgsz(multiple) : null;
+  const fallback =
+    recommendedImgsz == null && multiple != null
+      ? (FALLBACK_PRESETS.find((preset) => preset % multiple === 0) ?? null)
+      : null;
   // Align the native step base with the multiple so the browser's own
   // step validation agrees with the inline check (e.g. min 112 for 56).
   const min = multiple ? Math.ceil(RFDETR_IMGSZ_MIN / multiple) * multiple : RFDETR_IMGSZ_MIN;
