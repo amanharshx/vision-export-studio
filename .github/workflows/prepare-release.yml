@@ -1,0 +1,230 @@
+name: Prepare Release
+
+run-name: >
+  Prepare Release • ${{ github.event_name }} •
+  ${{ inputs.bump || github.ref_name }} •
+  ${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  queue: max
+
+jobs:
+  prepare:
+    name: Prepare bump PR
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Determine next version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          git fetch --tags
+          BASE_SHA=$(git rev-parse HEAD)
+          echo "Validated main commit: $BASE_SHA"
+
+          LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+          if [ -z "$LATEST_TAG" ]; then
+            BASE_VERSION=$(jq -r .version package.json)
+            echo "No v* tag found; using package.json version ${BASE_VERSION} as base."
+          else
+            BASE_VERSION="${LATEST_TAG#v}"
+          fi
+
+          if ! [[ "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Latest release base version '${BASE_VERSION}' is not semver X.Y.Z." >&2
+            exit 1
+          fi
+
+          CURRENT_VERSION=$(jq -r .version package.json)
+          if [ "$CURRENT_VERSION" != "$BASE_VERSION" ]; then
+            echo "Version on main (${CURRENT_VERSION}) does not match latest release tag v${BASE_VERSION}." >&2
+            echo "Merge or resolve the pending bump/tag before preparing a new release." >&2
+            exit 1
+          fi
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+          case "${BUMP}" in
+            patch) NEW_VERSION="$MAJOR.$MINOR.$((PATCH+1))" ;;
+            minor) NEW_VERSION="$MAJOR.$((MINOR+1)).0" ;;
+            major) NEW_VERSION="$((MAJOR+1)).0.0" ;;
+            *)
+              echo "Invalid bump type '${BUMP}'. Expected patch, minor, or major." >&2
+              exit 1
+              ;;
+          esac
+
+          TAG="v$NEW_VERSION"
+          BRANCH="release/bump-$TAG"
+
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
+            echo "Tag $TAG already exists on origin; refusing to overwrite or re-release." >&2
+            exit 1
+          fi
+
+          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "Preparing $TAG from base v$BASE_VERSION ($BUMP bump) at $BASE_SHA."
+
+      - name: Create bump PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_SHA: ${{ steps.version.outputs.base_sha }}
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          BRANCH: ${{ steps.version.outputs.branch }}
+        run: |
+          set -euo pipefail
+
+          if gh pr list --head "$BRANCH" --state open --json number,url --jq '.[0].url' | grep -q .; then
+            echo "An open bump PR already exists for $TAG; not creating a duplicate."
+            gh pr list --head "$BRANCH" --state open --json number,title,url
+            exit 0
+          fi
+
+          if git ls-remote --heads origin "$BRANCH" | grep -q .; then
+            echo "Branch $BRANCH already exists on origin with no open PR; not overwriting." >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -B "$BRANCH" "$BASE_SHA"
+
+          jq --arg v "$NEW_VERSION" '.version=$v' package.json > package.json.tmp
+          mv package.json.tmp package.json
+
+          jq --arg v "$NEW_VERSION" '.version=$v' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp
+          mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
+
+          perl -pi -e "s/^version = \".*\"/version = \"$NEW_VERSION\"/" src-tauri/Cargo.toml
+
+          perl -i -pe 'if ($seen) { s/^version = "[^"]+"/version = "'"$NEW_VERSION"'"/; $seen=0 } $seen=1 if /^name = "vision-export-studio"$/;' src-tauri/Cargo.lock
+
+          git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+          git commit -m "chore: bump version to $TAG"
+
+          git push -u origin "$BRANCH"
+
+          gh pr create \
+            --title "chore: bump version to $TAG" \
+            --body "Automated version bump ($TAG). Merge to tag and release." \
+            --base main \
+            --head "$BRANCH"
+
+  tag:
+    name: Tag and release
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/bump-v') && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Verify versions and tag release
+        id: release_tag
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --tags
+
+          echo "Merged commit: $MERGE_SHA"
+          echo "Head branch: $HEAD_REF"
+
+          EXPECTED_TAG="${HEAD_REF#release/bump-}"
+          EXPECTED_VERSION="${EXPECTED_TAG#v}"
+          if ! [[ "$EXPECTED_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Head branch '$HEAD_REF' does not encode a semver release (expected release/bump-vX.Y.Z); refusing to tag." >&2
+            exit 1
+          fi
+
+          PKG_VERSION=$(jq -r .version package.json)
+          TAURI_VERSION=$(jq -r .version src-tauri/tauri.conf.json)
+          CARGO_TOML_VERSION=$(grep -m1 '^version = "' src-tauri/Cargo.toml | sed -E 's/^version = "([^"]+)".*/\1/')
+          CARGO_LOCK_VERSION=$(awk '/^name = "vision-export-studio"$/{flag=1;next} flag && /^version = /{print;exit}' src-tauri/Cargo.lock | sed -E 's/^version = "([^"]+)".*/\1/')
+
+          echo "package.json: $PKG_VERSION"
+          echo "tauri.conf.json: $TAURI_VERSION"
+          echo "Cargo.toml: $CARGO_TOML_VERSION"
+          echo "Cargo.lock (vision-export-studio): $CARGO_LOCK_VERSION"
+          echo "Branch expects: $EXPECTED_VERSION"
+
+          if [ -z "$PKG_VERSION" ] || [ -z "$TAURI_VERSION" ] || [ -z "$CARGO_TOML_VERSION" ] || [ -z "$CARGO_LOCK_VERSION" ]; then
+            echo "Could not read all four application versions; refusing to tag." >&2
+            exit 1
+          fi
+
+          if [ "$PKG_VERSION" != "$TAURI_VERSION" ] || [ "$PKG_VERSION" != "$CARGO_TOML_VERSION" ] || [ "$PKG_VERSION" != "$CARGO_LOCK_VERSION" ]; then
+            echo "Application versions disagree; refusing to tag." >&2
+            exit 1
+          fi
+
+          if [ "$PKG_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "Branch $HEAD_REF expects $EXPECTED_VERSION but committed versions are $PKG_VERSION; refusing to tag." >&2
+            exit 1
+          fi
+
+          TAG="$EXPECTED_TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Resolved release tag $TAG from branch $HEAD_REF at $MERGE_SHA."
+
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
+            echo "Tag $TAG already exists on origin; skipping tag and release dispatch."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create and push tag
+        if: steps.release_tag.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.release_tag.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Trigger release workflow
+        if: steps.release_tag.outputs.exists == 'false'
+        run: gh workflow run "Release" --ref main -f tag="${{ steps.release_tag.outputs.tag }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
