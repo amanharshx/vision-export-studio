@@ -4,7 +4,6 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { buildDependencyItems, DependencyPanel, depGroup, depIcon, sortDependencyItems, type DepItem } from "./dependency-panel";
 import { providers, routesForProvider } from "@/lib/providers";
-import { getUltralyticsRuntimeReadyDescription } from "./export-workspace";
 import type { DepCheckResult } from "@/lib/types";
 
 describe("buildDependencyItems", () => {
@@ -87,12 +86,6 @@ describe("sortDependencyItems", () => {
       "manual_tool",
       "optional_pkg",
     ]);
-  });
-});
-
-describe("getUltralyticsRuntimeReadyDescription", () => {
-  test("describes runtime readiness as machine-scoped instead of session-scoped", () => {
-    expect(getUltralyticsRuntimeReadyDescription()).toBe("YOLO export targets are enabled on this machine.");
   });
 });
 

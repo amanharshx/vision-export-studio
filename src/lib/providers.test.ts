@@ -9,7 +9,6 @@ import {
   applyDetectedRouteOptions,
   applyDetectedRouteOptionsToProviderRoutes,
   getUltralyticsRuntimeDisabledReason,
-  shouldShowUltralyticsRuntimeInstallDetails,
 } from "@/features/export/export-workspace";
 import type { RfDetrInspectResult, RouteOptionsState } from "@/lib/types";
 
@@ -507,19 +506,5 @@ describe("getUltralyticsRuntimeDisabledReason", () => {
     expect(getUltralyticsRuntimeDisabledReason("idle")).toBe(
       "Install the Ultralytics runtime before choosing a YOLO export target.",
     );
-  });
-});
-
-describe("shouldShowUltralyticsRuntimeInstallDetails", () => {
-  test("keeps install details collapsed by default while runtime is installing", () => {
-    expect(shouldShowUltralyticsRuntimeInstallDetails("installing", false)).toBe(false);
-  });
-
-  test("shows install details when user explicitly opens them during install", () => {
-    expect(shouldShowUltralyticsRuntimeInstallDetails("installing", true)).toBe(true);
-  });
-
-  test("forces install details open after runtime install failure", () => {
-    expect(shouldShowUltralyticsRuntimeInstallDetails("failed", false)).toBe(true);
   });
 });

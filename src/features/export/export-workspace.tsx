@@ -10,6 +10,8 @@ import { useManagedEnvironmentInventory } from "./use-managed-environment-invent
 import { architectureMatters, type AppOS, type AppPlatform, getOS, incompatibleReason, isCompatible, UNKNOWN_ARCH } from "@/lib/platform";
 import { getAppTelemetryContext, getRoutePlatformSupport, type HostSupportResult } from "@/lib/tauri/app";
 import { createListenerGroup, type ListenerGroup } from "@/lib/tauri/listener-group";
+import { useSetupTask } from "@/features/setup/setup-task-context";
+import { runInstallStream, type InstallOutcome } from "@/features/setup/setup-task";
 import type {
   DepCheckResult,
   EnvironmentInfo,
@@ -39,7 +41,7 @@ import type {
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, FileBox, FolderOpen, Info, RefreshCw, RotateCcw, X, CircleHelp, Loader2, BadgeCheck, CircleX, CircleDashed, TriangleAlert } from "lucide-react";
+import { ArrowLeft, ChevronDown, FileBox, FolderOpen, Info, RefreshCw, RotateCcw, X, CircleHelp, BadgeCheck, CircleX, CircleDashed, TriangleAlert } from "lucide-react";
 import { UpdateChecker } from "@/components/update-checker";
 import {
   Sheet,
@@ -69,42 +71,6 @@ import {
 } from "@/components/ui/dialog";
 import type { UpdaterController } from "@/features/updater/use-updater-controller";
 
-type BufferedInstallEvent =
-  | { kind: "stdout"; payload: InstallLinePayload }
-  | { kind: "stderr"; payload: InstallLinePayload }
-  | { kind: "finished"; payload: InstallFinishedPayload }
-  | { kind: "failed"; payload: InstallFailedPayload };
-
-export function createInstallEventBuffer(
-  onLine: (line: string) => void,
-  onTerminal: (result: "ok" | string) => void,
-) {
-  let sessionId = "";
-  let terminalHandled = false;
-  const pending: BufferedInstallEvent[] = [];
-
-  const handle = (event: BufferedInstallEvent) => {
-    if (terminalHandled || event.payload.session_id !== sessionId) return;
-    if (event.kind === "stdout") onLine("[stdout] " + event.payload.line);
-    if (event.kind === "stderr") onLine("[stderr] " + event.payload.line);
-    if (event.kind === "finished" || event.kind === "failed") {
-      terminalHandled = true;
-      onTerminal(event.kind === "finished" ? "ok" : event.payload.error);
-    }
-  };
-
-  return {
-    receive(event: BufferedInstallEvent) {
-      if (sessionId) handle(event);
-      else pending.push(event);
-    },
-    assignSessionId(id: string) {
-      sessionId = id;
-      for (const event of pending) handle(event);
-      pending.length = 0;
-    },
-  };
-}
 import { DropZone } from "./drop-zone";
 import { ExportModal } from "./export-modal";
 import { RouteGrid } from "./route-grid";
@@ -199,18 +165,6 @@ export function getUltralyticsRuntimeDisabledReason(runtimeInstallPhase: Runtime
   return runtimeInstallPhase === "installing"
     ? undefined
     : "Install the Ultralytics runtime before choosing a YOLO export target.";
-}
-
-export function shouldShowUltralyticsRuntimeInstallDetails(
-  runtimeInstallPhase: RuntimeInstallPhase,
-  runtimeInstallDetailsOpen: boolean,
-): boolean {
-  return runtimeInstallPhase === "failed"
-    || (runtimeInstallPhase === "installing" && runtimeInstallDetailsOpen);
-}
-
-export function getUltralyticsRuntimeReadyDescription(): string {
-  return "YOLO export targets are enabled on this machine.";
 }
 
 const defaultOptions: ExportOptions = {
@@ -1081,6 +1035,7 @@ interface ExportWorkspaceProps {
 }
 
 export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupCompleteChange }: ExportWorkspaceProps) {
+  const { task: setupTask, startRuntimeInstall, succeedTask, failTask, dismissTask } = useSetupTask();
   const [appPlatform, setAppPlatform] = useState<AppPlatform>({ os: getOS(), arch: UNKNOWN_ARCH });
   const [platformResolved, setPlatformResolved] = useState(false);
   const [view, setView] = useState<WorkspaceView>("drop");
@@ -1162,11 +1117,16 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
 
   // Install phase state
   const [installPhase, setInstallPhase] = useState<InstallPhase>("idle");
-  const [runtimeInstallPhase, setRuntimeInstallPhase] = useState<RuntimeInstallPhase>("idle");
-  const [runtimeInstallLines, setRuntimeInstallLines] = useState<string[]>([]);
-  const [runtimeInstallError, setRuntimeInstallError] = useState<string | null>(null);
-  const [runtimeInstallDetailsOpen, setRuntimeInstallDetailsOpen] = useState(false);
-  const [runtimeInstalledThisSession, setRuntimeInstalledThisSession] = useState(false);
+  // Runtime-install progress, logs, and result live in the app-wide setup
+  // task; the route view only derives the phase it needs for gating.
+  const ultralyticsSetupTask = setupTask?.environmentKey === "ultralytics-managed" ? setupTask : null;
+  const runtimeInstallPhase: RuntimeInstallPhase = !ultralyticsSetupTask
+    ? "idle"
+    : ultralyticsSetupTask.status === "active"
+      ? "installing"
+      : ultralyticsSetupTask.status === "succeeded"
+        ? "ready"
+        : "failed";
   const [managedRuntimeUpgrade, setManagedRuntimeUpgrade] = useState<ManagedRuntimeRebuildEligibility | null>(null);
   const [managedRuntimeUpgradeOpen, setManagedRuntimeUpgradeOpen] = useState(false);
   const [managedRuntimeRebuilding, setManagedRuntimeRebuilding] = useState(false);
@@ -1424,64 +1384,28 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     routeOptionsRef.current = {};
   }, [sourcePath]);
 
-  useEffect(() => {
-    setRuntimeInstallPhase("idle");
-    setRuntimeInstallLines([]);
-    setRuntimeInstallError(null);
-    setRuntimeInstallDetailsOpen(false);
-  }, [selectedProviderId, sourcePath]);
-
-  useEffect(() => {
-    if (runtimeInstallPhase !== "ready") return;
-    const timeoutId = window.setTimeout(() => {
-      setRuntimeInstallPhase("idle");
-    }, 4000);
-    return () => window.clearTimeout(timeoutId);
-  }, [runtimeInstallPhase]);
-
-  useEffect(() => {
-    if (runtimeInstallPhase === "failed") {
-      setRuntimeInstallDetailsOpen(true);
-      return;
-    }
-    if (runtimeInstallPhase === "idle" || runtimeInstallPhase === "ready") {
-      setRuntimeInstallDetailsOpen(false);
-    }
-  }, [runtimeInstallPhase]);
-
   const streamDependencyInstall = useCallback(async (
     routeId: string | null,
     packages: InstallableDependency[],
     pythonPath: string,
     appendLine: (line: string) => void,
-  ): Promise<"ok" | string> => {
+  ): Promise<InstallOutcome> => {
     const listeners = createListenerGroup();
     activeInstallListenerGroupRef.current?.dispose();
     activeInstallListenerGroupRef.current = listeners;
-    let resolveInstall!: (result: "ok" | string) => void;
-    const installPromise = new Promise<"ok" | string>((resolve) => {
-      resolveInstall = resolve;
-    });
-    const eventBuffer = createInstallEventBuffer(appendLine, resolveInstall);
 
     try {
-      await Promise.all([
-        listeners.add(listen<InstallLinePayload>("install:stdout", (ev) => {
-          eventBuffer.receive({ kind: "stdout", payload: ev.payload });
-        })),
-        listeners.add(listen<InstallLinePayload>("install:stderr", (ev) => {
-          eventBuffer.receive({ kind: "stderr", payload: ev.payload });
-        })),
-        listeners.add(listen<InstallFinishedPayload>("install:finished", (ev) => {
-          eventBuffer.receive({ kind: "finished", payload: ev.payload });
-        })),
-        listeners.add(listen<InstallFailedPayload>("install:failed", (ev) => {
-          eventBuffer.receive({ kind: "failed", payload: ev.payload });
-        })),
-      ]);
-
-      eventBuffer.assignSessionId(await installDependencies(routeId, packages, pythonPath));
-      return await installPromise;
+      return await runInstallStream(
+        {
+          listenInstallEvent: <T,>(event: string, handler: (ev: { payload: T }) => void) =>
+            listen<T>(event, handler),
+          startInstall: (resolvedRouteId, resolvedPackages, resolvedPythonPath) =>
+            installDependencies(resolvedRouteId, resolvedPackages, resolvedPythonPath),
+        },
+        listeners,
+        { routeId, packages, pythonPath },
+        { onLine: appendLine },
+      );
     } finally {
       listeners.dispose();
       if (activeInstallListenerGroupRef.current === listeners) {
@@ -1494,23 +1418,32 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     const pythonPath = envInfo?.python_path;
     if (!pythonPath || ultralyticsRuntimeInstalling || cleanupBusy) return;
 
-    setRuntimeInstallPhase("installing");
-    setRuntimeInstallLines([]);
-    setRuntimeInstallError(null);
-    setRuntimeInstallDetailsOpen(false);
-    setRuntimeInstalledThisSession(false);
     setDepCheckLoading(true);
     setDepCheckError(null);
 
     try {
-      const result = await streamDependencyInstall(null, [{ package: "ultralytics", prerelease: false }], pythonPath, (line) => {
-        setRuntimeInstallLines((prev) => [...prev, line]);
+      // Retrying explicitly acknowledges the previous terminal result, which
+      // the owner otherwise preserves until dismissed.
+      if (
+        ultralyticsSetupTask &&
+        ultralyticsSetupTask.status !== "active" &&
+        !ultralyticsSetupTask.dismissed
+      ) {
+        dismissTask();
+      }
+      // Listeners and the terminal promise live in the app-wide owner, so
+      // unmounting this screen cannot strand the activity bar.
+      const result = await startRuntimeInstall({
+        provider: "ultralytics",
+        routeId: null,
+        environmentKey: "ultralytics-managed",
+        packages: [{ package: "ultralytics", prerelease: false }],
+        pythonPath,
+        summary: "Installing Ultralytics runtime…",
       });
       invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
 
-      if (result !== "ok") {
-        setRuntimeInstallPhase("failed");
-        setRuntimeInstallError("Ultralytics runtime install failed: " + result);
+      if (!result.ok) {
         return;
       }
 
@@ -1519,29 +1452,25 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       setEnvInfo(freshEnv);
 
       if (!freshEnv.yolo_path) {
-        setRuntimeInstallPhase("failed");
-        setRuntimeInstallError("Ultralytics runtime install finished, but YOLO CLI was still not detected.");
+        failTask("Ultralytics runtime install finished, but YOLO CLI was still not detected.");
         return;
       }
 
       try {
         await refreshRouteDependencies(selectedRoute.id, freshEnv.python_path);
       } catch (error) {
-        setRuntimeInstallPhase("failed");
-        setRuntimeInstallError("Ultralytics runtime installed, but dependency refresh failed. Re-detect environment and try again.");
+        failTask("Ultralytics runtime installed, but dependency refresh failed. Re-detect environment and try again.");
         return;
       }
 
-      setRuntimeInstalledThisSession(true);
-      setRuntimeInstallPhase("ready");
+      succeedTask("Ultralytics runtime ready");
     } catch (error) {
       invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
-      setRuntimeInstallPhase("failed");
-      setRuntimeInstallError(String(error));
+      failTask(String(error));
     } finally {
       setDepCheckLoading(false);
     }
-  }, [cleanupBusy, envInfo?.python_path, invalidateManagedEnvironmentSizesForMutation, refreshRouteDependencies, selectedRoute.id, streamDependencyInstall, ultralyticsRuntimeInstalling]);
+  }, [cleanupBusy, dismissTask, envInfo?.python_path, failTask, invalidateManagedEnvironmentSizesForMutation, refreshRouteDependencies, selectedRoute.id, startRuntimeInstall, succeedTask, ultralyticsRuntimeInstalling, ultralyticsSetupTask]);
 
   const failExportStart = useCallback((message: string) => {
     setInstallPhase("idle");
@@ -1755,7 +1684,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       });
       invalidateManagedEnvironmentSizesForMutation();
 
-      if (result !== "ok") {
+      if (!result.ok) {
         captureAnalyticsEvent("export_failed", {
           route_id: exportRoute.routeId,
           export_format: exportRoute.exportFormat,
@@ -1763,7 +1692,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           failure_kind: "install_failed",
         });
         setInstallPhase("failed");
-        setLogLines((prev) => [...prev, "[error] Install failed: " + result]);
+        setLogLines((prev) => [...prev, "[error] Install failed: " + result.error]);
         return;
       }
       await refreshStackEnvironmentCards();
@@ -1913,10 +1842,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     setRfDetrTrustConfirmedPath(null);
     setRfDetrVariantMode("auto");
     setRfDetrManualClassSymbol("");
-    setRuntimeInstallPhase("idle");
-    setRuntimeInstallLines([]);
-    setRuntimeInstallError(null);
-    setRuntimeInstallDetailsOpen(false);
     rfdetrInspectRequestRef.current += 1;
   }
 
@@ -1945,9 +1870,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       setRfDetrVariantMode("auto");
       setRfDetrManualClassSymbol("");
     }
-    setRuntimeInstallPhase("idle");
-    setRuntimeInstallLines([]);
-    setRuntimeInstallError(null);
     setView("formats");
   }, [selectedProvider]);
 
@@ -2031,12 +1953,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     setRfDetrTrustConfirmedPath(null);
     setRfDetrVariantMode("auto");
     setRfDetrManualClassSymbol("");
-    setRuntimeInstallPhase("idle");
     setCompletedOutputDir(null);
     currentExportOutputDirRef.current = null;
-    setRuntimeInstallLines([]);
-    setRuntimeInstallError(null);
-    setRuntimeInstallDetailsOpen(false);
     rfdetrInspectRequestRef.current += 1;
   };
 
@@ -2053,11 +1971,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       await refreshRouteDependencies(selectedRouteId, info.python_path || null);
       setManagedRuntimeUpgrade(await getManagedRuntimeRebuildEligibility());
       await refreshStackEnvironmentCards();
-      setRuntimeInstallPhase("idle");
-      setRuntimeInstallLines([]);
-      setRuntimeInstallError(null);
-      setRuntimeInstallDetailsOpen(false);
-      setRuntimeInstalledThisSession(false);
     } catch (e: unknown) {
       setEnvError(String(e));
     } finally {
@@ -2611,61 +2524,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
               )}
             </div>
           )}
-          {selectedProviderId === "ultralytics" && ultralyticsRuntimeInstalling && (
-            <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              <div className="flex items-center gap-2 font-medium">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Installing Ultralytics runtime
-              </div>
-              <p>This may take a few minutes.</p>
-              <button
-                type="button"
-                className="text-left text-xs font-medium text-amber-800 underline underline-offset-2"
-                onClick={() => setRuntimeInstallDetailsOpen((open) => !open)}
-              >
-                {runtimeInstallDetailsOpen ? "Hide details" : "Show details"}
-              </button>
-              {shouldShowUltralyticsRuntimeInstallDetails(runtimeInstallPhase, runtimeInstallDetailsOpen) && (
-                <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-amber-200 bg-white/80 p-3 font-mono text-xs text-amber-950">
-                  {runtimeInstallLines.length > 0 ? runtimeInstallLines.join("\n") : "[info] Starting runtime install..."}
-                </div>
-              )}
-            </div>
-          )}
-          {selectedProviderId === "ultralytics" && runtimeInstallPhase === "failed" && (
-            <div className="space-y-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">
-              <div>
-                <p className="font-medium">Ultralytics runtime install failed</p>
-                <p className="mt-1">{runtimeInstallError ?? "Runtime install failed."}</p>
-              </div>
-              {runtimeInstallLines.length > 0 && (
-                <button
-                  type="button"
-                  className="text-left text-xs font-medium text-red-800 underline underline-offset-2"
-                  onClick={() => setRuntimeInstallDetailsOpen((open) => !open)}
-                >
-                  {runtimeInstallDetailsOpen ? "Hide details" : "Show details"}
-                </button>
-              )}
-              {runtimeInstallLines.length > 0 && shouldShowUltralyticsRuntimeInstallDetails(runtimeInstallPhase, runtimeInstallDetailsOpen) && (
-                <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-red-200 bg-white/80 p-3 font-mono text-xs text-red-950">
-                  {runtimeInstallLines.join("\n")}
-                </div>
-              )}
-              <div>
-                <Button size="sm" onClick={handleInstallUltralyticsRuntime} disabled={!envInfo?.python_path || cleanupBusy}>
-                  Install Runtime
-                </Button>
-              </div>
-            </div>
-          )}
-          {selectedProviderId === "ultralytics" && runtimeInstallPhase === "ready" && runtimeInstalledThisSession && (
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
-              <p className="font-medium">Ultralytics runtime ready</p>
-              <p className="mt-1">{getUltralyticsRuntimeReadyDescription()}</p>
-            </div>
-          )}
-          {selectedProviderId === "ultralytics" && !ultralyticsRuntimeReady && runtimeInstallPhase === "idle" && (
+          {selectedProviderId === "ultralytics" && !ultralyticsRuntimeReady && !ultralyticsRuntimeInstalling && (
             <div className="flex items-center justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
               <div>
                 <p className="font-medium">Ultralytics runtime required</p>
