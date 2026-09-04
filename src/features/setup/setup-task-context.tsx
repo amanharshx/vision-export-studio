@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { installDependencies } from "@/lib/tauri/deps";
 import { detectEnvironment } from "@/lib/tauri/environment";
 import {
@@ -63,11 +64,24 @@ export function SetupTaskProvider({ children }: { children: React.ReactNode }) {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     try {
-      const promise = getCurrentWindow().onCloseRequested((event) => {
+      // Native dialog: window.confirm is unreliable inside the webview, and a
+      // failed dialog must keep the app open rather than let it close.
+      // On confirm, the unload guard is dropped first so teardown cannot
+      // trigger a second prompt that would jam the close.
+      const promise = getCurrentWindow().onCloseRequested(async (event) => {
         const current = getSetupCloseWarning(taskRef.current);
         if (!current) return;
-        const confirmed = window.confirm(current);
-        if (!confirmed) event.preventDefault();
+        let confirmed = false;
+        try {
+          confirmed = await confirm(current, { title: "Setup in progress", kind: "warning" });
+        } catch {
+          confirmed = false;
+        }
+        if (!confirmed) {
+          event.preventDefault();
+          return;
+        }
+        window.removeEventListener("beforeunload", handleBeforeUnload);
       });
       void promise
         .then((fn) => {
