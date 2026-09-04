@@ -4,6 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Dialog } from "@/components/ui/dialog";
 import {
+  EnvironmentGroups,
   getInstallStartFailureOutcome,
   getInstallableMissingPackages,
   getIncompatibleExportMessage,
@@ -14,8 +15,9 @@ import {
   mayActivateRoute,
   refreshStackEnvironments,
 } from "./export-workspace";
-import type { DepCheckResult, ExportStatus, InstallPhase, StackEnvironment } from "@/lib/types";
+import { SETUP_CONFLICT_MESSAGE } from "@/features/setup/setup-task";
 import { findRoute } from "@/lib/providers";
+import type { DepCheckResult, ExportStatus, InstallPhase, StackEnvironment } from "@/lib/types";
 
 describe("getInstallableMissingPackages", () => {
   test("returns explicit install_package values", () => {
@@ -254,5 +256,29 @@ describe("stack environment refresh", () => {
     }, async () => stacks);
 
     expect(received).toEqual(stacks);
+  });
+});
+
+describe("safe setup navigation (ticket 04)", () => {
+  test("disabled cleanup buttons expose the shared setup conflict as their title", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(EnvironmentGroups, {
+        envInfo: null,
+        envError: "boom",
+        redetecting: false,
+        managedRuntimeUpgradeNudge: null,
+        openManagedRuntimeUpgrade: () => {},
+        mayStartRuntimeUpgrade: false,
+        stacks: [],
+        managedEnvironmentSizes: {
+          "ultralytics-managed": { key: "ultralytics-managed", status: "available", estimated_logical_bytes: 10, size_error: null, exists: true },
+        } as never,
+        onCleanupUltralytics: () => {},
+        cleanupDisabled: true,
+        disabledReason: SETUP_CONFLICT_MESSAGE,
+        defaultExpanded: true,
+      }),
+    );
+    expect(html).toContain(SETUP_CONFLICT_MESSAGE);
   });
 });
