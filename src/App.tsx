@@ -4,6 +4,8 @@ import { UpdateAnnouncement } from "@/features/updater/update-announcement";
 import { useUpdaterController } from "@/features/updater/use-updater-controller";
 import { LandingScreen } from "@/features/landing-screen";
 import { SetupScreen } from "@/features/setup/setup-screen";
+import { SetupActivityBar } from "@/features/setup/setup-activity-bar";
+import { SetupTaskProvider, useSetupTask } from "@/features/setup/setup-task-context";
 import {
   captureAnalyticsEvent,
   hasSentFirstRun,
@@ -30,6 +32,18 @@ const TitleBarFill = () => (
 );
 
 type AppState = "landing" | "setup" | "export";
+
+function SetupActivityBarHost() {
+  const { task, openDetails, closeDetails, dismissTask } = useSetupTask();
+  return (
+    <SetupActivityBar
+      task={task}
+      onOpenDetails={openDetails}
+      onCloseDetails={closeDetails}
+      onDismiss={dismissTask}
+    />
+  );
+}
 
 function App() {
   const updatesEnabled = !import.meta.env.DEV;
@@ -149,7 +163,7 @@ function App() {
   }
 
   return (
-    <>
+    <SetupTaskProvider>
       <TitleBarFill />
       {updatesEnabled ? (
         <UpdateAnnouncement
@@ -161,7 +175,8 @@ function App() {
         />
       ) : null}
       {content}
-    </>
+      <SetupActivityBarHost />
+    </SetupTaskProvider>
   );
 }
 
