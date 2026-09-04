@@ -25,6 +25,7 @@ import { buildCommandPreview } from "./command-preview";
 import { DependencyPanel } from "./dependency-panel";
 import { ExportLog } from "./export-log";
 import { OptionsPanel } from "./options-panel";
+import { validateRfDetrImgsz } from "./rfdetr-image-size";
 import { formatIconMap } from "@/components/format-icons";
 import { categoryBg, categoryIcon } from "./route-card";
 
@@ -64,6 +65,7 @@ interface ExportModalProps {
     trusted: boolean;
     recommendedImgsz?: number | null;
     patchSize?: number | null;
+    requiredMultiple?: number | null;
   } | null;
 }
 
@@ -215,7 +217,11 @@ export function ExportModal({
   const involvesUpdate = involvesPackageUpdate(depResults);
   const isStarting = exportStatus === "starting";
   const isRunning = exportStatus === "running";
-  const exportDisabled = isRunning || isStarting || !sourcePath || isInstalling;
+  const rfdetrImgszError =
+    provider.id === "rfdetr" && rfdetrSummary
+      ? validateRfDetrImgsz(options.imgsz, rfdetrSummary.requiredMultiple ?? null)
+      : null;
+  const exportDisabled = isRunning || isStarting || !sourcePath || isInstalling || rfdetrImgszError !== null;
   const showLog = exportStatus !== "idle" || logLines.length > 0;
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const footerActions = getExportFooterActions({
@@ -347,13 +353,19 @@ export function ExportModal({
                   options={options}
                   onOptionsChange={onOptionsChange}
                   recommendedImgsz={rfdetrSummary?.recommendedImgsz}
-                  patchSize={rfdetrSummary?.patchSize}
+                  requiredMultiple={rfdetrSummary?.requiredMultiple}
                 />
               )}
             </div>
 
             {isPendingConsent && missingPackageNames.length > 0 && (
               <PendingInstallConsent depResults={depResults} missingPackageNames={missingPackageNames} />
+            )}
+
+            {rfdetrImgszError && (
+              <div className="rounded-md border border-red-200 bg-red-50 p-3">
+                <p className="text-sm text-red-800">{rfdetrImgszError}</p>
+              </div>
             )}
 
             {errorMsg && (
@@ -396,7 +408,7 @@ export function ExportModal({
               Starting…
             </Button>
           ) : footerActions.secondary === "export_again" ? (
-            <Button variant="outline" onClick={onExport} disabled={isInstalling}>
+            <Button variant="outline" onClick={onExport} disabled={isInstalling || rfdetrImgszError !== null}>
               <Play className="mr-2 h-4 w-4" />
               Export Again
             </Button>

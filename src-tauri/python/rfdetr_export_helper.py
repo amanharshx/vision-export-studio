@@ -25,6 +25,30 @@ SEGMENTATION_CLASSES = {
 PLUS_ONLY_CLASSES = {"RFDETRXLarge", "RFDETR2XLarge"}
 LEGACY_CLASSES = {"RFDETRBase"}
 
+RFDETR_IMGSZ_MIN = 64
+RFDETR_IMGSZ_MAX = 8192
+
+
+def validate_export_imgsz(imgsz, required_multiple=None, patch_size=None, num_windows=None):
+    """Validate a requested RF-DETR export image size.
+
+    Returns an error string when invalid, else None. Never substitutes a
+    size; callers must reject invalid values. Divisibility is only checked
+    when the model block size (patch_size * num_windows) is known.
+    """
+    if isinstance(imgsz, bool) or not isinstance(imgsz, int):
+        return "RF-DETR image size must be an integer between 64 and 8192."
+    if imgsz < RFDETR_IMGSZ_MIN or imgsz > RFDETR_IMGSZ_MAX:
+        return f"RF-DETR image size {imgsz} must be between {RFDETR_IMGSZ_MIN} and {RFDETR_IMGSZ_MAX}."
+    if required_multiple is not None and required_multiple > 0 and imgsz % required_multiple != 0:
+        if patch_size is not None and num_windows is not None:
+            return (
+                f"RF-DETR image size {imgsz} must be divisible by {required_multiple} "
+                f"(patch_size {patch_size} x num_windows {num_windows})."
+            )
+        return f"RF-DETR image size {imgsz} must be divisible by {required_multiple}."
+    return None
+
 
 def emit(payload):
     print(json.dumps(payload), flush=True)
@@ -376,9 +400,29 @@ def export_checkpoint(args):
         ):
             raise RuntimeError(f"unsupported RF-DETR route: {args.route_id}")
 
+        # Fast range check before loading the model; the authoritative
+        # divisibility check below derives the block size from the
+        # checkpoint itself so bypassing the UI cannot start an invalid
+        # export. Never substitute a different size.
+        range_error = validate_export_imgsz(args.imgsz)
+        if range_error is not None:
+            raise RuntimeError(range_error)
+
         if args.route_id == "rfdetr.pth.tflite":
             preload_tensorflow_before_rfdetr()
         model = resolve_model(args)
+        # Fail closed: geometry comes from the checkpoint itself so
+        # bypassing the UI cannot start an invalid export. Inference
+        # errors propagate to the caller below; never substitute a size.
+        geometry = infer_native_export_shape(args.checkpoint, model)
+        size_error = validate_export_imgsz(
+            args.imgsz,
+            geometry.get("required_multiple"),
+            geometry.get("patch_size"),
+            geometry.get("num_windows"),
+        )
+        if size_error is not None:
+            raise RuntimeError(size_error)
         shape = (args.imgsz, args.imgsz)
         kwargs = {
             "format": "onnx",

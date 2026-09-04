@@ -5,6 +5,7 @@ import { createElement, Fragment } from "react";
 import {
   withRfDetrDetectedDefaults,
   getRouteOptionsForOpen,
+  getRfDetrExportImgszError,
   applyDetectedRouteOptions,
   applyDetectedRouteOptionsToProviderRoutes,
   getUltralyticsRuntimeDisabledReason,
@@ -473,6 +474,27 @@ describe("applyDetectedRouteOptionsToProviderRoutes", () => {
       source: "user",
       sourcePath,
     });
+  });
+});
+
+describe("getRfDetrExportImgszError", () => {
+  test("never substitutes a guessed size when native is unavailable", () => {
+    const incomplete: RfDetrInspectResult = {
+      ...rfdInspectFailed,
+      success: true,
+      class_symbol: "RFDETRSmall",
+      family: "detection",
+      patch_size: 16,
+      num_windows: 2,
+      required_multiple: 32,
+      error: null,
+    };
+    const result = withRfDetrDetectedDefaults(defaultOpts, "rfdetr", incomplete);
+    expect(result.imgsz).toBe(defaultOpts.imgsz);
+  });
+
+  test("ignores RF-DETR rules for other providers", () => {
+    expect(getRfDetrExportImgszError("ultralytics", 500, rfdInspect512)).toBeNull();
   });
 });
 
