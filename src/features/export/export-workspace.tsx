@@ -1734,10 +1734,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     };
     const rfdetrImgszError = getRfDetrExportImgszError(selectedProviderId, options.imgsz, rfdetrInspectResult);
     if (rfdetrImgszError) {
-      setInstallPhase("idle");
-      setInvokeError(rfdetrImgszError);
-      setExportStatus("failed");
-      setLogLines(["[error] " + rfdetrImgszError]);
+      failExportStart(rfdetrImgszError);
       return;
     }
     const missingPkgs = getInstallableMissingPackages(depResults);
