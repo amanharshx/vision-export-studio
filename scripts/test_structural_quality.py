@@ -67,16 +67,17 @@ class StructuralQualityTests(unittest.TestCase):
 
     def test_analyze_only_overlapping_functions_and_aggregate_deduplicate_order(self):
         functions = [
-            quality.Function("z", 30, 30, 60, 11, 6),
-            quality.Function("a", 2, 2, 51, 11, 6),
-            quality.Function("a", 2, 2, 51, 11, 6),
+            quality.Function("z", 30, 30, 130, 11, 6),
+            quality.Function("a", 2, 2, 111, 11, 6),
+            quality.Function("a", 2, 2, 111, 11, 6),
             quality.Function("untouched", 80, 80, 99, 99, 1),
         ]
         findings = quality.findings_for_functions("x.py", [(1, 40)], functions)
         self.assertEqual([(f.name, f.exceeded) for f in findings], [("a", ("nloc", "parameters")), ("z", ("nloc", "parameters"))])
 
     def test_threshold_equality_clean_and_unknown_files_counted(self):
-        self.assertEqual(quality.exceeded(50, 15, 5), ())
+        self.assertEqual(quality.exceeded(110, 15, 5), ())
+        self.assertEqual(quality.exceeded(111, 15, 5), ("nloc",))
         self.assertEqual(quality.exceeded(50, 16, 5), ("complexity",))
         self.assertEqual(quality.supported_extension("x.xyz"), False)
         self.assertTrue(quality.in_structural_scope("src/features/export.ts"))
@@ -89,12 +90,12 @@ class StructuralQualityTests(unittest.TestCase):
         self.assertEqual(output, "::warning file=x%2Cy%3Afile,line=2,endLine=4,title=Structural quality::bad%25name%0A [fn:one]")
 
     def test_summaries_include_marker_and_wording(self):
-        finding = quality.Finding("x.py", "fn", 2, 3, ("nloc",), 51, 1, 1)
+        finding = quality.Finding("x.py", "fn", 2, 3, ("nloc",), 111, 1, 1)
         results = [quality.FileResult("clean.py", True, True, ()), quality.FileResult("x.py", True, True, (finding,)), quality.FileResult("skip.xyz", False, False, ())]
         text = quality.summary(results)
         self.assertIn("<summary>⚠️ Needs attention — 1 file</summary>", text)
         self.assertIn("- `x.py`\n  - `fn` · lines 2–3", text)
-        self.assertIn("Function length: **51 NLOC** · limit: **50**", text)
+        self.assertIn("Function length: **111 NLOC** · limit: **110**", text)
         self.assertIn("- `skip.xyz` — unsupported file type", text)
         self.assertNotIn("changed functions", text)
         self.assertIn("<!-- structural-code-quality -->", text)
@@ -103,7 +104,7 @@ class StructuralQualityTests(unittest.TestCase):
         self.assertEqual(commit_text.count("Results for commit"), 1)
 
     def test_threshold_findings_exit_zero(self):
-        finding = quality.Finding("x.py", "fn", 2, 3, ("nloc",), 51, 1, 1)
+        finding = quality.Finding("x.py", "fn", 2, 3, ("nloc",), 111, 1, 1)
         with tempfile.NamedTemporaryFile() as summary:
             with patch.object(quality, "run_analysis", return_value=[quality.FileResult("x.py", True, True, (finding,))]):
                 self.assertEqual(quality.main(["--base", "base", "--head", "head", "--summary", summary.name]), 0)
