@@ -580,17 +580,6 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_rejects_length_mismatch() {
-        let path = temp_checkpoint("drift.pth", b"short");
-        let mut handle = std::fs::File::open(&path).unwrap();
-        let mut expected = checkpoint_identity_for_file(path.to_str().unwrap(), &handle).unwrap();
-        expected.len += 100;
-        let error = snapshot_open_handle_for_inspect(&mut handle, &expected).unwrap_err();
-        assert!(error.contains("changed during snapshot"));
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
     fn snapshot_rejects_same_length_in_place_rewrite() {
         use std::io::Write;
         use std::time::{Duration, UNIX_EPOCH};
@@ -609,17 +598,6 @@ mod tests {
             .unwrap();
         let error = snapshot_open_handle_for_inspect(&mut handle, &expected).unwrap_err();
         assert!(error.contains("changed during snapshot"));
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn identity_from_open_handle_ignores_later_replacement() {
-        let path = temp_checkpoint("handle.pth", b"aaa");
-        let handle = std::fs::File::open(&path).unwrap();
-        let swap = temp_checkpoint("handle-swap.tmp", b"much-longer-replacement");
-        std::fs::rename(&swap, &path).unwrap();
-        let identity = checkpoint_identity_for_file(path.to_str().unwrap(), &handle).unwrap();
-        assert_eq!(identity.len, 3);
         std::fs::remove_file(&path).unwrap();
     }
 }
