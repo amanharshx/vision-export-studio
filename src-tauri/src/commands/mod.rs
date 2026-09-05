@@ -1,5 +1,6 @@
 pub mod app;
 pub mod artifacts;
+pub mod bootstrap_python;
 pub mod deps;
 pub mod environment;
 pub mod export;

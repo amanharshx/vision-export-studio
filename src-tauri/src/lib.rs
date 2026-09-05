@@ -46,6 +46,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::app::get_app_telemetry_context,
             commands::app::get_route_platform_support,
+            commands::bootstrap_python::resolve_bootstrap_python,
             commands::deps::check_dependencies,
             commands::deps::install_dependencies,
             commands::environment::detect_environment,

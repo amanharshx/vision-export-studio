@@ -30,7 +30,7 @@ fn first_line(text: &str) -> Option<&str> {
 
 /// Run a command and return (stdout, stderr, success).
 /// Returns Err only when the process cannot be spawned at all.
-fn run(argv: &[&str]) -> Result<(String, String, bool), String> {
+pub(crate) fn run(argv: &[&str]) -> Result<(String, String, bool), String> {
     if argv.is_empty() {
         return Err("empty argv".to_string());
     }
@@ -133,7 +133,10 @@ where
     ))
 }
 
-fn probe_python_candidate<F>(candidate: &[&str], runner: &F) -> Result<PythonCandidate, String>
+pub(crate) fn probe_python_candidate<F>(
+    candidate: &[&str],
+    runner: &F,
+) -> Result<PythonCandidate, String>
 where
     F: Fn(&[&str]) -> Result<(String, String, bool), String>,
 {
@@ -239,7 +242,9 @@ fn windows_location_candidates(
 // Prefer 3.12 because rfdetr[tflite] declares every dependency only for 3.12.
 // Keep 3.14+ out: coremltools has wheels through cp313, not cp314. Python 3.10
 // is floor because LiteRT, torch, and rfdetr require it or newer.
-fn select_managed_runtime_python(candidates: Vec<PythonCandidate>) -> Option<PythonCandidate> {
+pub(crate) fn select_managed_runtime_python(
+    candidates: Vec<PythonCandidate>,
+) -> Option<PythonCandidate> {
     [(3, 12), (3, 13), (3, 11), (3, 10)]
         .iter()
         .find_map(|&(major, minor)| {
@@ -250,11 +255,11 @@ fn select_managed_runtime_python(candidates: Vec<PythonCandidate>) -> Option<Pyt
         })
 }
 
-fn discover_managed_runtime_python_candidate_with<F>(
+pub(crate) fn collect_managed_runtime_candidates_with<F>(
     is_windows: bool,
     windows_locations: Vec<PathBuf>,
-    runner: F,
-) -> Option<PythonCandidate>
+    runner: &F,
+) -> Vec<PythonCandidate>
 where
     F: Fn(&[&str]) -> Result<(String, String, bool), String>,
 {
@@ -294,13 +299,25 @@ where
             .map(|candidate| candidate.iter().map(|arg| (*arg).to_string()).collect()),
     );
 
-    let candidates = commands
+    commands
         .iter()
         .filter_map(|command| {
             let argv = command.iter().map(String::as_str).collect::<Vec<_>>();
-            probe_python_candidate(&argv, &runner).ok()
+            probe_python_candidate(&argv, runner).ok()
         })
-        .collect();
+        .collect()
+}
+
+fn discover_managed_runtime_python_candidate_with<F>(
+    is_windows: bool,
+    windows_locations: Vec<PathBuf>,
+    runner: F,
+) -> Option<PythonCandidate>
+where
+    F: Fn(&[&str]) -> Result<(String, String, bool), String>,
+{
+    let candidates =
+        collect_managed_runtime_candidates_with(is_windows, windows_locations, &runner);
     select_managed_runtime_python(candidates)
 }
 
@@ -323,7 +340,7 @@ pub(crate) fn discover_managed_runtime_python_candidate() -> Option<PythonCandid
     )
 }
 
-fn managed_runtime_windows_location_candidates() -> Vec<PathBuf> {
+pub(crate) fn managed_runtime_windows_location_candidates() -> Vec<PathBuf> {
     if !cfg!(windows) {
         return Vec::new();
     }
