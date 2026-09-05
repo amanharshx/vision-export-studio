@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { AppIcon } from "@/components/app-icon";
 import { UpdateChecker } from "@/components/update-checker";
@@ -15,7 +15,19 @@ import {
 import {
   createRuntimeVenv,
   markSetupComplete,
+  savePythonOverride,
 } from "@/lib/tauri/setup";
+import {
+  isPythonRequiredResult,
+  resolveBootstrapPython,
+} from "@/lib/tauri/bootstrap-python";
+import { openPythonExecutablePicker } from "@/lib/tauri/dialog";
+import {
+  PYTHON_REQUIRED_SETUP_ROUTE_ID,
+  PythonRequiredDialog,
+  shouldShowClearOverride,
+} from "./python-required-dialog";
+import { createPythonRequiredSetupOwner } from "./python-required-setup";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -69,6 +81,21 @@ export function SetupScreen({
   const [countdown, setCountdown] = useState<number | null>(null);
   const mountedRef = useRef(true);
   const startedRef = useRef(false);
+  const runSetupRef = useRef<() => Promise<void>>(async () => {});
+
+  const pythonRequiredOwnerRef = useRef<ReturnType<typeof createPythonRequiredSetupOwner> | null>(null);
+  if (!pythonRequiredOwnerRef.current) {
+    pythonRequiredOwnerRef.current = createPythonRequiredSetupOwner({
+      resolveBootstrap: (routeId, override) => resolveBootstrapPython(routeId, override),
+      saveOverride: (path) => savePythonOverride(path),
+    });
+  }
+  const pythonRequiredOwner = pythonRequiredOwnerRef.current;
+  const pythonRequiredState = useSyncExternalStore(
+    pythonRequiredOwner.subscribe,
+    pythonRequiredOwner.getState,
+    pythonRequiredOwner.getState,
+  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -96,6 +123,42 @@ export function SetupScreen({
     });
     setErrorMessage(null);
     setPhase("venv");
+
+    // Python preflight: open the Python-required dialog instead of creating
+    // anything when no compatible bootstrap interpreter exists. The dialog
+    // retries this same setup exactly once after a valid choice or redetection.
+    // Never shown on launch alone — only after this explicit setup attempt.
+    let bootstrap;
+    try {
+      bootstrap = await resolveBootstrapPython(PYTHON_REQUIRED_SETUP_ROUTE_ID);
+    } catch (e: unknown) {
+      if (!mountedRef.current) return;
+      captureSetupFailed("venv", "bootstrap_check_failed");
+      setPhase("error");
+      setErrorMessage(String(e));
+      return;
+    }
+    if (isPythonRequiredResult(bootstrap)) {
+      pythonRequiredOwner.requirePython(
+        PYTHON_REQUIRED_SETUP_ROUTE_ID,
+        bootstrap,
+        () => runSetupRef.current(),
+      );
+      if (!mountedRef.current) return;
+      captureSetupFailed("venv", "python_required");
+      setPhase("error");
+      setErrorMessage(
+        "Python required to set up the managed runtime. Choose a compatible Python to continue.",
+      );
+      return;
+    }
+    if (bootstrap.status === "error") {
+      if (!mountedRef.current) return;
+      captureSetupFailed("venv", "bootstrap_check_failed");
+      setPhase("error");
+      setErrorMessage(bootstrap.reason);
+      return;
+    }
 
     // ------------------------------------------------------------------
     // Step 1: create venv
@@ -195,6 +258,7 @@ export function SetupScreen({
     setPhase("done");
     setCountdown(3);
   }
+  runSetupRef.current = runSetup;
 
   useEffect(() => {
     if (startedRef.current) return;
@@ -302,6 +366,28 @@ export function SetupScreen({
           </p>
         )}
       </div>
+      {pythonRequiredState.result && (
+        <PythonRequiredDialog
+          open={pythonRequiredState.dialogOpen}
+          onOpenChange={(open) => {
+            if (!open) pythonRequiredOwner.cancel();
+          }}
+          routeId={
+            pythonRequiredState.pending?.routeId ?? PYTHON_REQUIRED_SETUP_ROUTE_ID
+          }
+          result={pythonRequiredState.result}
+          choiceError={pythonRequiredState.choiceError}
+          busy={pythonRequiredState.busy}
+          showClearOverride={shouldShowClearOverride(pythonRequiredState.result)}
+          onCancel={() => pythonRequiredOwner.cancel()}
+          onChoosePython={async () => {
+            const picked = await openPythonExecutablePicker();
+            if (picked) await pythonRequiredOwner.choosePython(picked);
+          }}
+          onCheckAgain={() => void pythonRequiredOwner.checkAgain()}
+          onClearOverride={() => void pythonRequiredOwner.clearOverride()}
+        />
+      )}
     </div>
   );
 }

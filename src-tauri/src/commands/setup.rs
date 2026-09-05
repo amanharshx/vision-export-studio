@@ -1,6 +1,10 @@
+use crate::commands::bootstrap_python::{
+    ensure_venv_capability, resolve_bootstrap_python_with, BootstrapPythonResult,
+};
 use crate::commands::environment::{
-    discover_managed_runtime_python, discover_managed_runtime_python_candidate,
-    resolve_managed_runtime_base, resolve_python,
+    collect_managed_runtime_candidates_with, discover_managed_runtime_python_candidate,
+    managed_runtime_windows_location_candidates, probe_python_candidate,
+    resolve_managed_runtime_base, run,
 };
 use crate::commands::managed_environments::{ManagedEnvironments, ULTRALYTICS_MANAGED_KEY};
 use crate::commands::providers::rfdetr::RFDETR_STAGING_PARENT;
@@ -186,6 +190,30 @@ fn normalize_python_override(python_path_override: Option<String>) -> Option<Str
         let trimmed = path.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     })
+}
+
+/// Validate a user-chosen Python executable before it is saved or used.
+/// Checks existence for path-like values and probes that it is a working
+/// Python 3 interpreter. Route-specific compatibility is checked at setup
+/// time via the bootstrap resolver, so this stays version-agnostic.
+fn validate_python_override_with(
+    path: &str,
+    probe: &impl Fn(&[&str]) -> Result<(String, String, bool), String>,
+) -> Result<String, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Python path must not be empty".to_string());
+    }
+    if (trimmed.contains('/') || trimmed.contains('\\')) && !Path::new(trimmed).exists() {
+        return Err(format!("Python path does not exist: {}", trimmed));
+    }
+    probe_python_candidate(&[trimmed], probe)
+        .map(|candidate| candidate.executable)
+        .map_err(|error| format!("provided Python failed validation: {}", error))
+}
+
+fn validate_python_override_path(path: &str) -> Result<String, String> {
+    validate_python_override_with(path, &run)
 }
 
 fn managed_runtime_is_ready(runtime_dir: &str) -> bool {
@@ -733,6 +761,42 @@ pub fn get_managed_runtime_rebuild_eligibility(
     })
 }
 
+/// Default route for global managed-runtime setup. Its requirement is the
+/// managed range (Python 3.10 through 3.13), so it matches the discovery
+/// policy without adding route-specific creation in this ticket.
+pub(crate) const DEFAULT_SETUP_ROUTE_ID: &str = "ultralytics.pt.onnx";
+
+fn bootstrap_python_for_setup(
+    route_id: &str,
+    explicit_override: Option<&str>,
+    runtime_dir: &Path,
+) -> Result<String, String> {
+    let resolved = resolve_bootstrap_python_with(
+        route_id,
+        explicit_override,
+        runtime_dir,
+        &run,
+        &ensure_venv_capability,
+        &|| {
+            collect_managed_runtime_candidates_with(
+                cfg!(windows),
+                managed_runtime_windows_location_candidates(),
+                &run,
+            )
+        },
+    );
+    match resolved {
+        BootstrapPythonResult::Available { python_path, .. } => Ok(python_path),
+        BootstrapPythonResult::Missing {
+            requirement,
+            reason,
+            ..
+        } => Err(format!("Python required ({}): {}", requirement, reason)),
+        BootstrapPythonResult::InvalidOverride { reason, .. } => Err(reason),
+        BootstrapPythonResult::Error { reason } => Err(reason),
+    }
+}
+
 #[tauri::command]
 pub async fn create_runtime_venv(
     app_handle: tauri::AppHandle,
@@ -742,6 +806,18 @@ pub async fn create_runtime_venv(
     runtime_dir: String,
 ) -> Result<String, String> {
     let managed_runtime_dir = ensure_managed_runtime_dir(&app_handle, &runtime_dir)?;
+    let runtime_path = PathBuf::from(&managed_runtime_dir);
+    let override_opt = load_settings(app_handle.clone())?
+        .python_path_override
+        .filter(|path| !path.trim().is_empty());
+
+    // Resolve before creating anything: an invalid override or a missing
+    // interpreter must not create an environment or change package state.
+    let python = bootstrap_python_for_setup(
+        DEFAULT_SETUP_ROUTE_ID,
+        override_opt.as_deref(),
+        &runtime_path,
+    )?;
 
     // Create the runtime_dir if it does not exist.
     std::fs::create_dir_all(&managed_runtime_dir)
@@ -750,10 +826,6 @@ pub async fn create_runtime_venv(
     let venv_path = Path::new(&managed_runtime_dir).join(".venv");
 
     // Build argv: {python} -m venv {runtime_dir}/.venv
-    let python = match discover_managed_runtime_python() {
-        Some(python) => python,
-        None => resolve_python(None)?,
-    };
     let cmd = build_venv_command(&python, &venv_path);
 
     let sessions = Arc::clone(&state.sessions);
@@ -820,6 +892,12 @@ pub fn save_python_override(
     python_path_override: Option<String>,
 ) -> Result<(), String> {
     let normalized_override = normalize_python_override(python_path_override);
+    // Validate before saving so a direct invoke cannot persist an invalid
+    // executable. Route-specific compatibility stays with the bootstrap
+    // resolver at setup time.
+    if let Some(path) = normalized_override.as_deref() {
+        validate_python_override_path(path)?;
+    }
     update_settings(&app_handle, &state, |settings| {
         settings.python_path_override = normalized_override;
         if settings.python_path_override.is_some() {
@@ -1195,5 +1273,62 @@ mod tests {
             Some("/custom/python")
         ));
         assert!(setup_complete_after_managed_runtime_cleanup(true, None));
+    }
+
+    fn fake_probe_ok(
+        path: &str,
+    ) -> impl Fn(&[&str]) -> Result<(String, String, bool), String> + '_ {
+        move |argv: &[&str]| {
+            Ok((
+                format!(
+                    "__VES_PYTHON__={}\n__VES_PYTHON_VERSION__=3.12.1",
+                    argv.first().copied().unwrap_or(path)
+                ),
+                String::new(),
+                true,
+            ))
+        }
+    }
+
+    #[test]
+    fn python_override_validation_accepts_working_interpreter() {
+        let runtime = test_runtime_dir("override-valid");
+        let exe = Path::new(&runtime).join("python");
+        fs::create_dir_all(&runtime).unwrap();
+        File::create(&exe).unwrap();
+        let path = exe.to_string_lossy().into_owned();
+
+        let resolved = validate_python_override_with(&path, &fake_probe_ok(&path)).unwrap();
+        assert_eq!(resolved, path);
+        fs::remove_dir_all(runtime).unwrap();
+    }
+
+    #[test]
+    fn python_override_validation_rejects_missing_and_broken_interpreters() {
+        let runtime = test_runtime_dir("override-invalid");
+        let missing = Path::new(&runtime).join("does-not-exist/python");
+        let error =
+            validate_python_override_with(&missing.to_string_lossy(), &fake_probe_ok("unused"))
+                .unwrap_err();
+        assert!(error.contains("does not exist"));
+
+        let exe = Path::new(&runtime).join("python");
+        fs::create_dir_all(&runtime).unwrap();
+        File::create(&exe).unwrap();
+        let path = exe.to_string_lossy().into_owned();
+        let failing = |_: &[&str]| -> Result<(String, String, bool), String> {
+            Ok((String::new(), "interpreter crashed".to_string(), false))
+        };
+        let error = validate_python_override_with(&path, &failing).unwrap_err();
+        assert!(error.contains("failed validation"));
+
+        let blank = validate_python_override_with("   ", &fake_probe_ok("unused")).unwrap_err();
+        assert!(blank.contains("must not be empty"));
+        fs::remove_dir_all(runtime).unwrap();
+    }
+
+    #[test]
+    fn default_setup_route_uses_managed_python_range() {
+        assert_eq!(DEFAULT_SETUP_ROUTE_ID, "ultralytics.pt.onnx");
     }
 }
