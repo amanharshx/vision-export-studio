@@ -216,6 +216,16 @@ describe("incremental second-route setup packages", () => {
       { package: "nncf", prerelease: false },
     ]);
   });
+
+  test("incremental Axelera setup installs the backend-reported remedy", () => {
+    const depResults: DepCheckResult[] = [
+      { item: "ultralytics", status: "ready", reason: "", install_hint: "pip install ultralytics" },
+      { item: "axelera", status: "missing_package", reason: "missing", install_hint: "pip install axelera-devkit", install_package: "axelera-devkit" },
+    ];
+    expect(getInstallableMissingPackages(depResults)).toEqual([
+      { package: "axelera-devkit", prerelease: false },
+    ]);
+  });
 });
 
 describe("getUltralyticsRouteSetupFallbackPackages", () => {

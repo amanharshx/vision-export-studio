@@ -12,7 +12,6 @@ import {
   getManagedRuntimeRebuildFailureMessage,
   getManagedRuntimeUpgradeNudge,
   getSetupInstallPackages,
-  getSetupPackagesForCheck,
   ManagedRuntimeUpgradeDialogBody,
   mayStartManagedRuntimeUpgrade,
   mayActivateRoute,
@@ -131,34 +130,6 @@ describe("getInstallableMissingPackages", () => {
 
     expect(getIncompatibleExportMessage(coremlRoute, "windows", "unknown", true)).not.toBeNull();
     expect(getIncompatibleExportMessage(edgeTpuRoute, "macos", "unknown", true)).not.toBeNull();
-  });
-});
-
-describe("getSetupPackagesForCheck", () => {
-  test("uses the checked route's missing packages with backend pins", () => {
-    const route = routesForProvider("ultralytics").find((item) => item.id === "ultralytics.pt.openvino")!;
-    const check = {
-      results: [
-        { item: "ultralytics", status: "ready", reason: "", install_hint: "pip install ultralytics" },
-        { item: "openvino", status: "missing_package", reason: "missing", install_hint: "pip install openvino", install_package: "openvino" },
-      ] as DepCheckResult[],
-      routeId: route.id,
-      error: null,
-      pythonPath: "/tmp/runtime/.venv/bin/python",
-    };
-
-    expect(getSetupPackagesForCheck(providers.ultralytics, route, check)).toEqual([
-      { package: "openvino", prerelease: false },
-    ]);
-  });
-
-  test("falls back to the route spec when no check ran for the route", () => {
-    const route = routesForProvider("ultralytics").find((item) => item.id === "ultralytics.pt.onnx")!;
-
-    expect(getSetupPackagesForCheck(providers.ultralytics, route, emptyRouteDepCheck())).toEqual([
-      { package: "ultralytics", prerelease: false },
-      { package: "onnx", prerelease: false },
-    ]);
   });
 });
 

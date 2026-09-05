@@ -499,20 +499,6 @@ export function getInstallableMissingPackages(results: DepCheckResult[] | null):
 }
 
 /**
- * Install list for one route's setup: the checked route's own missing
- * packages (with backend version pins), falling back to the route spec only
- * when no check for this route could run because the environment is absent.
- */
-export function getSetupPackagesForCheck(
-  provider: ProviderSpec,
-  route: RouteSpec,
-  check: RouteDepCheck,
-): InstallableDependency[] {
-  if (check.results) return getInstallableMissingPackages(check.results);
-  return getUltralyticsRouteSetupFallbackPackages(provider, route);
-}
-
-/**
  * Authoritative install list for one route's setup. A missing managed
  * environment always installs the full route fallback: a check that ran
  * against another interpreter (e.g. a saved override with partial packages)
@@ -1354,9 +1340,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       setupFailed: ultralyticsSetupTask?.status === "failed" && setupTaskAppliesToSelectedRoute,
     })
     : null;
-  const ultralyticsRouteSetupPackages = ultralyticsRouteSetupStatus != null && ultralyticsRouteSetupStatus !== "ready"
-    ? getSetupPackagesForCheck(selectedProvider, selectedRoute, selectedCheck)
-    : [];
   const selectedMissingPackages = useMemo(() => {
     return getInstallableMissingPackages(selectedCheck.results);
   }, [selectedCheck]);
@@ -1366,9 +1349,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       status: ultralyticsRouteSetupStatus,
       actionLabel: `Set up ${selectedRoute.title}`,
       busy: cleanupBusy || setupActiveForSelectedRoute,
-      canSetup: (ultralyticsRouteSetupStatus === "not-set-up" ? ultralyticsRouteSetupPackages.length > 0 : true)
-        && !cleanupBusy
-        && !setupConflictMessage,
+      canSetup: !cleanupBusy && !setupConflictMessage,
       showRecovery: ultralyticsRouteSetupStatus === "setup-incomplete",
       error: selectedCheck.error,
     };

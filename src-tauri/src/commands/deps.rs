@@ -1416,6 +1416,18 @@ fn check_ultralytics_dep(python: &str, required: &str) -> DepCheckResult {
     }
 }
 
+/// Install spec override for probed distributions whose declared install
+/// remedy is a different spec (e.g. the probed `axelera` import installs via
+/// `axelera-devkit`, the LiteRT imports via `ultralytics[export-litert]`).
+/// Returns None when the package name itself is the install spec.
+fn install_package_override(package_name: &str) -> Option<&'static str> {
+    match package_name {
+        "axelera" => Some("axelera-devkit"),
+        "litert-torch>=0.9.0" | "ai-edge-litert>=2.1.4" => Some("ultralytics[export-litert]"),
+        _ => None,
+    }
+}
+
 fn check_pip_dep(
     python: &str,
     package_name: &str,
@@ -1461,7 +1473,11 @@ fn check_pip_dep(
                     status: "missing_package".to_string(),
                     reason: format!("importlib.util.find_spec('{}') returned False", imp),
                     install_hint: install_hint.to_string(),
-                    install_package: Some(package_name.to_string()),
+                    install_package: Some(
+                        install_package_override(package_name)
+                            .unwrap_or(package_name)
+                            .to_string(),
+                    ),
                     prerelease: None,
                 }
             }
@@ -1924,6 +1940,60 @@ mod tests {
         assert!(validate_package_name("litert-torch>=0.9.0").is_ok());
         assert!(validate_package_name("ai-edge-litert>=2.1.4").is_ok());
         assert!(validate_package_name("--pre").is_err());
+    }
+
+    #[test]
+    fn install_package_override_uses_declared_remedy() {
+        assert_eq!(install_package_override("axelera"), Some("axelera-devkit"));
+        assert_eq!(
+            install_package_override("litert-torch>=0.9.0"),
+            Some("ultralytics[export-litert]")
+        );
+        assert_eq!(
+            install_package_override("ai-edge-litert>=2.1.4"),
+            Some("ultralytics[export-litert]")
+        );
+        assert_eq!(install_package_override("onnx"), None);
+        assert_eq!(install_package_override("ultralytics"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_axelera_reports_declared_remedy_for_install() {
+        let root = std::env::temp_dir().join(format!("ultralytics-remedy-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let python = root.join("python");
+        write_python_stub(&python, true);
+        let python_str = python.to_str().expect("python path");
+
+        let result = check_pip_dep(python_str, "axelera", "pip install axelera-devkit", false);
+        assert_eq!(result.status, "missing_package");
+        assert_eq!(result.install_package.as_deref(), Some("axelera-devkit"));
+        assert!(validate_package_name(result.install_package.as_deref().unwrap()).is_ok());
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_litert_reports_export_extra_for_install() {
+        let root = std::env::temp_dir().join(format!("ultralytics-remedy-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let python = root.join("python");
+        write_python_stub(&python, true);
+        let python_str = python.to_str().expect("python path");
+
+        let result = check_pip_dep(
+            python_str,
+            "litert-torch>=0.9.0",
+            "pip install \"ultralytics[export-litert]\"",
+            false,
+        );
+        assert_eq!(result.status, "missing_package");
+        assert_eq!(
+            result.install_package.as_deref(),
+            Some("ultralytics[export-litert]")
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
     }
 
     #[test]
