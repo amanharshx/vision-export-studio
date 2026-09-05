@@ -153,6 +153,203 @@ fn ensure_venv_capability(python_exe: &str) -> Result<(), String> {
 /// launcher/install locations, PATH) is reused via
 /// `collect_managed_runtime_candidates_with`. No uv/asdf/mise/Conda
 /// discovery is added here.
+fn record_incompatible(
+    incompatible: &mut Vec<BootstrapIncompatible>,
+    source: &str,
+    executable: String,
+    version: String,
+) {
+    let entry = BootstrapIncompatible {
+        source: source.to_string(),
+        python_path: executable,
+        version,
+    };
+    if !incompatible.contains(&entry) {
+        incompatible.push(entry);
+    }
+}
+
+/// Shared mapping for automatic sources: ready wins, anything else is
+/// recorded for the dialog and the search continues.
+fn settle(
+    source: &str,
+    outcome: Usability,
+    incompatible: &mut Vec<BootstrapIncompatible>,
+) -> Option<BootstrapPythonResult> {
+    match outcome {
+        Usability::Ready {
+            executable,
+            version,
+        } => Some(BootstrapPythonResult::Available {
+            python_path: executable,
+            source: source.to_string(),
+            version,
+        }),
+        Usability::WrongVersion {
+            executable,
+            version,
+        }
+        | Usability::NoVenv {
+            executable,
+            version,
+            ..
+        } => {
+            record_incompatible(incompatible, source, executable, version);
+            None
+        }
+    }
+}
+
+/// Terminal override handling. Returns None only for a blank override,
+/// meaning fall through to automatic sources.
+fn resolve_via_override<F, V>(
+    route_id: &str,
+    raw: &str,
+    requirement: &str,
+    probe: &F,
+    ensure_venv: &V,
+) -> Option<BootstrapPythonResult>
+where
+    F: Fn(&[&str]) -> Result<(String, String, bool), String>,
+    V: Fn(&str) -> Result<(), String>,
+{
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if (trimmed.contains('/') || trimmed.contains('\\')) && !Path::new(trimmed).exists() {
+        return Some(invalid_override(
+            trimmed,
+            format!("Python path does not exist: {}", trimmed),
+            None,
+            requirement,
+        ));
+    }
+    let candidate = match probe_python_candidate(&[trimmed], probe) {
+        Err(error) => {
+            return Some(invalid_override(
+                trimmed,
+                format!("provided Python failed validation: {}", error),
+                None,
+                requirement,
+            ));
+        }
+        Ok(candidate) => candidate,
+    };
+    Some(match check_usable(&candidate, route_id, ensure_venv) {
+        Usability::Ready {
+            executable,
+            version,
+        } => BootstrapPythonResult::Available {
+            python_path: executable,
+            source: BOOTSTRAP_SOURCE_EXPLICIT.to_string(),
+            version,
+        },
+        Usability::WrongVersion { version, .. } => invalid_override(
+            trimmed,
+            format!("Python {version} is not supported for {route_id}; requires {requirement}."),
+            Some(version),
+            requirement,
+        ),
+        Usability::NoVenv { version, error, .. } => invalid_override(
+            trimmed,
+            format!("Python {version} cannot create environments: {error}"),
+            Some(version),
+            requirement,
+        ),
+    })
+}
+
+/// On-disk environments in priority order: Ultralytics first, then each
+/// known RF-DETR stack whose interpreter exists.
+fn existing_env_sources(runtime_dir: &Path) -> Vec<(String, String)> {
+    let mut ordered = Vec::new();
+    let ultralytics = PathBuf::from(venv_python_at(&runtime_dir.join(".venv")));
+    if ultralytics.exists() {
+        if let Some(path) = ultralytics.to_str() {
+            ordered.push((BOOTSTRAP_SOURCE_ULTRALYTICS.to_string(), path.to_string()));
+        }
+    }
+    for stack in known_stacks() {
+        if let Some(venv) = stack_venv_dir_for_key(runtime_dir, stack.key) {
+            let python = venv_python_at(&venv);
+            if Path::new(&python).exists() {
+                ordered.push((stack.key.to_string(), python));
+            }
+        }
+    }
+    ordered
+}
+
+fn resolve_via_existing<F, V>(
+    runtime_dir: &Path,
+    route_id: &str,
+    probe: &F,
+    ensure_venv: &V,
+    incompatible: &mut Vec<BootstrapIncompatible>,
+) -> Option<BootstrapPythonResult>
+where
+    F: Fn(&[&str]) -> Result<(String, String, bool), String>,
+    V: Fn(&str) -> Result<(), String>,
+{
+    for (source, path) in existing_env_sources(runtime_dir) {
+        let Ok(candidate) = probe_python_candidate(&[path.as_str()], probe) else {
+            continue;
+        };
+        if let Some(found) = settle(
+            &source,
+            check_usable(&candidate, route_id, ensure_venv),
+            incompatible,
+        ) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn resolve_via_discovered<V, D>(
+    route_id: &str,
+    ensure_venv: &V,
+    discovered: &D,
+    incompatible: &mut Vec<BootstrapIncompatible>,
+) -> Option<BootstrapPythonResult>
+where
+    V: Fn(&str) -> Result<(), String>,
+    D: Fn() -> Vec<PythonCandidate>,
+{
+    // Reuse the managed preference order by repeatedly taking the existing
+    // selector's best remaining pick, so the order is owned in one place.
+    let all = discovered();
+    let mut remaining = all.clone();
+    while let Some(best) = select_managed_runtime_python(remaining.clone()) {
+        remaining.retain(|item| item.executable != best.executable);
+        if let Some(found) = settle(
+            BOOTSTRAP_SOURCE_DISCOVERED,
+            check_usable(&best, route_id, ensure_venv),
+            incompatible,
+        ) {
+            return Some(found);
+        }
+    }
+    // Anything the selector never picked is still reported for the dialog.
+    for candidate in all {
+        record_incompatible(
+            incompatible,
+            BOOTSTRAP_SOURCE_DISCOVERED,
+            candidate.executable.clone(),
+            version_string(&candidate),
+        );
+    }
+    None
+}
+
+/// Resolve a bootstrap Python that can create the selected route's
+/// app-owned environment.
+///
+/// Order: explicit override, Ultralytics managed Python, compatible RF-DETR
+/// stack Python, then compatible discovered system Python. The bootstrap
+/// interpreter only runs `python -m venv`; packages are never installed
+/// into it. Bounded discovery is reused; no uv/asdf/mise/Conda sources.
 pub(crate) fn resolve_bootstrap_python_with<F, V, D>(
     route_id: &str,
     explicit_override: Option<&str>,
@@ -190,152 +387,23 @@ where
         "Python 3.10 through 3.13"
     }
     .to_string();
-    let mut incompatible: Vec<BootstrapIncompatible> = Vec::new();
-    let mut record = |source: &str, executable: String, version: String| {
-        let entry = BootstrapIncompatible {
-            source: source.to_string(),
-            python_path: executable,
-            version,
-        };
-        if !incompatible.contains(&entry) {
-            incompatible.push(entry);
-        }
-    };
+    let mut incompatible = Vec::new();
 
     if let Some(raw) = explicit_override {
-        let trimmed = raw.trim();
-        if !trimmed.is_empty() {
-            if (trimmed.contains('/') || trimmed.contains('\\')) && !Path::new(trimmed).exists() {
-                return invalid_override(
-                    trimmed,
-                    format!("Python path does not exist: {}", trimmed),
-                    None,
-                    &requirement,
-                );
-            }
-            let candidate = match probe_python_candidate(&[trimmed], probe) {
-                Err(error) => {
-                    return invalid_override(
-                        trimmed,
-                        format!("provided Python failed validation: {}", error),
-                        None,
-                        &requirement,
-                    );
-                }
-                Ok(candidate) => candidate,
-            };
-            return match check_usable(&candidate, route_id, ensure_venv) {
-                Usability::Ready {
-                    executable,
-                    version,
-                } => BootstrapPythonResult::Available {
-                    python_path: executable,
-                    source: BOOTSTRAP_SOURCE_EXPLICIT.to_string(),
-                    version,
-                },
-                Usability::WrongVersion {
-                    executable: _,
-                    version,
-                } => invalid_override(
-                    trimmed,
-                    format!(
-                        "Python {} is not supported for {}; requires {}.",
-                        version, route_id, requirement
-                    ),
-                    Some(version),
-                    &requirement,
-                ),
-                Usability::NoVenv { version, error, .. } => invalid_override(
-                    trimmed,
-                    format!("Python {} cannot create environments: {}", version, error),
-                    Some(version),
-                    &requirement,
-                ),
-            };
+        if let Some(result) = resolve_via_override(route_id, raw, &requirement, probe, ensure_venv)
+        {
+            return result;
         }
     }
-
-    // Existing environments in priority order: Ultralytics first, then each
-    // known RF-DETR stack. One loop, one evaluation helper.
-    let mut ordered: Vec<(String, String)> = Vec::new();
-    let ultralytics = PathBuf::from(venv_python_at(&runtime_dir.join(".venv")));
-    if ultralytics.exists() {
-        if let Some(path) = ultralytics.to_str() {
-            ordered.push((BOOTSTRAP_SOURCE_ULTRALYTICS.to_string(), path.to_string()));
-        }
+    if let Some(found) =
+        resolve_via_existing(runtime_dir, route_id, probe, ensure_venv, &mut incompatible)
+    {
+        return found;
     }
-    for stack in known_stacks() {
-        if let Some(venv) = stack_venv_dir_for_key(runtime_dir, stack.key) {
-            let python = venv_python_at(&venv);
-            if Path::new(&python).exists() {
-                ordered.push((stack.key.to_string(), python));
-            }
-        }
-    }
-    for (source, path) in &ordered {
-        let Ok(candidate) = probe_python_candidate(&[path.as_str()], probe) else {
-            continue;
-        };
-        match check_usable(&candidate, route_id, ensure_venv) {
-            Usability::Ready {
-                executable,
-                version,
-            } => {
-                return BootstrapPythonResult::Available {
-                    python_path: executable,
-                    source: source.clone(),
-                    version,
-                };
-            }
-            Usability::WrongVersion {
-                executable,
-                version,
-            }
-            | Usability::NoVenv {
-                executable,
-                version,
-                ..
-            } => record(source, executable, version),
-        }
-    }
-
-    // Discovered interpreters reuse the managed preference order by
-    // repeatedly taking the existing selector's best remaining pick, so the
-    // order is owned in exactly one place.
-    let all = discovered();
-    let mut remaining = all.clone();
-    while let Some(best) = select_managed_runtime_python(remaining.clone()) {
-        remaining.retain(|item| item.executable != best.executable);
-        match check_usable(&best, route_id, ensure_venv) {
-            Usability::Ready {
-                executable,
-                version,
-            } => {
-                return BootstrapPythonResult::Available {
-                    python_path: executable,
-                    source: BOOTSTRAP_SOURCE_DISCOVERED.to_string(),
-                    version,
-                };
-            }
-            Usability::WrongVersion {
-                executable,
-                version,
-            }
-            | Usability::NoVenv {
-                executable,
-                version,
-                ..
-            } => record(BOOTSTRAP_SOURCE_DISCOVERED, executable, version),
-        }
-    }
-    // Anything the preference selector never picked (wrong route version or
-    // outside the managed range) is still reported for the dialog.
-    for candidate in all {
-        record(
-            BOOTSTRAP_SOURCE_DISCOVERED,
-            candidate.executable.clone(),
-            version_string(&candidate),
-        );
+    if let Some(found) =
+        resolve_via_discovered(route_id, ensure_venv, discovered, &mut incompatible)
+    {
+        return found;
     }
 
     BootstrapPythonResult::Missing {
@@ -534,91 +602,46 @@ mod tests {
     }
 
     /// Source priority: override > Ultralytics > RF-DETR stack > discovered.
-    /// Each row names the sources present and the expected winner.
     #[test]
     fn source_priority_order() {
-        // (name, with_override, with_managed, with_stack, with_discovered, expected_source, expected_version)
+        // (with_override, with_managed, with_stack, expected_source)
         let rows = [
-            (
-                "override wins",
-                true,
-                true,
-                true,
-                true,
-                "explicit-override",
-                "3.12.1",
-            ),
-            (
-                "managed wins",
-                false,
-                true,
-                true,
-                true,
-                "ultralytics-managed",
-                "3.12.1",
-            ),
-            (
-                "stack without managed",
-                false,
-                false,
-                true,
-                true,
-                "rfdetr-default",
-                "3.12.1",
-            ),
-            (
-                "discovered fallback",
-                false,
-                false,
-                false,
-                true,
-                "discovered-system",
-                "3.12.0",
-            ),
+            (true, true, true, "explicit-override"),
+            (false, true, true, "ultralytics-managed"),
+            (false, false, true, "rfdetr-default"),
+            (false, false, false, "discovered-system"),
         ];
-        for (
-            name,
-            with_override,
-            with_managed,
-            with_stack,
-            with_discovered,
-            expected,
-            expected_version,
-        ) in rows
+        for (n, (with_override, with_managed, with_stack, expected)) in rows.into_iter().enumerate()
         {
             let runtime = temp_runtime("priority");
-            let override_exe = runtime.join("custom-python").to_string_lossy().into_owned();
-            let managed_exe = managed_path(&runtime).to_string_lossy().into_owned();
-            let stack_exe = stack_path(&runtime, "rfdetr-default")
-                .to_string_lossy()
-                .into_owned();
-            if with_override {
-                touch(Path::new(&override_exe));
-            }
-            if with_managed {
-                touch(Path::new(&managed_exe));
-            }
-            if with_stack {
-                touch(Path::new(&stack_exe));
+            let exes = [
+                runtime.join("custom-python").to_string_lossy().into_owned(),
+                managed_path(&runtime).to_string_lossy().into_owned(),
+                stack_path(&runtime, "rfdetr-default")
+                    .to_string_lossy()
+                    .into_owned(),
+            ];
+            for (present, exe) in [with_override, with_managed, with_stack]
+                .into_iter()
+                .zip(&exes)
+            {
+                if present {
+                    touch(Path::new(exe));
+                }
             }
             let mut env = FakeEnv::new();
-            for exe in [&override_exe, &managed_exe, &stack_exe] {
+            for exe in &exes {
                 env = env.version(exe, 3, 12, 1);
             }
-            let discovered = if with_discovered {
-                vec![candidate("/discovered", 3, 12, 0)]
-            } else {
-                vec![]
-            };
             let result = env.resolve(
                 "ultralytics.pt.onnx",
-                with_override.then_some(override_exe.as_str()),
+                with_override.then_some(exes[0].as_str()),
                 &runtime,
-                discovered,
+                vec![candidate("/discovered", 3, 12, 1)],
             );
             let (_, source, version) = available(&result);
-            assert_eq!(source, expected, "row {name}");
-            assert_eq!(version, expected_version, "row {name}");
+            assert_eq!(source, expected, "row {n}");
+            assert_eq!(version, "3.12.1", "row {n}");
             let _ = fs::remove_dir_all(&runtime);
         }
     }
