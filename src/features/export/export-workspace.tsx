@@ -1561,10 +1561,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     // environment on terminal. It never touches sourcePath (loaded model),
     // export options, output-dir/Python overrides (the saved override value
     // is preserved; installs never go into it), or RF-DETR stacks.
-    // Readiness lives in the backend: the frontend always passes the resolved
-    // bootstrap interpreter and the backend installs into the managed
-    // environment (creating it first when its interpreter is missing), so a
-    // partial environment missing its interpreter still gets repaired by Retry.
+    // Interpreter readiness is checked first through the environment owner:
+    // an explicit probe of the managed interpreter bypasses any saved
+    // override, so Retry on a healthy managed environment never opens the
+    // Python dialog for an unrelated invalid override. Only when the managed
+    // interpreter itself is unusable is a bootstrap required (saved override
+    // preferred automatically, Python-required dialog on missing), and the
+    // backend creates the isolated `.venv` from it. Packages never go into
+    // the bootstrap interpreter either way.
     setDepCheckLoading(true);
     setDepCheckError(null);
 
@@ -1582,6 +1586,33 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         managedPythonPath = getManagedPythonPath(settings.runtime_dir);
       } catch (error) {
         setDepCheckError(String(error));
+        return;
+      }
+      let managedUsable = false;
+      try {
+        await detectEnvironment(managedPythonPath);
+        managedUsable = true;
+      } catch {
+        managedUsable = false;
+      }
+      if (managedUsable) {
+        // Install → verify → terminal lives in the app-wide owner, so
+        // unmounting (e.g. Landing navigation) cannot strand completion.
+        // Environment + current-route refresh happens in the terminal effect.
+        const result = await startRuntimeInstall({
+          provider: "ultralytics",
+          routeId: null,
+          environmentKey: "ultralytics-managed",
+          packages: [{ package: "ultralytics", prerelease: false }],
+          pythonPath: managedPythonPath,
+          summary: "Installing Ultralytics runtime…",
+        });
+        if (!result.ok) {
+          setDepCheckError(result.error);
+          invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
+          void scanProviderEnvironments("ultralytics").catch(() => {});
+          return;
+        }
         return;
       }
       const setupRouteId = defaultRouteForProvider("ultralytics").id;
