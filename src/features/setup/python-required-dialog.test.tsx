@@ -3,13 +3,8 @@ import { describe, expect, test } from "bun:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
-  formatIncompatibleEntries,
-  getPythonRequiredReason,
-  getPythonRequiredRequirement,
-  getPythonRequiredTitle,
   PYTHON_DOWNLOAD_URL,
   PythonRequiredDialogBody,
-  shouldShowClearOverride,
 } from "./python-required-dialog";
 import { Dialog } from "@/components/ui/dialog";
 import type { BootstrapPythonResult } from "@/lib/tauri/bootstrap-python";
@@ -19,9 +14,7 @@ type RequiredResult = Extract<
   { status: "missing" | "invalid_override" }
 >;
 
-type MissingResult = Extract<BootstrapPythonResult, { status: "missing" }>;
-
-function missingResult(): MissingResult {
+function missingResult(): RequiredResult {
   return {
     status: "missing",
     requirement: "Python 3.10 through 3.13",
@@ -45,6 +38,8 @@ function invalidResult(): RequiredResult {
 }
 
 function renderBody(result: RequiredResult, overrides?: Partial<Parameters<typeof PythonRequiredDialogBody>[0]>) {
+  const showClearOverride =
+    overrides?.showClearOverride ?? result.status === "invalid_override";
   return renderToStaticMarkup(
     React.createElement(
       Dialog,
@@ -54,7 +49,7 @@ function renderBody(result: RequiredResult, overrides?: Partial<Parameters<typeo
         result,
         choiceError: null,
         busy: false,
-        showClearOverride: shouldShowClearOverride(result),
+        showClearOverride,
         onCancel: () => {},
         onChoosePython: () => {},
         onCheckAgain: () => {},
@@ -67,50 +62,44 @@ function renderBody(result: RequiredResult, overrides?: Partial<Parameters<typeo
 
 describe("python-required dialog copy (ticket 06)", () => {
   test("states the selected route requirement in short user-facing language", () => {
-    expect(getPythonRequiredRequirement(missingResult())).toBe("Python 3.10 through 3.13");
-    expect(
-      getPythonRequiredRequirement({
-        status: "missing",
-        requirement: "Python 3.12",
-        reason: "no compatible Python 3.12 interpreter found for rfdetr.pth.tflite",
-        incompatible: [],
-      }),
-    ).toBe("Python 3.12");
-
     const html = renderBody(missingResult(), { routeId: "rfdetr.pth.tflite" });
     expect(html).toContain("rfdetr.pth.tflite");
     expect(html).toContain("Python 3.10 through 3.13");
+
+    const tfliteHtml = renderBody({
+      status: "missing",
+      requirement: "Python 3.12",
+      reason: "no compatible Python 3.12 interpreter found for rfdetr.pth.tflite",
+      incompatible: [],
+    });
+    expect(tfliteHtml).toContain("Python 3.12");
   });
 
   test("shows the exact reason and prefers the latest choice error", () => {
-    expect(getPythonRequiredReason(missingResult(), null)).toContain("no compatible Python");
-    expect(getPythonRequiredReason(missingResult(), "provided Python failed validation: boom")).toBe(
-      "provided Python failed validation: boom",
-    );
+    expect(renderBody(missingResult())).toContain("no compatible Python");
 
     const html = renderBody(missingResult(), { choiceError: "provided Python failed validation: boom" });
     expect(html).toContain("provided Python failed validation: boom");
   });
 
   test("shows a compact incompatible list with versions and sources", () => {
-    const { visible, hiddenCount } = formatIncompatibleEntries(missingResult().incompatible);
-    expect(visible).toHaveLength(2);
-    expect(hiddenCount).toBe(0);
-
-    const many = Array.from({ length: 5 }, (_, index) => ({
-      source: "discovered-system",
-      python_path: `/usr/bin/python${index}`,
-      version: `3.9.${index}`,
-    }));
-    const compacted = formatIncompatibleEntries(many);
-    expect(compacted.visible).toHaveLength(3);
-    expect(compacted.hiddenCount).toBe(2);
-
     const html = renderBody(missingResult());
     expect(html).toContain("Found but incompatible");
     expect(html).toContain("3.9.6");
     expect(html).toContain("3.14.0");
     expect(html).toContain("ultralytics-managed");
+
+    const many = renderBody({
+      status: "missing",
+      requirement: "Python 3.10 through 3.13",
+      reason: "none compatible",
+      incompatible: Array.from({ length: 5 }, (_, index) => ({
+        source: "discovered-system",
+        python_path: `/usr/bin/python${index}`,
+        version: `3.9.${index}`,
+      })),
+    });
+    expect(many).toContain("and 2 more");
   });
 
   test("keeps long paths visually contained while preserving the full value", () => {
@@ -131,9 +120,8 @@ describe("python-required dialog copy (ticket 06)", () => {
 
     const invalidHtml = renderBody(invalidResult());
     expect(invalidHtml).toContain("Clear override");
-
-    expect(getPythonRequiredTitle(missingResult())).toBe("Python required");
-    expect(getPythonRequiredTitle(invalidResult())).toBe("Python override needs attention");
+    expect(invalidHtml).toContain("Python override needs attention");
+    expect(missingHtml).toContain("Python required");
   });
 
   test("never downloads Python automatically: only links to the official installer", () => {

@@ -373,7 +373,7 @@ pub(crate) fn resolve_managed_runtime_base(python_path: Option<&str>) -> Result<
     })
 }
 
-fn resolve_python_with<F>(
+pub(crate) fn resolve_python_with<F>(
     python_path: Option<&str>,
     is_windows: bool,
     runner: F,

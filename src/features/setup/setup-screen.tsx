@@ -22,12 +22,11 @@ import {
   resolveBootstrapPython,
 } from "@/lib/tauri/bootstrap-python";
 import { openPythonExecutablePicker } from "@/lib/tauri/dialog";
-import {
-  PYTHON_REQUIRED_SETUP_ROUTE_ID,
-  PythonRequiredDialog,
-  shouldShowClearOverride,
-} from "./python-required-dialog";
-import { createPythonRequiredSetupOwner } from "./python-required-setup";
+import { defaultRouteForProvider } from "@/lib/providers";
+import { PythonRequiredDialog } from "./python-required-dialog";
+import { createPythonRequiredSetupOwner } from "./setup-task";
+
+const SETUP_ROUTE_ID = defaultRouteForProvider("ultralytics").id;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -130,7 +129,7 @@ export function SetupScreen({
     // Never shown on launch alone — only after this explicit setup attempt.
     let bootstrap;
     try {
-      bootstrap = await resolveBootstrapPython(PYTHON_REQUIRED_SETUP_ROUTE_ID);
+      bootstrap = await resolveBootstrapPython(SETUP_ROUTE_ID);
     } catch (e: unknown) {
       if (!mountedRef.current) return;
       captureSetupFailed("venv", "bootstrap_check_failed");
@@ -140,7 +139,7 @@ export function SetupScreen({
     }
     if (isPythonRequiredResult(bootstrap)) {
       pythonRequiredOwner.requirePython(
-        PYTHON_REQUIRED_SETUP_ROUTE_ID,
+        SETUP_ROUTE_ID,
         bootstrap,
         () => runSetupRef.current(),
       );
@@ -373,12 +372,12 @@ export function SetupScreen({
             if (!open) pythonRequiredOwner.cancel();
           }}
           routeId={
-            pythonRequiredState.pending?.routeId ?? PYTHON_REQUIRED_SETUP_ROUTE_ID
+            pythonRequiredState.pending?.routeId ?? SETUP_ROUTE_ID
           }
           result={pythonRequiredState.result}
           choiceError={pythonRequiredState.choiceError}
           busy={pythonRequiredState.busy}
-          showClearOverride={shouldShowClearOverride(pythonRequiredState.result)}
+          showClearOverride={pythonRequiredState.result.status === "invalid_override"}
           onCancel={() => pythonRequiredOwner.cancel()}
           onChoosePython={async () => {
             const picked = await openPythonExecutablePicker();

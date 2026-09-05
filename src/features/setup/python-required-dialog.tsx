@@ -14,48 +14,15 @@ import type {
 
 export const PYTHON_DOWNLOAD_URL = "https://www.python.org/downloads/";
 
-export const PYTHON_REQUIRED_SETUP_ROUTE_ID = "ultralytics.pt.onnx";
-
 type PythonRequiredResult = Extract<
   BootstrapPythonResult,
   { status: "missing" | "invalid_override" }
 >;
 
-export function getPythonRequiredRequirement(
-  result: PythonRequiredResult,
-): string {
-  return result.requirement;
-}
-
-export function getPythonRequiredReason(
-  result: PythonRequiredResult,
-  choiceError: string | null,
-): string {
-  if (choiceError?.trim()) return choiceError.trim();
-  return result.reason;
-}
-
-export function shouldShowClearOverride(result: PythonRequiredResult): boolean {
-  return result.status === "invalid_override";
-}
-
-export function formatIncompatibleEntries(
-  incompatible: BootstrapIncompatible[],
-  limit = 3,
-): { visible: BootstrapIncompatible[]; hiddenCount: number } {
-  const visible = incompatible.slice(0, limit);
-  return { visible, hiddenCount: Math.max(0, incompatible.length - visible.length) };
-}
-
-export function getPythonRequiredTitle(result: PythonRequiredResult): string {
-  return result.status === "invalid_override"
-    ? "Python override needs attention"
-    : "Python required";
-}
-
 function IncompatibleList({ entries }: { entries: BootstrapIncompatible[] }) {
   if (entries.length === 0) return null;
-  const { visible, hiddenCount } = formatIncompatibleEntries(entries);
+  const visible = entries.slice(0, 3);
+  const hiddenCount = Math.max(0, entries.length - visible.length);
   return (
     <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2">
       <p className="text-[11px] font-medium uppercase tracking-wider text-zinc-400">
@@ -107,9 +74,9 @@ export function PythonRequiredDialogBody({
   onCheckAgain: () => void;
   onClearOverride: () => void;
 }) {
-  const requirement = getPythonRequiredRequirement(result);
-  const reason = getPythonRequiredReason(result, choiceError);
-  const title = getPythonRequiredTitle(result);
+  const reason = choiceError?.trim() ? choiceError.trim() : result.reason;
+  const title =
+    result.status === "invalid_override" ? "Python override needs attention" : "Python required";
   const invalidPath =
     result.status === "invalid_override" ? result.python_path : null;
   const incompatible =
@@ -122,7 +89,7 @@ export function PythonRequiredDialogBody({
         <DialogDescription className="space-y-2">
           <p>
             Setup for <span className="font-mono">{routeId}</span> needs{" "}
-            <span className="font-medium text-foreground">{requirement}</span>.
+            <span className="font-medium text-foreground">{result.requirement}</span>.
           </p>
           <p>{reason}</p>
           <p>

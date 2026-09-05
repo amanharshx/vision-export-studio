@@ -3,8 +3,8 @@ use crate::commands::bootstrap_python::{
 };
 use crate::commands::environment::{
     collect_managed_runtime_candidates_with, discover_managed_runtime_python_candidate,
-    managed_runtime_windows_location_candidates, probe_python_candidate,
-    resolve_managed_runtime_base, run,
+    managed_runtime_windows_location_candidates, resolve_managed_runtime_base, resolve_python_with,
+    run,
 };
 use crate::commands::managed_environments::{ManagedEnvironments, ULTRALYTICS_MANAGED_KEY};
 use crate::commands::providers::rfdetr::RFDETR_STAGING_PARENT;
@@ -190,30 +190,6 @@ fn normalize_python_override(python_path_override: Option<String>) -> Option<Str
         let trimmed = path.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     })
-}
-
-/// Validate a user-chosen Python executable before it is saved or used.
-/// Checks existence for path-like values and probes that it is a working
-/// Python 3 interpreter. Route-specific compatibility is checked at setup
-/// time via the bootstrap resolver, so this stays version-agnostic.
-fn validate_python_override_with(
-    path: &str,
-    probe: &impl Fn(&[&str]) -> Result<(String, String, bool), String>,
-) -> Result<String, String> {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return Err("Python path must not be empty".to_string());
-    }
-    if (trimmed.contains('/') || trimmed.contains('\\')) && !Path::new(trimmed).exists() {
-        return Err(format!("Python path does not exist: {}", trimmed));
-    }
-    probe_python_candidate(&[trimmed], probe)
-        .map(|candidate| candidate.executable)
-        .map_err(|error| format!("provided Python failed validation: {}", error))
-}
-
-fn validate_python_override_path(path: &str) -> Result<String, String> {
-    validate_python_override_with(path, &run)
 }
 
 fn managed_runtime_is_ready(runtime_dir: &str) -> bool {
@@ -893,10 +869,10 @@ pub fn save_python_override(
 ) -> Result<(), String> {
     let normalized_override = normalize_python_override(python_path_override);
     // Validate before saving so a direct invoke cannot persist an invalid
-    // executable. Route-specific compatibility stays with the bootstrap
-    // resolver at setup time.
+    // executable. Reuses the shared explicit-path probe; route-specific
+    // compatibility stays with the bootstrap resolver at setup time.
     if let Some(path) = normalized_override.as_deref() {
-        validate_python_override_path(path)?;
+        resolve_python_with(Some(path), cfg!(windows), run).map(|_| ())?;
     }
     update_settings(&app_handle, &state, |settings| {
         settings.python_path_override = normalized_override;
@@ -1273,62 +1249,5 @@ mod tests {
             Some("/custom/python")
         ));
         assert!(setup_complete_after_managed_runtime_cleanup(true, None));
-    }
-
-    fn fake_probe_ok(
-        path: &str,
-    ) -> impl Fn(&[&str]) -> Result<(String, String, bool), String> + '_ {
-        move |argv: &[&str]| {
-            Ok((
-                format!(
-                    "__VES_PYTHON__={}\n__VES_PYTHON_VERSION__=3.12.1",
-                    argv.first().copied().unwrap_or(path)
-                ),
-                String::new(),
-                true,
-            ))
-        }
-    }
-
-    #[test]
-    fn python_override_validation_accepts_working_interpreter() {
-        let runtime = test_runtime_dir("override-valid");
-        let exe = Path::new(&runtime).join("python");
-        fs::create_dir_all(&runtime).unwrap();
-        File::create(&exe).unwrap();
-        let path = exe.to_string_lossy().into_owned();
-
-        let resolved = validate_python_override_with(&path, &fake_probe_ok(&path)).unwrap();
-        assert_eq!(resolved, path);
-        fs::remove_dir_all(runtime).unwrap();
-    }
-
-    #[test]
-    fn python_override_validation_rejects_missing_and_broken_interpreters() {
-        let runtime = test_runtime_dir("override-invalid");
-        let missing = Path::new(&runtime).join("does-not-exist/python");
-        let error =
-            validate_python_override_with(&missing.to_string_lossy(), &fake_probe_ok("unused"))
-                .unwrap_err();
-        assert!(error.contains("does not exist"));
-
-        let exe = Path::new(&runtime).join("python");
-        fs::create_dir_all(&runtime).unwrap();
-        File::create(&exe).unwrap();
-        let path = exe.to_string_lossy().into_owned();
-        let failing = |_: &[&str]| -> Result<(String, String, bool), String> {
-            Ok((String::new(), "interpreter crashed".to_string(), false))
-        };
-        let error = validate_python_override_with(&path, &failing).unwrap_err();
-        assert!(error.contains("failed validation"));
-
-        let blank = validate_python_override_with("   ", &fake_probe_ok("unused")).unwrap_err();
-        assert!(blank.contains("must not be empty"));
-        fs::remove_dir_all(runtime).unwrap();
-    }
-
-    #[test]
-    fn default_setup_route_uses_managed_python_range() {
-        assert_eq!(DEFAULT_SETUP_ROUTE_ID, "ultralytics.pt.onnx");
     }
 }
