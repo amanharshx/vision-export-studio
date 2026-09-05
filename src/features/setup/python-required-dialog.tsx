@@ -7,6 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ArrowUpRight } from "lucide-react";
 import type {
   BootstrapIncompatible,
   PythonRequiredResult,
@@ -69,13 +70,17 @@ export function PythonRequiredDialogBody({
   onCheckAgain: () => void;
   onClearOverride: () => void;
 }) {
-  const reason = choiceError?.trim() ? choiceError.trim() : result.reason;
+  const reason = result.reason;
   const title =
     result.status === "invalid_override" ? "Python override needs attention" : "Python required";
   const invalidPath =
     result.status === "invalid_override" ? result.python_path : null;
   const incompatible =
     result.status === "missing" ? result.incompatible : [];
+  // The red box carries only a newer, different choice error. Repeating the
+  // dialog reason verbatim would show the same text twice.
+  const distinctChoiceError =
+    choiceError?.trim() && choiceError.trim() !== result.reason ? choiceError.trim() : null;
 
   return (
     <>
@@ -89,11 +94,18 @@ export function PythonRequiredDialogBody({
           <p>{reason}</p>
           <p>
             Choose a compatible Python, check again after installing one, or
-            cancel. Vision Export Studio never downloads Python automatically.{" "}
-            <a href={PYTHON_DOWNLOAD_URL} target="_blank" rel="noreferrer">
+            cancel. Vision Export Studio never downloads Python automatically.
+          </p>
+          <p>
+            <a
+              href={PYTHON_DOWNLOAD_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 font-medium text-foreground underline underline-offset-4"
+            >
               Get Python from python.org
+              <ArrowUpRight className="h-3 w-3" aria-hidden="true" />
             </a>
-            .
           </p>
         </DialogDescription>
       </DialogHeader>
@@ -106,9 +118,9 @@ export function PythonRequiredDialogBody({
         </p>
       )}
       <IncompatibleList entries={incompatible} />
-      {choiceError?.trim() && (
+      {distinctChoiceError && (
         <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-          {choiceError.trim()}
+          {distinctChoiceError}
         </p>
       )}
       <DialogFooter>

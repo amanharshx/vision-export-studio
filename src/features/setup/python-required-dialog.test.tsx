@@ -75,11 +75,18 @@ describe("python-required dialog copy (ticket 06)", () => {
     expect(tfliteHtml).toContain("Python 3.12");
   });
 
-  test("shows the exact reason and prefers the latest choice error", () => {
+  test("shows the exact reason, and a different choice error separately", () => {
     expect(renderBody(missingResult())).toContain("no compatible Python");
 
-    const html = renderBody(missingResult(), { choiceError: "provided Python failed validation: boom" });
-    expect(html).toContain("provided Python failed validation: boom");
+    const html = renderBody(missingResult(), { choiceError: "provided Python is not usable: boom" });
+    expect(html).toContain("no compatible Python");
+    expect(html).toContain("provided Python is not usable: boom");
+  });
+
+  test("never shows the same reason twice", () => {
+    const result = missingResult();
+    const html = renderBody(result, { choiceError: result.reason });
+    expect(html.match(/no compatible Python 3\.10 through 3\.13 interpreter found/g)).toHaveLength(1);
   });
 
   test("shows a compact incompatible list with versions and sources", () => {
@@ -127,6 +134,8 @@ describe("python-required dialog copy (ticket 06)", () => {
   test("never downloads Python automatically: only links to the official installer", () => {
     const html = renderBody(missingResult());
     expect(html).toContain(`href="${PYTHON_DOWNLOAD_URL}"`);
+    expect(html).toContain("Get Python from python.org");
+    expect(html).toContain("<svg");
     expect(html).not.toContain("pip install");
     expect(html).not.toContain("Downloading Python");
     expect(html).toContain("never downloads Python automatically");

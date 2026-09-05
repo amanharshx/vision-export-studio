@@ -229,7 +229,7 @@ where
         Err(error) => {
             return Some(invalid_override(
                 trimmed,
-                format!("provided Python failed validation: {}", error),
+                format!("provided Python is not usable: {}", error),
                 None,
                 requirement,
             ));
