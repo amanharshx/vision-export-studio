@@ -97,9 +97,6 @@ type WorkspaceView = "drop" | "formats";
 type RuntimeInstallPhase = "idle" | "installing" | "ready" | "failed";
 
 interface InstallUltralyticsOptions {
-  /** Skip the cleanup-busy guard. Only Recreate sets this: it sequences its
-   * own cleanup before installing, so the flag it holds is stale by design. */
-  ignoreCleanupBusy?: boolean;
   /** Runs inside the setup lifecycle after verification, before the task
    * succeeds; a throw fails the task so persistence failure cannot coexist
    * with success. Recreate marks setup complete here, which also survives a
@@ -1568,9 +1565,13 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     }
   }, []);
 
-  const handleInstallUltralyticsRuntime = useCallback(async (opts?: InstallUltralyticsOptions): Promise<boolean> => {
+  // Shared core installer for the provider-wide Ultralytics setup: probe the
+  // backend-owned readiness, resolve a bootstrap only when work is needed,
+  // and run one install call. Both banner setup and Recreate call this same
+  // core; only the click handler below adds the cleanup-busy guard, so a
+  // sequenced caller never trips on a flag it holds itself.
+  const runUltralyticsInstall = useCallback(async (opts?: InstallUltralyticsOptions): Promise<boolean> => {
     if (blockOnSetupConflict(setDepCheckError)) return false;
-    if (cleanupBusy && !opts?.ignoreCleanupBusy) return false;
 
     // This flow only starts the app-wide setup task and publishes the fresh
     // environment on terminal. It never touches sourcePath (loaded model),
@@ -1675,7 +1676,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     } finally {
       setDepCheckLoading(false);
     }
-  }, [blockOnSetupConflict, cleanupBusy, dismissTask, invalidateManagedEnvironmentSizesForMutation, requirePython, scanProviderEnvironments, startRuntimeInstall, ultralyticsSetupTask]);
+  }, [blockOnSetupConflict, dismissTask, invalidateManagedEnvironmentSizesForMutation, requirePython, scanProviderEnvironments, startRuntimeInstall, ultralyticsSetupTask]);
+  // Guarded click handler for banner buttons and dialog retries: blocks while
+  // an Environment-panel cleanup owns the runtime. Recreate calls the core
+  // above directly instead, sequencing cleanup before install itself.
+  const handleInstallUltralyticsRuntime = useCallback(async (opts?: InstallUltralyticsOptions): Promise<void> => {
+    if (cleanupBusy) return;
+    await runUltralyticsInstall(opts);
+  }, [cleanupBusy, runUltralyticsInstall]);
   const handleInstallUltralyticsRuntimeRef = useRef(handleInstallUltralyticsRuntime);
   handleInstallUltralyticsRuntimeRef.current = handleInstallUltralyticsRuntime;
 
@@ -1716,12 +1724,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         managedEnvironmentCacheKeysForCleanup(keys, stackEnvironments.map((stack) => stack.key)),
       );
       setEnvInfo(null);
-      // The install runs with an explicit continuation: it skips the
-      // cleanup-busy guard this flow holds itself, and marks setup complete
-      // inside the setup lifecycle — including after a dialog round-trip,
-      // whose pending retry keeps these same opts.
-      await handleInstallUltralyticsRuntimeRef.current({
-        ignoreCleanupBusy: true,
+      // Sequenced directly on the shared core, which performs no busy check
+      // of its own: cleanup already finished, so no bypass flag is needed and
+      // nothing depends on which render's callback runs.
+      await runUltralyticsInstall({
         finalize: async () => {
           const settings = await loadSettings();
           await markSetupComplete(settings.runtime_dir);
@@ -1732,7 +1738,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     } finally {
       setCleanupBusy(false);
     }
-  }, [blockOnSetupConflict, cleanupBusy, invalidateManagedEnvironmentSizesForMutation, stackEnvironments]);
+  }, [blockOnSetupConflict, cleanupBusy, invalidateManagedEnvironmentSizesForMutation, runUltralyticsInstall, stackEnvironments]);
 
   const failExportStart = useCallback((message: string) => {
     setInstallPhase("idle");
