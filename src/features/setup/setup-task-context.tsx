@@ -4,12 +4,17 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { installDependencies } from "@/lib/tauri/deps";
 import { detectEnvironment } from "@/lib/tauri/environment";
+import { resolveBootstrapPython, type BootstrapPythonResult } from "@/lib/tauri/bootstrap-python";
+import { savePythonOverride } from "@/lib/tauri/setup";
 import {
   createSetupTaskOwner,
   getSetupCloseWarning,
   isSetupTaskActive,
   type InstallOutcome,
   type InstallStreamDeps,
+  type PythonRequiredDeps,
+  type PythonRequiredResult,
+  type PythonRequiredState,
   type RuntimeInstallRequest,
   type SetupTask,
 } from "./setup-task";
@@ -20,6 +25,16 @@ export interface SetupTaskContextValue {
   openDetails: () => void;
   closeDetails: () => void;
   dismissTask: () => void;
+  pythonGate: PythonRequiredState;
+  requirePythonForSetup: (
+    routeId: string,
+    result: BootstrapPythonResult,
+    run: () => Promise<unknown>,
+  ) => boolean;
+  cancelPythonGate: () => void;
+  choosePythonForSetup: (chosenPath: string) => Promise<void>;
+  checkAgainPythonGate: () => Promise<void>;
+  clearPythonGateOverride: () => Promise<void>;
 }
 
 const SetupTaskContext = createContext<SetupTaskContextValue | null>(null);
@@ -34,6 +49,11 @@ const realDeps: InstallStreamDeps = {
   },
 };
 
+const realGateDeps: PythonRequiredDeps = {
+  resolveBootstrap: (routeId, override) => resolveBootstrapPython(routeId, override),
+  saveOverride: (path) => savePythonOverride(path),
+};
+
 export function SetupTaskProvider({ children }: { children: React.ReactNode }) {
   const ownerRef = useRef<ReturnType<typeof createSetupTaskOwner> | null>(null);
   if (!ownerRef.current) {
@@ -41,6 +61,11 @@ export function SetupTaskProvider({ children }: { children: React.ReactNode }) {
   }
   const owner = ownerRef.current;
   const task = useSyncExternalStore(owner.subscribe, owner.getState, owner.getState);
+  const pythonGate = useSyncExternalStore(
+    owner.subscribe,
+    owner.getPythonGate,
+    owner.getPythonGate,
+  );
 
   useEffect(() => () => owner.dispose(), [owner]);
 
@@ -109,8 +134,16 @@ export function SetupTaskProvider({ children }: { children: React.ReactNode }) {
       openDetails: () => owner.openDetails(),
       closeDetails: () => owner.closeDetails(),
       dismissTask: () => owner.dismissTask(),
+      pythonGate,
+      requirePythonForSetup: (routeId, result, run) =>
+        owner.requirePythonForSetup(routeId, result, run),
+      cancelPythonGate: () => owner.cancelPythonGate(),
+      choosePythonForSetup: (chosenPath) =>
+        owner.choosePythonForSetup(realGateDeps, chosenPath),
+      checkAgainPythonGate: () => owner.checkAgainPythonGate(realGateDeps),
+      clearPythonGateOverride: () => owner.clearPythonGateOverride(realGateDeps),
     }),
-    [owner, task],
+    [owner, task, pythonGate],
   );
 
   return (

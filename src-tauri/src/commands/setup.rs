@@ -1,9 +1,6 @@
-use crate::commands::bootstrap_python::{
-    ensure_venv_capability, resolve_bootstrap_python_with, BootstrapPythonResult,
-};
+use crate::commands::bootstrap_python::{resolve_bootstrap_for_runtime, BootstrapPythonResult};
 use crate::commands::environment::{
-    collect_managed_runtime_candidates_with, discover_managed_runtime_python_candidate,
-    managed_runtime_windows_location_candidates, resolve_managed_runtime_base, resolve_python_with,
+    discover_managed_runtime_python_candidate, resolve_managed_runtime_base, resolve_python_with,
     run,
 };
 use crate::commands::managed_environments::{ManagedEnvironments, ULTRALYTICS_MANAGED_KEY};
@@ -742,37 +739,6 @@ pub fn get_managed_runtime_rebuild_eligibility(
 /// policy without adding route-specific creation in this ticket.
 pub(crate) const DEFAULT_SETUP_ROUTE_ID: &str = "ultralytics.pt.onnx";
 
-fn bootstrap_python_for_setup(
-    route_id: &str,
-    explicit_override: Option<&str>,
-    runtime_dir: &Path,
-) -> Result<String, String> {
-    let resolved = resolve_bootstrap_python_with(
-        route_id,
-        explicit_override,
-        runtime_dir,
-        &run,
-        &ensure_venv_capability,
-        &|| {
-            collect_managed_runtime_candidates_with(
-                cfg!(windows),
-                managed_runtime_windows_location_candidates(),
-                &run,
-            )
-        },
-    );
-    match resolved {
-        BootstrapPythonResult::Available { python_path, .. } => Ok(python_path),
-        BootstrapPythonResult::Missing {
-            requirement,
-            reason,
-            ..
-        } => Err(format!("Python required ({}): {}", requirement, reason)),
-        BootstrapPythonResult::InvalidOverride { reason, .. } => Err(reason),
-        BootstrapPythonResult::Error { reason } => Err(reason),
-    }
-}
-
 #[tauri::command]
 pub async fn create_runtime_venv(
     app_handle: tauri::AppHandle,
@@ -789,11 +755,20 @@ pub async fn create_runtime_venv(
 
     // Resolve before creating anything: an invalid override or a missing
     // interpreter must not create an environment or change package state.
-    let python = bootstrap_python_for_setup(
+    let python = match resolve_bootstrap_for_runtime(
         DEFAULT_SETUP_ROUTE_ID,
         override_opt.as_deref(),
         &runtime_path,
-    )?;
+    ) {
+        BootstrapPythonResult::Available { python_path, .. } => python_path,
+        BootstrapPythonResult::Missing {
+            requirement,
+            reason,
+            ..
+        } => return Err(format!("Python required ({}): {}", requirement, reason)),
+        BootstrapPythonResult::InvalidOverride { reason, .. } => return Err(reason),
+        BootstrapPythonResult::Error { reason } => return Err(reason),
+    };
 
     // Create the runtime_dir if it does not exist.
     std::fs::create_dir_all(&managed_runtime_dir)

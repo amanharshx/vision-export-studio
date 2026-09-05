@@ -2,7 +2,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   canDismissSetupTask,
-  createPythonRequiredSetupOwner,
   createSetupTask,
   createSetupTaskOwner,
   getSetupCloseWarning,
@@ -443,7 +442,7 @@ describe("python-required pending setup (ticket 06)", () => {
   }) {
     const saves: Array<string | null> = [];
     let runs = 0;
-    const deps: PythonRequiredDeps = {
+    const gateDeps: PythonRequiredDeps = {
       resolveBootstrap: async (routeId, override) => {
         if (options?.resolveImpl) return options.resolveImpl(routeId, override);
         return availableResult();
@@ -453,51 +452,61 @@ describe("python-required pending setup (ticket 06)", () => {
         if (options?.saveImpl) return options.saveImpl(path);
       },
     };
-    const owner = createPythonRequiredSetupOwner(deps);
+    const owner = createSetupTaskOwner(createFakeDeps().deps);
     const run = async () => {
       runs += 1;
     };
-    return { owner, saves, runs: () => runs, run };
+    return { owner, gateDeps, saves, runs: () => runs, run };
+  }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
   }
 
   test("starts closed: never shown on launch without a blocked setup", () => {
     const { owner } = createPythonHarness();
-    const state = owner.getState();
+    const state = owner.getPythonGate();
     expect(state.dialogOpen).toBe(false);
     expect(state.pending).toBeNull();
     expect(state.result).toBeNull();
   });
 
   test("valid choice saves and retries the pending setup exactly once", async () => {
-    const { owner, saves, runs, run } = createPythonHarness();
-    expect(owner.requirePython("ultralytics.pt.onnx", missingResult(), run)).toBe(true);
-    expect(owner.getState().dialogOpen).toBe(true);
+    const { owner, gateDeps, saves, runs, run } = createPythonHarness();
+    expect(owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), run)).toBe(true);
+    expect(owner.getPythonGate().dialogOpen).toBe(true);
 
-    await owner.choosePython("/valid/python");
+    await owner.choosePythonForSetup(gateDeps, "/valid/python");
 
     expect(saves).toEqual(["/valid/python"]);
     expect(runs()).toBe(1);
-    expect(owner.getState().dialogOpen).toBe(false);
-    expect(owner.getState().pending).toBeNull();
+    expect(owner.getPythonGate().dialogOpen).toBe(false);
+    expect(owner.getPythonGate().pending).toBeNull();
 
     // A second choice with no pending retries nothing.
-    await owner.choosePython("/valid/python");
+    await owner.choosePythonForSetup(gateDeps, "/valid/python");
     expect(runs()).toBe(1);
     expect(saves).toEqual(["/valid/python"]);
   });
 
   test("invalid choice keeps the dialog open with the exact reason", async () => {
     const reason = "provided Python failed validation: /bad/python failed validation: crashed";
-    const { owner, saves, runs, run } = createPythonHarness({
+    const { owner, gateDeps, saves, runs, run } = createPythonHarness({
       resolveImpl: async () => invalidResult(reason),
     });
-    owner.requirePython("ultralytics.pt.onnx", missingResult(), run);
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), run);
 
-    await owner.choosePython("/bad/python");
+    await owner.choosePythonForSetup(gateDeps, "/bad/python");
 
     expect(saves).toEqual([]);
     expect(runs()).toBe(0);
-    const state = owner.getState();
+    const state = owner.getPythonGate();
     expect(state.dialogOpen).toBe(true);
     expect(state.choiceError).toBe(reason);
     expect(state.pending).not.toBeNull();
@@ -506,7 +515,7 @@ describe("python-required pending setup (ticket 06)", () => {
   test("incompatible version keeps the dialog open without saving", async () => {
     const reason =
       "Python 3.9.6 is not supported for ultralytics.pt.onnx; requires Python 3.10 through 3.13.";
-    const { owner, saves, runs, run } = createPythonHarness({
+    const { owner, gateDeps, saves, runs, run } = createPythonHarness({
       resolveImpl: async () => ({
         status: "invalid_override",
         python_path: "/py39/bin/python",
@@ -516,74 +525,78 @@ describe("python-required pending setup (ticket 06)", () => {
         requirement: "Python 3.10 through 3.13",
       }),
     });
-    owner.requirePython("ultralytics.pt.onnx", missingResult(), run);
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), run);
 
-    await owner.choosePython("/py39/bin/python");
+    await owner.choosePythonForSetup(gateDeps, "/py39/bin/python");
 
     expect(saves).toEqual([]);
     expect(runs()).toBe(0);
-    expect(owner.getState().dialogOpen).toBe(true);
-    expect(owner.getState().choiceError).toContain("not supported");
+    expect(owner.getPythonGate().dialogOpen).toBe(true);
+    expect(owner.getPythonGate().choiceError).toContain("not supported");
   });
 
   test("cleared override redetects and retries when a compatible Python appears", async () => {
-    const { owner, saves, runs, run } = createPythonHarness({
+    const { owner, gateDeps, saves, runs, run } = createPythonHarness({
       resolveImpl: async (_route, override) => {
         if (override !== undefined) return invalidResult();
         return availableResult();
       },
     });
-    owner.requirePython("ultralytics.pt.onnx", invalidResult(), run);
+    owner.requirePythonForSetup("ultralytics.pt.onnx", invalidResult(), run);
 
-    await owner.clearOverride();
+    await owner.clearPythonGateOverride(gateDeps);
 
     expect(saves).toEqual([null]);
     expect(runs()).toBe(1);
-    expect(owner.getState().dialogOpen).toBe(false);
+    expect(owner.getPythonGate().dialogOpen).toBe(false);
   });
 
   test("cleared override stays open with fresh missing state when still nothing compatible", async () => {
-    const { owner, saves, runs, run } = createPythonHarness({
+    const { owner, gateDeps, saves, runs, run } = createPythonHarness({
       resolveImpl: async () => missingResult(),
     });
-    owner.requirePython("ultralytics.pt.onnx", invalidResult(), run);
+    owner.requirePythonForSetup("ultralytics.pt.onnx", invalidResult(), run);
 
-    await owner.clearOverride();
+    await owner.clearPythonGateOverride(gateDeps);
 
     expect(saves).toEqual([null]);
     expect(runs()).toBe(0);
-    const state = owner.getState();
+    const state = owner.getPythonGate();
     expect(state.dialogOpen).toBe(true);
     expect(state.result?.status).toBe("missing");
   });
 
   test("redetection retries once on success and updates the dialog on continued failure", async () => {
     const success = createPythonHarness();
-    success.owner.requirePython("ultralytics.pt.onnx", missingResult(), success.run);
-    await success.owner.checkAgain();
+    success.owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), success.run);
+    await success.owner.checkAgainPythonGate(success.gateDeps);
     expect(success.runs()).toBe(1);
-    expect(success.owner.getState().dialogOpen).toBe(false);
+    expect(success.owner.getPythonGate().dialogOpen).toBe(false);
 
     const stillMissing = createPythonHarness({
       resolveImpl: async () => missingResult(),
     });
-    stillMissing.owner.requirePython("ultralytics.pt.onnx", missingResult(), stillMissing.run);
-    await stillMissing.owner.checkAgain();
+    stillMissing.owner.requirePythonForSetup(
+      "ultralytics.pt.onnx",
+      missingResult(),
+      stillMissing.run,
+    );
+    await stillMissing.owner.checkAgainPythonGate(stillMissing.gateDeps);
     expect(stillMissing.runs()).toBe(0);
-    expect(stillMissing.owner.getState().dialogOpen).toBe(true);
-    expect(stillMissing.owner.getState().result?.status).toBe("missing");
+    expect(stillMissing.owner.getPythonGate().dialogOpen).toBe(true);
+    expect(stillMissing.owner.getPythonGate().result?.status).toBe("missing");
   });
 
   test("cancellation creates nothing and changes no package state", async () => {
     const { owner, saves, runs, run } = createPythonHarness();
-    owner.requirePython("ultralytics.pt.onnx", missingResult(), run);
-    expect(owner.getState().dialogOpen).toBe(true);
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), run);
+    expect(owner.getPythonGate().dialogOpen).toBe(true);
 
-    owner.cancel();
+    owner.cancelPythonGate();
 
     expect(saves).toEqual([]);
     expect(runs()).toBe(0);
-    const state = owner.getState();
+    const state = owner.getPythonGate();
     expect(state.dialogOpen).toBe(false);
     expect(state.pending).toBeNull();
     expect(state.result).toBeNull();
@@ -592,16 +605,16 @@ describe("python-required pending setup (ticket 06)", () => {
   test("pending-action replacement discards the old setup without running it", async () => {
     let firstRuns = 0;
     let secondRuns = 0;
-    const { owner, saves } = createPythonHarness();
-    owner.requirePython("ultralytics.pt.onnx", missingResult(), async () => {
+    const { owner, gateDeps, saves } = createPythonHarness();
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), async () => {
       firstRuns += 1;
     });
-    owner.requirePython("rfdetr.pth.tflite", missingResult("Python 3.12"), async () => {
+    owner.requirePythonForSetup("rfdetr.pth.tflite", missingResult("Python 3.12"), async () => {
       secondRuns += 1;
     });
 
-    expect(owner.getState().pending?.routeId).toBe("rfdetr.pth.tflite");
-    await owner.checkAgain();
+    expect(owner.getPythonGate().pending?.routeId).toBe("rfdetr.pth.tflite");
+    await owner.checkAgainPythonGate(gateDeps);
 
     expect(firstRuns).toBe(0);
     expect(secondRuns).toBe(1);
@@ -609,18 +622,121 @@ describe("python-required pending setup (ticket 06)", () => {
   });
 
   test("save failure keeps the dialog open with the exact reason and no retry", async () => {
-    const { owner, saves, runs, run } = createPythonHarness({
+    const { owner, gateDeps, saves, runs, run } = createPythonHarness({
       saveImpl: async () => {
         throw new Error("provided Python failed validation: crashed");
       },
     });
-    owner.requirePython("ultralytics.pt.onnx", missingResult(), run);
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), run);
 
-    await owner.choosePython("/valid/python");
+    await owner.choosePythonForSetup(gateDeps, "/valid/python");
 
     expect(saves).toEqual(["/valid/python"]);
     expect(runs()).toBe(0);
-    expect(owner.getState().dialogOpen).toBe(true);
-    expect(owner.getState().choiceError).toContain("failed validation");
+    expect(owner.getPythonGate().dialogOpen).toBe(true);
+    expect(owner.getPythonGate().choiceError).toContain("failed validation");
+  });
+
+  test("cancel during redetection discards the stale success without running", async () => {
+    const gate = deferred<BootstrapPythonResult>();
+    const { owner, gateDeps, saves, runs, run } = createPythonHarness({
+      resolveImpl: () => gate.promise,
+    });
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), run);
+
+    const pending = owner.checkAgainPythonGate(gateDeps);
+    owner.cancelPythonGate();
+    gate.resolve(availableResult());
+    await pending;
+
+    expect(saves).toEqual([]);
+    expect(runs()).toBe(0);
+    const state = owner.getPythonGate();
+    expect(state.dialogOpen).toBe(false);
+    expect(state.pending).toBeNull();
+  });
+
+  test("replacement during redetection runs the new action, never the stale one", async () => {
+    const gate = deferred<BootstrapPythonResult>();
+    let firstRuns = 0;
+    let secondRuns = 0;
+    const { owner, gateDeps } = createPythonHarness({
+      resolveImpl: () => gate.promise,
+    });
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), async () => {
+      firstRuns += 1;
+    });
+
+    const stale = owner.checkAgainPythonGate(gateDeps);
+    owner.requirePythonForSetup("rfdetr.pth.tflite", missingResult("Python 3.12"), async () => {
+      secondRuns += 1;
+    });
+    gate.resolve(availableResult());
+    await stale;
+
+    expect(firstRuns).toBe(0);
+    expect(secondRuns).toBe(0);
+    expect(owner.getPythonGate().pending?.routeId).toBe("rfdetr.pth.tflite");
+    expect(owner.getPythonGate().dialogOpen).toBe(true);
+  });
+
+  test("cancel during a validated choice runs nothing and saves nothing", async () => {
+    const validation = deferred<BootstrapPythonResult>();
+    const { owner, gateDeps, saves, runs, run } = createPythonHarness({
+      resolveImpl: () => validation.promise,
+    });
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), run);
+
+    const pending = owner.choosePythonForSetup(gateDeps, "/valid/python");
+    owner.cancelPythonGate();
+    validation.resolve(availableResult());
+    await pending;
+
+    expect(saves).toEqual([]);
+    expect(runs()).toBe(0);
+    expect(owner.getPythonGate().pending).toBeNull();
+  });
+
+  test("replacement during a validated choice never runs the stale action", async () => {
+    const validation = deferred<BootstrapPythonResult>();
+    let firstRuns = 0;
+    const { owner, gateDeps, saves } = createPythonHarness({
+      resolveImpl: () => validation.promise,
+    });
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), async () => {
+      firstRuns += 1;
+    });
+
+    const stale = owner.choosePythonForSetup(gateDeps, "/valid/python");
+    owner.requirePythonForSetup("rfdetr.pth.tflite", missingResult("Python 3.12"), async () => {});
+    validation.resolve(availableResult());
+    await stale;
+
+    expect(firstRuns).toBe(0);
+    expect(saves).toEqual([]);
+    expect(owner.getPythonGate().pending?.routeId).toBe("rfdetr.pth.tflite");
+  });
+
+  test("cancel during override clearing skips redetection and runs nothing", async () => {
+    const saving = deferred<void>();
+    let resolves = 0;
+    const { owner, gateDeps, saves, runs, run } = createPythonHarness({
+      saveImpl: () => saving.promise,
+      resolveImpl: () => {
+        resolves += 1;
+        return Promise.resolve(availableResult());
+      },
+    });
+    owner.requirePythonForSetup("ultralytics.pt.onnx", invalidResult(), run);
+
+    const pending = owner.clearPythonGateOverride(gateDeps);
+    owner.cancelPythonGate();
+    saving.resolve();
+    await pending;
+
+    expect(saves).toEqual([null]);
+    expect(runs()).toBe(0);
+    expect(resolves).toBe(0);
+    expect(owner.getPythonGate().pending).toBeNull();
   });
 });

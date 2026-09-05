@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { AppIcon } from "@/components/app-icon";
 import { UpdateChecker } from "@/components/update-checker";
@@ -15,7 +15,6 @@ import {
 import {
   createRuntimeVenv,
   markSetupComplete,
-  savePythonOverride,
 } from "@/lib/tauri/setup";
 import {
   isPythonRequiredResult,
@@ -24,7 +23,7 @@ import {
 import { openPythonExecutablePicker } from "@/lib/tauri/dialog";
 import { defaultRouteForProvider } from "@/lib/providers";
 import { PythonRequiredDialog } from "./python-required-dialog";
-import { createPythonRequiredSetupOwner } from "./setup-task";
+import { useSetupTask } from "./setup-task-context";
 
 const SETUP_ROUTE_ID = defaultRouteForProvider("ultralytics").id;
 
@@ -82,19 +81,14 @@ export function SetupScreen({
   const startedRef = useRef(false);
   const runSetupRef = useRef<() => Promise<void>>(async () => {});
 
-  const pythonRequiredOwnerRef = useRef<ReturnType<typeof createPythonRequiredSetupOwner> | null>(null);
-  if (!pythonRequiredOwnerRef.current) {
-    pythonRequiredOwnerRef.current = createPythonRequiredSetupOwner({
-      resolveBootstrap: (routeId, override) => resolveBootstrapPython(routeId, override),
-      saveOverride: (path) => savePythonOverride(path),
-    });
-  }
-  const pythonRequiredOwner = pythonRequiredOwnerRef.current;
-  const pythonRequiredState = useSyncExternalStore(
-    pythonRequiredOwner.subscribe,
-    pythonRequiredOwner.getState,
-    pythonRequiredOwner.getState,
-  );
+  const {
+    pythonGate: pythonRequiredState,
+    requirePythonForSetup: requirePython,
+    cancelPythonGate: cancelPythonRequired,
+    choosePythonForSetup: choosePythonRequired,
+    checkAgainPythonGate: checkAgainPythonRequired,
+    clearPythonGateOverride: clearPythonOverrideRequired,
+  } = useSetupTask();
 
   useEffect(() => {
     mountedRef.current = true;
@@ -138,7 +132,7 @@ export function SetupScreen({
       return;
     }
     if (isPythonRequiredResult(bootstrap)) {
-      pythonRequiredOwner.requirePython(
+      requirePython(
         SETUP_ROUTE_ID,
         bootstrap,
         () => runSetupRef.current(),
@@ -369,7 +363,7 @@ export function SetupScreen({
         <PythonRequiredDialog
           open={pythonRequiredState.dialogOpen}
           onOpenChange={(open) => {
-            if (!open) pythonRequiredOwner.cancel();
+            if (!open) cancelPythonRequired();
           }}
           routeId={
             pythonRequiredState.pending?.routeId ?? SETUP_ROUTE_ID
@@ -378,13 +372,13 @@ export function SetupScreen({
           choiceError={pythonRequiredState.choiceError}
           busy={pythonRequiredState.busy}
           showClearOverride={pythonRequiredState.result.status === "invalid_override"}
-          onCancel={() => pythonRequiredOwner.cancel()}
+          onCancel={() => cancelPythonRequired()}
           onChoosePython={async () => {
             const picked = await openPythonExecutablePicker();
-            if (picked) await pythonRequiredOwner.choosePython(picked);
+            if (picked) await choosePythonRequired(picked);
           }}
-          onCheckAgain={() => void pythonRequiredOwner.checkAgain()}
-          onClearOverride={() => void pythonRequiredOwner.clearOverride()}
+          onCheckAgain={() => void checkAgainPythonRequired()}
+          onClearOverride={() => void clearPythonOverrideRequired()}
         />
       )}
     </div>

@@ -277,6 +277,21 @@ export interface SetupTaskOwner {
   openDetails: () => void;
   closeDetails: () => void;
   dismissTask: () => void;
+  getPythonGate: () => PythonRequiredState;
+  /** Store a Python-blocked setup and open the dialog. Replaces any pending action. */
+  requirePythonForSetup: (
+    routeId: string,
+    result: BootstrapPythonResult,
+    run: () => Promise<unknown>,
+  ) => boolean;
+  /** Cancel without creating an environment or changing package state. */
+  cancelPythonGate: () => void;
+  /** Validate a chosen executable, save it, then retry the pending setup once. */
+  choosePythonForSetup: (gateDeps: PythonRequiredDeps, chosenPath: string) => Promise<void>;
+  /** Re-detect with the saved override, then retry once when available. */
+  checkAgainPythonGate: (gateDeps: PythonRequiredDeps) => Promise<void>;
+  /** Clear a saved invalid override, then re-detect and retry once when available. */
+  clearPythonGateOverride: (gateDeps: PythonRequiredDeps) => Promise<void>;
 }
 
 export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
@@ -306,6 +321,64 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
       status: "failed",
       error,
       summary: setupTaskSummaryForPhase("failed", task.provider),
+    });
+  };
+
+  // Python-required pending gate (ticket 06). Lives in this owner so there
+  // is one app-wide setup store, not a parallel one. A generation token plus
+  // pending identity rejects stale async completions: cancel or replacement
+  // bumps the generation, and any in-flight validation/redetection that
+  // resumes against an old generation or a replaced pending is discarded
+  // without running anything or touching the new state.
+  let pythonGate: PythonRequiredState = emptyPythonRequiredState();
+  let pythonGeneration = 0;
+
+  const setPythonGate = (next: PythonRequiredState) => {
+    pythonGate = next;
+    emit();
+  };
+
+  const closePythonGate = () => {
+    setPythonGate({ pending: null, result: null, dialogOpen: false, choiceError: null, busy: false });
+  };
+
+  const isGateCurrent = (generation: number, pending: PendingPythonSetup) =>
+    generation === pythonGeneration && pythonGate.pending === pending;
+
+  const failPythonGate = (
+    generation: number,
+    pending: PendingPythonSetup,
+    message: string,
+  ) => {
+    if (!isGateCurrent(generation, pending)) return;
+    setPythonGate({ ...pythonGate, busy: false, choiceError: message });
+  };
+
+  // Single redetect/retry transition shared by check-again and
+  // clear-override so the two paths cannot drift.
+  const settleRedetected = async (
+    generation: number,
+    pending: PendingPythonSetup,
+    previous: PythonRequiredResult,
+    redetected: BootstrapPythonResult,
+  ): Promise<void> => {
+    if (!isGateCurrent(generation, pending)) return;
+    if (redetected.status === "available") {
+      const run = pending.run;
+      closePythonGate();
+      await run();
+      return;
+    }
+    if (isPythonRequiredResult(redetected)) {
+      setPythonGate({ pending, result: redetected, dialogOpen: true, busy: false, choiceError: null });
+      return;
+    }
+    setPythonGate({
+      pending,
+      result: previous,
+      dialogOpen: true,
+      busy: false,
+      choiceError: pythonRequiredReasonOf(redetected),
     });
   };
 
@@ -432,6 +505,100 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
       if (!task || !canDismissSetupTask(task)) return;
       setTask({ ...task, dismissed: true, detailsOpen: false });
     },
+
+    getPythonGate: () => pythonGate,
+
+    requirePythonForSetup: (routeId, result, run) => {
+      if (!isPythonRequiredResult(result)) return false;
+      pythonGeneration += 1;
+      setPythonGate({
+        pending: { routeId, run },
+        result,
+        dialogOpen: true,
+        choiceError: null,
+        busy: false,
+      });
+      return true;
+    },
+
+    cancelPythonGate: () => {
+      if (!pythonGate.dialogOpen && !pythonGate.pending) return;
+      pythonGeneration += 1;
+      closePythonGate();
+    },
+
+    choosePythonForSetup: async (gateDeps, chosenPath) => {
+      const started = pythonGate;
+      if (!started.dialogOpen || !started.pending || !started.result || started.busy) return;
+      const generation = pythonGeneration;
+      const pending = started.pending;
+      setPythonGate({ ...started, busy: true, choiceError: null });
+      let validated: BootstrapPythonResult;
+      try {
+        validated = await gateDeps.resolveBootstrap(pending.routeId, chosenPath);
+      } catch (error) {
+        failPythonGate(generation, pending, String(error));
+        return;
+      }
+      if (validated.status !== "available") {
+        failPythonGate(generation, pending, pythonRequiredReasonOf(validated));
+        return;
+      }
+      // The pending action may have been canceled or replaced while
+      // validation was in flight; never save for a stale choice.
+      if (!isGateCurrent(generation, pending)) return;
+      try {
+        await gateDeps.saveOverride(chosenPath);
+      } catch (error) {
+        failPythonGate(generation, pending, String(error));
+        return;
+      }
+      if (!isGateCurrent(generation, pending)) return;
+      const run = pending.run;
+      closePythonGate();
+      await run();
+    },
+
+    checkAgainPythonGate: async (gateDeps) => {
+      const started = pythonGate;
+      if (!started.dialogOpen || !started.pending || !started.result || started.busy) return;
+      const generation = pythonGeneration;
+      const pending = started.pending;
+      const previous = started.result;
+      setPythonGate({ ...started, busy: true, choiceError: null });
+      let redetected: BootstrapPythonResult;
+      try {
+        redetected = await gateDeps.resolveBootstrap(pending.routeId);
+      } catch (error) {
+        failPythonGate(generation, pending, String(error));
+        return;
+      }
+      await settleRedetected(generation, pending, previous, redetected);
+    },
+
+    clearPythonGateOverride: async (gateDeps) => {
+      const started = pythonGate;
+      if (!started.dialogOpen || !started.pending || !started.result || started.busy) return;
+      const generation = pythonGeneration;
+      const pending = started.pending;
+      const previous = started.result;
+      setPythonGate({ ...started, busy: true, choiceError: null });
+      try {
+        await gateDeps.saveOverride(null);
+      } catch (error) {
+        failPythonGate(generation, pending, String(error));
+        return;
+      }
+      if (!isGateCurrent(generation, pending)) return;
+      let redetected: BootstrapPythonResult;
+      try {
+        redetected = await gateDeps.resolveBootstrap(pending.routeId);
+      } catch (error) {
+        failPythonGate(generation, pending, String(error));
+        return;
+      }
+      await settleRedetected(generation, pending, previous, redetected);
+    },
   };
 }
 
@@ -480,150 +647,3 @@ function pythonRequiredReasonOf(result: BootstrapPythonResult): string {
   if (result.status === "error") return result.reason;
   return "";
 }
-
-export function createPythonRequiredSetupOwner(deps: PythonRequiredDeps) {
-  let state: PythonRequiredState = emptyPythonRequiredState();
-  const subscribers = new Set<() => void>();
-
-  const emit = () => {
-    for (const listener of [...subscribers]) listener();
-  };
-
-  const setState = (next: PythonRequiredState) => {
-    state = next;
-    emit();
-  };
-
-  const clearToClosed = () => {
-    setState({ pending: null, result: null, dialogOpen: false, choiceError: null, busy: false });
-  };
-
-  return {
-    getState: () => state,
-
-    subscribe: (listener: () => void) => {
-      subscribers.add(listener);
-      return () => {
-        subscribers.delete(listener);
-      };
-    },
-
-    /** Store a Python-blocked setup and open the dialog. Replaces any pending action. */
-    requirePython: (
-      routeId: string,
-      result: BootstrapPythonResult,
-      run: () => Promise<unknown>,
-    ): boolean => {
-      if (!isPythonRequiredResult(result)) return false;
-      setState({
-        pending: { routeId, run },
-        result,
-        dialogOpen: true,
-        choiceError: null,
-        busy: false,
-      });
-      return true;
-    },
-
-    /** Cancel without creating an environment or changing package state. */
-    cancel: () => {
-      if (!state.dialogOpen && !state.pending) return;
-      clearToClosed();
-    },
-
-    /** Validate a chosen executable, save it, then retry the pending setup once. */
-    choosePython: async (chosenPath: string): Promise<void> => {
-      const current = state;
-      if (!current.dialogOpen || !current.pending || !current.result || current.busy) return;
-      setState({ ...current, busy: true, choiceError: null });
-      let validated: BootstrapPythonResult;
-      try {
-        validated = await deps.resolveBootstrap(current.pending.routeId, chosenPath);
-      } catch (error) {
-        setState({ ...current, busy: false, choiceError: String(error) });
-        return;
-      }
-      if (validated.status !== "available") {
-        setState({ ...current, busy: false, choiceError: pythonRequiredReasonOf(validated) });
-        return;
-      }
-      try {
-        await deps.saveOverride(chosenPath);
-      } catch (error) {
-        setState({ ...current, busy: false, choiceError: String(error) });
-        return;
-      }
-      const pending = current.pending;
-      clearToClosed();
-      await pending.run();
-    },
-
-    /** Re-detect with the saved override, then retry once when available. */
-    checkAgain: async (): Promise<void> => {
-      const current = state;
-      if (!current.dialogOpen || !current.pending || !current.result || current.busy) return;
-      setState({ ...current, busy: true, choiceError: null });
-      let redetected: BootstrapPythonResult;
-      try {
-        redetected = await deps.resolveBootstrap(current.pending.routeId);
-      } catch (error) {
-        setState({ ...current, busy: false, choiceError: String(error) });
-        return;
-      }
-      if (redetected.status === "available") {
-        const pending = current.pending;
-        clearToClosed();
-        await pending.run();
-        return;
-      }
-      if (isPythonRequiredResult(redetected)) {
-        setState({
-          ...current,
-          result: redetected,
-          busy: false,
-          choiceError: null,
-        });
-        return;
-      }
-      setState({ ...current, busy: false, choiceError: pythonRequiredReasonOf(redetected) });
-    },
-
-    /** Clear a saved invalid override, then re-detect and retry once when available. */
-    clearOverride: async (): Promise<void> => {
-      const current = state;
-      if (!current.dialogOpen || !current.pending || !current.result || current.busy) return;
-      setState({ ...current, busy: true, choiceError: null });
-      try {
-        await deps.saveOverride(null);
-      } catch (error) {
-        setState({ ...current, busy: false, choiceError: String(error) });
-        return;
-      }
-      let redetected: BootstrapPythonResult;
-      try {
-        redetected = await deps.resolveBootstrap(current.pending.routeId);
-      } catch (error) {
-        setState({ ...current, busy: false, choiceError: String(error) });
-        return;
-      }
-      if (redetected.status === "available") {
-        const pending = current.pending;
-        clearToClosed();
-        await pending.run();
-        return;
-      }
-      if (isPythonRequiredResult(redetected)) {
-        setState({
-          ...current,
-          result: redetected,
-          busy: false,
-          choiceError: null,
-        });
-        return;
-      }
-      setState({ ...current, busy: false, choiceError: pythonRequiredReasonOf(redetected) });
-    },
-  };
-}
-
-export type PythonRequiredSetupOwner = ReturnType<typeof createPythonRequiredSetupOwner>;
