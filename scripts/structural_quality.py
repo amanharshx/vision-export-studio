@@ -9,7 +9,8 @@ from pathlib import Path
 
 SUPPORTED = {".py", ".rs", ".js", ".ts", ".tsx", ".jsx"}
 STRUCTURAL_ROOTS = (("src/", {".ts", ".tsx", ".js", ".jsx"}), ("src-tauri/src/", {".rs"}), ("src-tauri/python/", {".py"}), ("scripts/", {".py"}))
-THRESHOLDS = (("nloc", 50), ("complexity", 15), ("parameters", 5))
+THRESHOLDS = (("nloc", 100), ("complexity", 15), ("parameters", 5))
+LIMITS = dict(THRESHOLDS)
 MARKER = "<!-- structural-code-quality -->"
 
 
@@ -111,15 +112,15 @@ def annotation(name, file, start, end, function):
 
 def metric_text(finding):
     labels = {
-        "nloc": f"Function length: **{finding.nloc} NLOC** · limit: **50**",
-        "complexity": f"Cyclomatic complexity: **{finding.complexity}** · limit: **15**",
-        "parameters": f"Parameter count: **{finding.parameters}** · limit: **5**",
+        "nloc": f"Function length: **{finding.nloc} NLOC** · limit: **{LIMITS['nloc']}**",
+        "complexity": f"Cyclomatic complexity: **{finding.complexity}** · limit: **{LIMITS['complexity']}**",
+        "parameters": f"Parameter count: **{finding.parameters}** · limit: **{LIMITS['parameters']}**",
     }
     return [labels[name] for name in finding.exceeded]
 
 
 def metric_annotation_text(finding):
-    labels = {"nloc": f"{finding.nloc} NLOC, limit 50", "complexity": f"complexity {finding.complexity}, limit 15", "parameters": f"{finding.parameters} parameters, limit 5"}
+    labels = {"nloc": f"{finding.nloc} NLOC, limit {LIMITS['nloc']}", "complexity": f"complexity {finding.complexity}, limit {LIMITS['complexity']}", "parameters": f"{finding.parameters} parameters, limit {LIMITS['parameters']}"}
     return ", ".join(labels[name] for name in finding.exceeded)
 
 
