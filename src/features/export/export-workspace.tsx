@@ -5,7 +5,7 @@ import { checkDependencies, installDependencies } from "@/lib/tauri/deps";
 import { cancelExport, openExportFolder, startExport } from "@/lib/tauri/export";
 import { defaultRouteForProvider, findRoute, hasAllowedSourceExtension, providers, providerList, routesForProvider } from "@/lib/providers";
 import { getRfDetrCheckpointIdentity, inspectRfDetrCheckpoint } from "@/lib/tauri/rfdetr";
-import { createRfDetrTrust, getRfDetrMissingRuntimeMessage, getRfDetrPlusBlockReason, isRfDetrTrustValid, type RfDetrCheckpointIdentity, type RfDetrTrustedCheckpoint } from "./rfdetr-trust";
+import { getRfDetrPlusBlockReason, isRfDetrTrustValid, type RfDetrCheckpointIdentity, type RfDetrTrustedCheckpoint } from "./rfdetr-trust";
 import { cleanupManagedEnvironments } from "@/lib/tauri/managed-environments";
 import { useManagedEnvironmentInventory } from "./use-managed-environment-inventory";
 import { architectureMatters, type AppOS, type AppPlatform, getOS, incompatibleReason, isCompatible, UNKNOWN_ARCH } from "@/lib/platform";
@@ -657,32 +657,6 @@ export function getRfDetrExportImgszError(
   return validateRfDetrImgsz(imgsz, inspect?.required_multiple ?? null);
 }
 
-// Concise trust warning shown after RF-DETR upload. Only Cancel and Trust
-// checkpoint actions are offered; inspection never starts before explicit
-// trust and never depends on the Ultralytics runtime.
-export function RfDetrTrustPrompt({
-  onCancel,
-  onTrust,
-}: {
-  onCancel: () => void;
-  onTrust: () => void;
-}) {
-  return (
-    <div className="space-y-3">
-      <p className="font-medium">Trusted checkpoint required</p>
-      <p>Inspection loads local checkpoint data. Use checkpoints from trusted sources only.</p>
-      <div className="flex gap-2">
-        <Button size="sm" variant="outline" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button size="sm" onClick={onTrust}>
-          Trust checkpoint
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 type EnvCardStatus = "ok" | "error" | "loading";
 export type ProviderGroupStatus = "ready" | "partial" | "missing" | "loading" | "error";
 
@@ -1286,8 +1260,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   const [rfdetrManualClassSymbol, setRfDetrManualClassSymbol] = useState("");
   // Single reset point for session trust: selecting another file, changing
   // the trusted file, clearing, or switching providers all funnel here so
-  // the triplet cannot drift.
+  // the triplet cannot drift. Bumping the inspect generation retires any
+  // in-flight request, so a stale detection can never overwrite the reset.
   const resetRfDetrTrust = useCallback((status: RfDetrInspectStatus) => {
+    rfdetrInspectRequestRef.current += 1;
     setRfDetrTrust(null);
     setRfDetrLiveIdentity(null);
     setRfDetrInspectStatus(status);
@@ -1924,17 +1900,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Core export invocation — call only when deps are satisfied
   const doStartExport = async (missingDepCount: number, envOverride?: EnvironmentInfo) => {
     const activeEnv = envOverride ?? envInfo;
-    if (!sourcePath) return;
-    const missingRuntimeMessage = getRfDetrMissingRuntimeMessage(
-      selectedProviderId,
-      activeEnv?.python_path,
-    );
-    if (!activeEnv?.python_path) {
-      // Inspection and route browsing stay available without the Ultralytics
-      // runtime; export still needs its route stack (ticket 10 owns setup).
-      if (missingRuntimeMessage) setInvokeError(missingRuntimeMessage);
-      return;
-    }
+    if (!sourcePath || !activeEnv?.python_path) return;
     if (selectedProviderId === "ultralytics" && !activeEnv.yolo_path) {
       setInvokeError("YOLO CLI not found. Install the Ultralytics runtime or re-detect the environment.");
       return;
@@ -2047,17 +2013,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Export handler — gates on missing deps before starting
   const handleExport = async () => {
     if (blockOnSetupConflict(setInvokeError)) return;
-    if (cleanupBusy || !sourcePath || exportStatus === "running" || exportStatus === "starting") return;
-    const missingRuntimeMessage = getRfDetrMissingRuntimeMessage(
-      selectedProviderId,
-      envInfo?.python_path,
-    );
-    if (!envInfo?.python_path) {
-      // Inspection and route browsing stay available without the Ultralytics
-      // runtime; export still needs its route stack (ticket 10 owns setup).
-      if (missingRuntimeMessage) setInvokeError(missingRuntimeMessage);
-      return;
-    }
+    if (cleanupBusy || !sourcePath || !envInfo?.python_path || exportStatus === "running" || exportStatus === "starting") return;
     const incompatibleMessage = getIncompatibleExportMessage(
       selectedRoute,
       appPlatform.os,
@@ -2371,7 +2327,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     try {
       const identity = await getRfDetrCheckpointIdentity(sourcePath);
       if (rfdetrInspectRequestRef.current !== requestId) return;
-      trusted = createRfDetrTrust(sourcePath, identity);
+      trusted = { sourcePath, identity };
       setRfDetrTrust(trusted);
       setRfDetrLiveIdentity(identity);
     } catch (error) {
@@ -2996,7 +2952,18 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           {selectedProviderId === "rfdetr" && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
               {rfdetrInspectStatus === "needs_trust" && (
-                <RfDetrTrustPrompt onCancel={handleCancelRfDetrTrust} onTrust={() => void handleConfirmRfDetrTrust()} />
+                <div className="space-y-3">
+                  <p className="font-medium">Trusted checkpoint required</p>
+                  <p>Inspection loads local checkpoint data. Use checkpoints from trusted sources only.</p>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={handleCancelRfDetrTrust}>
+                      Cancel
+                    </Button>
+                    <Button size="sm" onClick={() => void handleConfirmRfDetrTrust()}>
+                      Trust checkpoint
+                    </Button>
+                  </div>
+                </div>
               )}
               {rfdetrInspectStatus === "inspecting" && <p>Inspecting RF-DETR checkpoint...</p>}
               {rfdetrInspectStatus === "detected" && rfdetrInspectResult && (

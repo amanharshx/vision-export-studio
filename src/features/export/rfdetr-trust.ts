@@ -12,19 +12,12 @@ export interface RfDetrTrustedCheckpoint {
 }
 
 /**
- * Binds explicit user trust to the current session and the selected file's
- * canonical identity, size, and modification state. Trust lives only in
- * memory: restarting the app drops it, selecting a different file replaces
- * it, and changing the trusted file invalidates it via `isRfDetrTrustValid`.
+ * Session-only trust bound to the selected file's canonical identity, size,
+ * and modification state. Trust lives only in memory: restarting the app
+ * drops it, selecting a different file replaces it, and changing the
+ * trusted file invalidates it. True only when the stored trust matches the
+ * current file identity.
  */
-export function createRfDetrTrust(
-  sourcePath: string,
-  identity: RfDetrCheckpointIdentity,
-): RfDetrTrustedCheckpoint {
-  return { sourcePath, identity: { ...identity } };
-}
-
-/** True only when the stored trust matches the current file identity. */
 export function isRfDetrTrustValid(
   trusted: RfDetrTrustedCheckpoint | null,
   sourcePath: string,
@@ -35,15 +28,6 @@ export function isRfDetrTrustValid(
   return trusted.identity.canonical_path === current.canonical_path
     && trusted.identity.len === current.len
     && trusted.identity.modified_ms === current.modified_ms;
-}
-
-/** Missing-runtime explanation for RF-DETR export without its stack. */
-export function getRfDetrMissingRuntimeMessage(
-  providerId: string,
-  pythonPath: string | null | undefined,
-): string | null {
-  if (providerId !== "rfdetr" || pythonPath) return null;
-  return "Set up a route environment before export.";
 }
 
 /**

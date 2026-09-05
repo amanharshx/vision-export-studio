@@ -1,11 +1,6 @@
 // @ts-expect-error Bun provides this module at test runtime.
 import { describe, expect, test } from "bun:test";
-import {
-  createRfDetrTrust,
-  getRfDetrMissingRuntimeMessage,
-  getRfDetrPlusBlockReason,
-  isRfDetrTrustValid,
-} from "./rfdetr-trust";
+import { getRfDetrPlusBlockReason, isRfDetrTrustValid } from "./rfdetr-trust";
 
 const identity = {
   canonical_path: "/tmp/model.pth",
@@ -15,24 +10,24 @@ const identity = {
 
 describe("rfdetr trust binding (ticket 09)", () => {
   test("trust is valid for the same file identity", () => {
-    const trusted = createRfDetrTrust("/tmp/model.pth", identity);
+    const trusted = { sourcePath: "/tmp/model.pth", identity };
     expect(isRfDetrTrustValid(trusted, "/tmp/model.pth", identity)).toBe(true);
   });
 
   test("selecting a different file resets trust", () => {
-    const trusted = createRfDetrTrust("/tmp/model.pth", identity);
+    const trusted = { sourcePath: "/tmp/model.pth", identity };
     expect(isRfDetrTrustValid(trusted, "/tmp/other.pth", identity)).toBe(false);
   });
 
   test("changing the trusted file content resets trust", () => {
-    const trusted = createRfDetrTrust("/tmp/model.pth", identity);
+    const trusted = { sourcePath: "/tmp/model.pth", identity };
     expect(
       isRfDetrTrustValid(trusted, "/tmp/model.pth", { ...identity, len: identity.len + 1 }),
     ).toBe(false);
   });
 
   test("changing the trusted file modification state resets trust", () => {
-    const trusted = createRfDetrTrust("/tmp/model.pth", identity);
+    const trusted = { sourcePath: "/tmp/model.pth", identity };
     expect(
       isRfDetrTrustValid(trusted, "/tmp/model.pth", {
         ...identity,
@@ -42,7 +37,7 @@ describe("rfdetr trust binding (ticket 09)", () => {
   });
 
   test("canonical identity mismatch resets trust", () => {
-    const trusted = createRfDetrTrust("/tmp/model.pth", identity);
+    const trusted = { sourcePath: "/tmp/model.pth", identity };
     expect(
       isRfDetrTrustValid(trusted, "/tmp/model.pth", {
         ...identity,
@@ -52,21 +47,13 @@ describe("rfdetr trust binding (ticket 09)", () => {
   });
 
   test("missing trust or current identity is invalid", () => {
-    const trusted = createRfDetrTrust("/tmp/model.pth", identity);
+    const trusted = { sourcePath: "/tmp/model.pth", identity };
     expect(isRfDetrTrustValid(null, "/tmp/model.pth", identity)).toBe(false);
     expect(isRfDetrTrustValid(trusted, "/tmp/model.pth", null)).toBe(false);
   });
 
   test("restart drops session trust (null initial state is invalid)", () => {
     expect(isRfDetrTrustValid(null, "/tmp/model.pth", identity)).toBe(false);
-  });
-
-  test("missing runtime explains route setup for rfdetr only", () => {
-    expect(getRfDetrMissingRuntimeMessage("rfdetr", null)).toBe(
-      "Set up a route environment before export.",
-    );
-    expect(getRfDetrMissingRuntimeMessage("rfdetr", "/tmp/python")).toBeNull();
-    expect(getRfDetrMissingRuntimeMessage("ultralytics", null)).toBeNull();
   });
 
   test("plus-only checkpoints stay blocked with the exact reason", () => {

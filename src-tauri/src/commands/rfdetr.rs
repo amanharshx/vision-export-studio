@@ -7,7 +7,7 @@ use tauri::Manager;
 use crate::commands::deps::probe;
 use crate::commands::provider_registry::{validate_source_extension, ProviderId};
 use crate::commands::setup::{load_settings, venv_python_at};
-use crate::commands::stack_environments::{known_stacks, stack_venv_dir_for_key};
+use crate::commands::stack_environments::{known_stacks, stack_venv_dir_if_usable};
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct RfDetrInspectResult {
@@ -110,8 +110,14 @@ pub(crate) fn resolve_inspection_stack(
             .iter()
             .find(|stack| stack.key == key)
             .ok_or_else(|| unknown_stack_error(key))?;
-        let venv = stack_venv_dir_for_key(runtime_dir, stack.key)
-            .ok_or_else(|| unknown_stack_error(key))?;
+        // Same eligibility as inventory: symlinked or missing roots are not
+        // app-owned stacks, even when the derived interpreter path exists.
+        let venv = stack_venv_dir_if_usable(runtime_dir, stack.key).ok_or_else(|| {
+            format!(
+                "RF-DETR stack '{}' is not ready for inspection. Set up the route environment before inspection.",
+                stack.key,
+            )
+        })?;
         let python = venv_python_at(&venv);
         if !Path::new(&python).exists() || !can_inspect(&python) {
             return Err(format!(
@@ -123,7 +129,7 @@ pub(crate) fn resolve_inspection_stack(
     }
     // Deterministic reuse: first healthy stack in known-stack order wins.
     for stack in known_stacks() {
-        let Some(venv) = stack_venv_dir_for_key(runtime_dir, stack.key) else {
+        let Some(venv) = stack_venv_dir_if_usable(runtime_dir, stack.key) else {
             continue;
         };
         let python = venv_python_at(&venv);
@@ -146,6 +152,22 @@ fn helper_path() -> Result<PathBuf, String> {
     Ok(Path::new(manifest_dir)
         .join("python")
         .join("rfdetr_export_helper.py"))
+}
+
+/// Copy the verified checkpoint to a stable snapshot so a replacement
+/// between verification and deserialization cannot swap the trusted bytes.
+/// Returns the snapshot file path and its parent directory (removed by the
+/// caller afterwards).
+pub(crate) fn snapshot_checkpoint_for_inspect(
+    checkpoint_path: &str,
+) -> Result<(PathBuf, PathBuf), String> {
+    let dir = std::env::temp_dir().join(format!("rfdetr-inspect-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("failed to create inspection snapshot dir: {}", e))?;
+    let snapshot = dir.join("checkpoint.pth");
+    std::fs::copy(checkpoint_path, &snapshot)
+        .map_err(|e| format!("failed to snapshot checkpoint for inspection: {}", e))?;
+    Ok((snapshot, dir))
 }
 
 fn parse_inspect_stdout(stdout: &[u8]) -> Result<RfDetrInspectResult, String> {
@@ -178,16 +200,18 @@ pub async fn inspect_rfdetr_checkpoint(
         ));
     }
     validate_source_extension(ProviderId::RfDetr, &checkpoint_path)?;
-    let current = checkpoint_identity_for_path(&checkpoint_path)?;
-    verify_trusted_identity(&current, trusted_identity.as_ref())?;
 
-    // Resolve inspection through a known app-owned RF-DETR stack. An
-    // arbitrary frontend-supplied interpreter is never used: only a known
-    // stack key (or deterministic auto-selection) can provide the Python.
+    // Resolve the slow capability probes first, then verify and snapshot the
+    // trusted bytes: the helper deserializes the snapshot, never the live
+    // path, so a replacement in between cannot swap what gets trusted.
     let settings = load_settings(app_handle.clone())?;
     let runtime_dir = Path::new(&settings.runtime_dir);
     let (_key, python_path) =
         resolve_inspection_stack(runtime_dir, stack_key.as_deref(), &stack_can_inspect)?;
+
+    let current = checkpoint_identity_for_path(&checkpoint_path)?;
+    verify_trusted_identity(&current, trusted_identity.as_ref())?;
+    let (snapshot, snapshot_dir) = snapshot_checkpoint_for_inspect(&checkpoint_path)?;
 
     let helper = app_handle
         .path()
@@ -200,11 +224,12 @@ pub async fn inspect_rfdetr_checkpoint(
         .arg(helper)
         .arg("inspect")
         .arg("--checkpoint")
-        .arg(&checkpoint_path)
+        .arg(&snapshot)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| format!("failed to run RF-DETR inspect helper: {}", e))?;
+        .output();
+    let _ = std::fs::remove_dir_all(&snapshot_dir);
+    let output = output.map_err(|e| format!("failed to run RF-DETR inspect helper: {}", e))?;
 
     let parsed = parse_inspect_stdout(&output.stdout)?;
     if output.status.success() || parsed.requires_plus || parsed.error.is_some() {
@@ -220,6 +245,7 @@ pub async fn inspect_rfdetr_checkpoint(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::stack_environments::stack_venv_dir_for_key;
 
     #[test]
     fn parses_inspect_json_from_last_json_line() {
@@ -421,5 +447,41 @@ mod tests {
             );
         }
         let _ = std::fs::remove_dir_all(&runtime);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_stack_venv_is_not_eligible_for_inspection() {
+        use std::os::unix::fs::symlink;
+        let runtime = temp_runtime();
+        // A real interpreter outside the app-owned tree, linked in as the
+        // stack venv: inventory lists only non-symlink directories, and
+        // inspection must apply the same rule instead of executing it.
+        let outside = std::env::temp_dir().join(format!("rfdetr-outside-{}", uuid::Uuid::new_v4()));
+        let outside_python = outside.join("bin").join("python");
+        std::fs::create_dir_all(outside_python.parent().unwrap()).unwrap();
+        std::fs::write(&outside_python, b"python").unwrap();
+        let venv = stack_venv_dir_for_key(&runtime, "rfdetr-default").expect("known stack");
+        std::fs::create_dir_all(venv.parent().unwrap()).unwrap();
+        symlink(&outside, &venv).unwrap();
+        let can_inspect = |_: &str| true;
+
+        assert!(resolve_inspection_stack(&runtime, None, &can_inspect).is_err());
+        let error =
+            resolve_inspection_stack(&runtime, Some("rfdetr-default"), &can_inspect).unwrap_err();
+        assert!(error.contains("not ready for inspection"));
+        std::fs::remove_dir_all(&runtime).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
+    }
+
+    #[test]
+    fn inspect_snapshot_copies_verified_bytes_to_stable_path() {
+        let path = temp_checkpoint("snap.pth", b"weights-snapshot");
+        let (snapshot, dir) = snapshot_checkpoint_for_inspect(path.to_str().unwrap()).unwrap();
+        assert_ne!(snapshot, path);
+        assert_eq!(snapshot.extension().and_then(|e| e.to_str()), Some("pth"));
+        assert_eq!(std::fs::read(&snapshot).unwrap(), b"weights-snapshot");
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_file(&path).unwrap();
     }
 }
