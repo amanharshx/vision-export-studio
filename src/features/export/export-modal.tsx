@@ -366,7 +366,7 @@ export function ExportModal({
                 <DialogTitle className="text-lg">
                   Export to {route.title}
                 </DialogTitle>
-                <HostSupportBadge result={hostSupportResult} />
+                {!setupMode && <HostSupportBadge result={hostSupportResult} />}
               </div>
               <p className="font-mono text-xs text-zinc-400">
                 format={route.targetFormat}{route.backend ? ` · backend=${route.backend}` : ""}
@@ -396,7 +396,11 @@ export function ExportModal({
         {/* Scrollable body */}
         <div className="flex-1 min-h-0 overflow-y-auto">
           <div className="space-y-6 px-6 py-5">
-            {/* Dependencies — always visible */}
+            {/* Dependencies — hidden for hard platform blocks: the backend
+                short-circuits those to a single platform row repeating the
+                header reason, and nothing there is actionable while setup
+                stays disabled. Manual requirements stay visible. */}
+            {!(setupMode && ultralyticsSetup && ultralyticsSetup.status === "unavailable") && (
             <div>
               <p className="mb-2 text-sm font-medium text-zinc-700">
                 Dependencies
@@ -412,6 +416,7 @@ export function ExportModal({
                 onManagedRuntimeUpgrade={onManagedRuntimeUpgrade}
               />
             </div>
+            )}
 
             {/* Route-owned setup status (setup-only mode hides export controls) */}
             {setupMode && ultralyticsSetup && (
