@@ -32,7 +32,7 @@ const MIN_RFDETR_EXECUTORCH_TORCH_VERSION: &str = "2.13";
 
 /// Minimum Ultralytics version required by a route. None for non-Ultralytics routes.
 fn minimum_ultralytics_version(route_id: &str) -> Option<&'static str> {
-    if !route_id.starts_with("ultralytics.") {
+    if !is_ultralytics_route(route_id) {
         return None;
     }
     if route_id == "ultralytics.pt.litert" {
@@ -1095,7 +1095,7 @@ fn check_dependencies_for_runtime(
     let mut results: Vec<DepCheckResult> = Vec::new();
 
     // Check ultralytics only for Ultralytics routes.
-    if route_id.starts_with("ultralytics.") {
+    if is_ultralytics_route(route_id) {
         let required = minimum_ultralytics_version(route_id)
             .expect("ultralytics routes always declare a minimum version");
         results.push(check_ultralytics_dep(&dependency_python, required));
@@ -1203,6 +1203,52 @@ fn missing_stack_results_if_absent(
 // ---------------------------------------------------------------------------
 // Ultralytics managed environment on-demand creation (ticket 07)
 // ---------------------------------------------------------------------------
+
+/// True for the shared-environment Ultralytics routes (ticket 08). RF-DETR
+/// routes resolve to isolated stack interpreters instead.
+pub(crate) fn is_ultralytics_route(route_id: &str) -> bool {
+    route_id.starts_with("ultralytics.")
+}
+
+/// Resolve the install target for the shared Ultralytics environment: install
+/// only into the app-owned managed interpreter — never into the bootstrap or
+/// saved-override interpreter (a chosen Python is bootstrap-only). A healthy
+/// managed environment installs in place even when the saved override is
+/// invalid or missing, because the override is only consulted when a repair
+/// or creation actually needs a bootstrap. Used by both the provider-wide
+/// setup (route_id = None) and route-scoped Ultralytics installs so the two
+/// entry points cannot disagree on where packages land.
+fn resolve_ultralytics_install_python(
+    passed_python: &str,
+    runtime_root: &str,
+    settings_override: Option<&str>,
+) -> Result<String, String> {
+    match ensure_ultralytics_managed_environment(passed_python, runtime_root) {
+        Ok(python) => Ok(python),
+        Err(_) => {
+            // The passed interpreter may itself be the broken managed
+            // one: resolve a vetted bootstrap authoritatively from
+            // settings and retry the repair once, in place.
+            let override_opt = settings_override.filter(|path| !path.trim().is_empty());
+            match resolve_bootstrap_for_runtime(
+                DEFAULT_SETUP_ROUTE_ID,
+                override_opt,
+                Path::new(runtime_root),
+            ) {
+                BootstrapPythonResult::Available { python_path, .. } => {
+                    ensure_ultralytics_managed_environment(&python_path, runtime_root)
+                }
+                BootstrapPythonResult::Missing {
+                    requirement,
+                    reason,
+                    ..
+                } => Err(format!("Python required ({requirement}): {reason}")),
+                BootstrapPythonResult::InvalidOverride { reason, .. }
+                | BootstrapPythonResult::Error { reason } => Err(reason),
+            }
+        }
+    }
+}
 
 /// True when the interpreter runs AND pip works: installs can proceed in
 /// place. Shared by the readiness query command and the install command, so
@@ -1410,12 +1456,21 @@ fn check_pip_dep(
                     prerelease: None,
                 }
             } else {
+                // Probed distributions whose declared install remedy is a
+                // different spec install via that remedy (e.g. the probed
+                // `axelera` import installs via `axelera-devkit`, the LiteRT
+                // imports via `ultralytics[export-litert]`).
+                let install_spec = match package_name {
+                    "axelera" => "axelera-devkit",
+                    "litert-torch>=0.9.0" | "ai-edge-litert>=2.1.4" => "ultralytics[export-litert]",
+                    _ => package_name,
+                };
                 DepCheckResult {
                     item: package_name.to_string(),
                     status: "missing_package".to_string(),
                     reason: format!("importlib.util.find_spec('{}') returned False", imp),
                     install_hint: install_hint.to_string(),
-                    install_package: Some(package_name.to_string()),
+                    install_package: Some(install_spec.to_string()),
                     prerelease: None,
                 }
             }
@@ -1549,6 +1604,18 @@ pub async fn install_dependencies(
                 }
             }
             stack_python
+        } else if is_ultralytics_route(route_id) {
+            // Route-scoped Ultralytics setup (ticket 08): the shared
+            // environment may not exist yet, so resolve through the same
+            // managed-ensure path as the provider-wide setup instead of
+            // installing into the passed (bootstrap) interpreter.
+            let install_python = resolve_ultralytics_install_python(
+                &python_path,
+                &runtime_root,
+                settings.python_path_override.as_deref(),
+            );
+            managed_environments.invalidate(Path::new(&runtime_root), [invalidation_key.as_str()]);
+            install_python?
         } else {
             python_path.clone()
         }
@@ -1564,35 +1631,11 @@ pub async fn install_dependencies(
         // mutation, so inventory is invalidated on every path below,
         // including failures; the post-pip thread invalidates again after
         // install either way.
-        let install_python =
-            match ensure_ultralytics_managed_environment(&python_path, &runtime_root) {
-                Ok(python) => Ok(python),
-                Err(_) => {
-                    // The passed interpreter may itself be the broken managed
-                    // one: resolve a vetted bootstrap authoritatively from
-                    // settings and retry the repair once, in place.
-                    let override_opt = settings
-                        .python_path_override
-                        .as_deref()
-                        .filter(|path| !path.trim().is_empty());
-                    match resolve_bootstrap_for_runtime(
-                        DEFAULT_SETUP_ROUTE_ID,
-                        override_opt,
-                        Path::new(&runtime_root),
-                    ) {
-                        BootstrapPythonResult::Available { python_path, .. } => {
-                            ensure_ultralytics_managed_environment(&python_path, &runtime_root)
-                        }
-                        BootstrapPythonResult::Missing {
-                            requirement,
-                            reason,
-                            ..
-                        } => Err(format!("Python required ({requirement}): {reason}")),
-                        BootstrapPythonResult::InvalidOverride { reason, .. }
-                        | BootstrapPythonResult::Error { reason } => Err(reason),
-                    }
-                }
-            };
+        let install_python = resolve_ultralytics_install_python(
+            &python_path,
+            &runtime_root,
+            settings.python_path_override.as_deref(),
+        );
         managed_environments.invalidate(Path::new(&runtime_root), [invalidation_key.as_str()]);
         install_python?
     };
@@ -1890,6 +1933,45 @@ mod tests {
         assert!(validate_package_name("litert-torch>=0.9.0").is_ok());
         assert!(validate_package_name("ai-edge-litert>=2.1.4").is_ok());
         assert!(validate_package_name("--pre").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_axelera_reports_declared_remedy_for_install() {
+        let root = std::env::temp_dir().join(format!("ultralytics-remedy-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let python = root.join("python");
+        write_python_stub(&python, true);
+        let python_str = python.to_str().expect("python path");
+
+        let result = check_pip_dep(python_str, "axelera", "pip install axelera-devkit", false);
+        assert_eq!(result.status, "missing_package");
+        assert_eq!(result.install_package.as_deref(), Some("axelera-devkit"));
+        assert!(validate_package_name(result.install_package.as_deref().unwrap()).is_ok());
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_litert_reports_export_extra_for_install() {
+        let root = std::env::temp_dir().join(format!("ultralytics-remedy-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let python = root.join("python");
+        write_python_stub(&python, true);
+        let python_str = python.to_str().expect("python path");
+
+        let result = check_pip_dep(
+            python_str,
+            "litert-torch>=0.9.0",
+            "pip install \"ultralytics[export-litert]\"",
+            false,
+        );
+        assert_eq!(result.status, "missing_package");
+        assert_eq!(
+            result.install_package.as_deref(),
+            Some("ultralytics[export-litert]")
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
     }
 
     #[test]
@@ -2932,6 +3014,127 @@ mod tests {
         assert!(
             venv_dir.join("keep.txt").exists(),
             "retry preserves partial environment files"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn ultralytics_route_predicate_scopes_shared_environment() {
+        assert!(is_ultralytics_route("ultralytics.pt.onnx"));
+        assert!(is_ultralytics_route("ultralytics.pt.engine"));
+        assert!(!is_ultralytics_route("rfdetr.pth.onnx"));
+        assert!(!is_ultralytics_route(""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ultralytics_route_install_reuses_healthy_managed() {
+        // First-route setup when the shared environment already exists, and
+        // incremental second-route setup, both install in place: an invalid
+        // saved override is ignored because no bootstrap work is needed.
+        let root = std::env::temp_dir().join(format!("ultralytics-route-reuse-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let managed_string = venv_python(&runtime);
+        let managed_path = Path::new(&managed_string);
+        std::fs::create_dir_all(managed_path.parent().unwrap()).expect("create managed parent");
+        write_python_stub(managed_path, true);
+
+        let reused = resolve_ultralytics_install_python(
+            "/missing/override-python",
+            &runtime,
+            Some("/missing/override-python"),
+        )
+        .expect("healthy environment installs in place");
+        assert_eq!(reused, venv_python(&runtime));
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ultralytics_route_install_creates_shared_environment_from_bootstrap() {
+        // First-route setup with no managed environment creates `.venv` from
+        // the bootstrap interpreter, never installing into the bootstrap.
+        let root =
+            std::env::temp_dir().join(format!("ultralytics-route-create-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        let bootstrap = root.join("bootstrap-python");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let template = root.join("working-template");
+        write_python_stub(&template, true);
+        write_venv_bootstrap(&bootstrap, Some(&template));
+        let bootstrap_str = bootstrap.to_string_lossy().into_owned();
+
+        let managed = resolve_ultralytics_install_python(&bootstrap_str, &runtime, None)
+            .expect("route setup creates the shared environment");
+        assert_eq!(managed, venv_python(&runtime));
+        assert_ne!(managed, bootstrap_str);
+        assert!(Path::new(&managed).exists(), "managed python created");
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ultralytics_route_install_repairs_broken_managed_in_place() {
+        // Retry after a failed setup continues in the same directory: a
+        // present-but-broken managed interpreter is repaired from the
+        // bootstrap instead of installing into it.
+        let root =
+            std::env::temp_dir().join(format!("ultralytics-route-repair-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        let bootstrap = root.join("bootstrap-python");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let template = root.join("working-template");
+        write_python_stub(&template, true);
+        write_venv_bootstrap(&bootstrap, Some(&template));
+        let managed_string = venv_python(&runtime);
+        let managed_path = Path::new(&managed_string);
+        std::fs::create_dir_all(managed_path.parent().unwrap()).expect("create managed parent");
+        write_python_stub(managed_path, false);
+
+        let repaired = resolve_ultralytics_install_python(
+            bootstrap.to_str().expect("bootstrap path"),
+            &runtime,
+            None,
+        )
+        .expect("broken managed environment is repaired in place");
+        assert_eq!(repaired, venv_python(&runtime));
+        assert_eq!(
+            std::fs::read(managed_path).expect("read managed"),
+            std::fs::read(&template).expect("read template"),
+            "broken interpreter is replaced by the repaired one"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ultralytics_route_check_reports_missing_despite_present_interpreter() {
+        // Shared-environment readiness (ticket 08): a present interpreter
+        // alone never marks a route ready. Route packages missing from it
+        // still report missing_package with installable remedies.
+        let root = std::env::temp_dir().join(format!("ultralytics-route-check-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let python = root.join("python");
+        write_python_stub(&python, true);
+        let python_str = python.to_str().expect("python path");
+
+        let response = check_dependencies_for_runtime("ultralytics.pt.onnx", python_str, None)
+            .expect("route check runs against the present interpreter");
+        let missing: Vec<&str> = response
+            .results
+            .iter()
+            .filter(|row| row.status == "missing_package")
+            .map(|row| row.item.as_str())
+            .collect();
+        assert!(missing.contains(&"ultralytics"));
+        assert!(missing.contains(&"onnx"));
+        assert!(
+            response
+                .results
+                .iter()
+                .all(|row| row.install_package.is_some() || row.status == "warning"),
+            "missing route packages stay installable"
         );
         std::fs::remove_dir_all(root).expect("remove temp root");
     }

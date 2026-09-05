@@ -8,7 +8,6 @@ import {
   getRfDetrExportImgszError,
   applyDetectedRouteOptions,
   applyDetectedRouteOptionsToProviderRoutes,
-  getUltralyticsRuntimeDisabledReason,
 } from "@/features/export/export-workspace";
 import type { RfDetrInspectResult, RouteOptionsState } from "@/lib/types";
 
@@ -494,17 +493,5 @@ describe("getRfDetrExportImgszError", () => {
 
   test("ignores RF-DETR rules for other providers", () => {
     expect(getRfDetrExportImgszError("ultralytics", 500, rfdInspect512)).toBeNull();
-  });
-});
-
-describe("getUltralyticsRuntimeDisabledReason", () => {
-  test("suppresses disabled tooltip while ultralytics runtime is installing", () => {
-    expect(getUltralyticsRuntimeDisabledReason("installing")).toBeUndefined();
-  });
-
-  test("shows disabled tooltip before ultralytics runtime install starts", () => {
-    expect(getUltralyticsRuntimeDisabledReason("idle")).toBe(
-      "Install the Ultralytics runtime before choosing a YOLO export target.",
-    );
   });
 });

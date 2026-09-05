@@ -11,13 +11,15 @@ import {
   getIncompatibleExportMessage,
   getManagedRuntimeRebuildFailureMessage,
   getManagedRuntimeUpgradeNudge,
+  getSetupInstallPackages,
   ManagedRuntimeUpgradeDialogBody,
   mayStartManagedRuntimeUpgrade,
   mayActivateRoute,
   refreshStackEnvironments,
 } from "./export-workspace";
 import { SETUP_CONFLICT_MESSAGE } from "@/features/setup/setup-task";
-import { findRoute } from "@/lib/providers";
+import { emptyRouteDepCheck, type RouteDepCheck } from "./ultralytics-route-setup";
+import { findRoute, providers, routesForProvider } from "@/lib/providers";
 import type { DepCheckResult, EnvironmentInfo, ExportStatus, InstallPhase, StackEnvironment } from "@/lib/types";
 
 describe("getInstallableMissingPackages", () => {
@@ -131,8 +133,68 @@ describe("getInstallableMissingPackages", () => {
   });
 });
 
-describe("runtime operation UI guards", () => {
-  const unchanged = {
+describe("getSetupInstallPackages", () => {
+  const managedPython = "/tmp/runtime/.venv/bin/python";
+  const onnxRoute = routesForProvider("ultralytics").find((item) => item.id === "ultralytics.pt.onnx")!;
+  // Saved override sees ONNX but not Ultralytics; the managed env is absent.
+  const overridePartial: RouteDepCheck = {
+    results: [
+      { item: "ultralytics", status: "missing_package", reason: "missing", install_hint: "pip install ultralytics", install_package: "ultralytics>=8.4.80" },
+      { item: "onnx", status: "ready", reason: "", install_hint: "pip install onnx" },
+    ],
+    routeId: onnxRoute.id,
+    error: null,
+    pythonPath: "/override/python",
+  };
+
+  test("absent managed environment installs the full route fallback, not the override's view", () => {
+    expect(getSetupInstallPackages(providers.ultralytics, onnxRoute, overridePartial, {
+      needsWork: true,
+      pythonPath: managedPython,
+    })).toEqual([
+      { package: "ultralytics", prerelease: false },
+      { package: "onnx", prerelease: false },
+    ]);
+  });
+
+  test("existing managed environment installs only what its own check reports missing", () => {
+    const managedCheck: RouteDepCheck = {
+      results: [
+        { item: "ultralytics", status: "ready", reason: "", install_hint: "pip install ultralytics" },
+        { item: "onnx", status: "missing_package", reason: "missing", install_hint: "pip install onnx", install_package: "onnx" },
+      ],
+      routeId: onnxRoute.id,
+      error: null,
+      pythonPath: managedPython,
+    };
+    expect(getSetupInstallPackages(providers.ultralytics, onnxRoute, managedCheck, {
+      needsWork: false,
+      pythonPath: managedPython,
+    })).toEqual([{ package: "onnx", prerelease: false }]);
+  });
+
+  test("a check against another interpreter falls back to the full route", () => {
+    expect(getSetupInstallPackages(providers.ultralytics, onnxRoute, overridePartial, {
+      needsWork: false,
+      pythonPath: managedPython,
+    })).toEqual([
+      { package: "ultralytics", prerelease: false },
+      { package: "onnx", prerelease: false },
+    ]);
+  });
+
+  test("no check for the route falls back to the full route", () => {
+    expect(getSetupInstallPackages(providers.ultralytics, onnxRoute, emptyRouteDepCheck(), {
+      needsWork: false,
+      pythonPath: managedPython,
+    })).toEqual([
+      { package: "ultralytics", prerelease: false },
+      { package: "onnx", prerelease: false },
+    ]);
+  });
+});
+
+describe("runtime operation UI guards", () => {  const unchanged = {
     selectedRouteId: "ultralytics.pt.onnx",
     logLines: ["export output"],
     exportStatus: "running" as ExportStatus,
