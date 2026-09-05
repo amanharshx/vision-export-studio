@@ -264,6 +264,10 @@ export interface RuntimeInstallRequest extends SetupTaskInput {
   // Managed interpreter to verify after install when the bootstrap Python
   // differs (on-demand creation). Defaults to pythonPath.
   verifyPythonPath?: string;
+  // Runs inside the setup lifecycle after verification, before the task
+  // succeeds; a throw fails the task so persistence failure cannot coexist
+  // with success. Recreate marks setup complete here.
+  finalize?: () => Promise<unknown>;
 }
 
 export interface InstallEventDeps {
@@ -622,6 +626,17 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
           "Ultralytics runtime install finished, but YOLO CLI was still not detected.";
         failActiveTask(message);
         return { ok: false, error: message };
+      }
+      if (request.finalize) {
+        try {
+          await request.finalize();
+        } catch (error) {
+          const message = String(error);
+          failActiveTask(message);
+          return { ok: false, error: message };
+        }
+        const afterFinalize = task;
+        if (!afterFinalize || afterFinalize.status !== "active") return outcome;
       }
       setTask({
         ...afterVerify,

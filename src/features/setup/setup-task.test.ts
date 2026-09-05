@@ -205,6 +205,49 @@ describe("on-demand ultralytics creation", () => {
     expect(isSetupTaskVisible(failed)).toBe(true);
     expect(canDismissSetupTask(failed)).toBe(true);
   });
+
+  test("finalize runs after verification and before success", async () => {
+    const order: string[] = [];
+    const { deps, handlers } = createFakeDeps();
+    const tracingDeps: InstallStreamDeps = {
+      ...deps,
+      verifyEnvironment: async (pythonPath) => {
+        order.push("verify");
+        return deps.verifyEnvironment(pythonPath);
+      },
+    };
+    const owner = createSetupTaskOwner(tracingDeps);
+    const promise = owner.startRuntimeInstall({
+      ...request,
+      finalize: async () => {
+        order.push("finalize");
+      },
+    });
+    await waitForSession(owner);
+    fire(handlers, "install:finished", { session_id: "session-1" });
+    expect(await promise).toEqual({ ok: true });
+    expect(order).toEqual(["verify", "finalize"]);
+    expect(owner.getState()!.phase).toBe("ready");
+    expect(owner.getState()!.status).toBe("succeeded");
+  });
+
+  test("finalize failure fails the task instead of reporting success", async () => {
+    const { deps, handlers } = createFakeDeps();
+    const owner = createSetupTaskOwner(deps);
+    const promise = owner.startRuntimeInstall({
+      ...request,
+      finalize: async () => {
+        throw new Error("settings save failed");
+      },
+    });
+    await waitForSession(owner);
+    fire(handlers, "install:finished", { session_id: "session-1" });
+    expect(await promise).toEqual({ ok: false, error: "Error: settings save failed" });
+    const failed = owner.getState()!;
+    expect(failed.phase).toBe("failed");
+    expect(failed.status).toBe("failed");
+    expect(failed.error).toBe("Error: settings save failed");
+  });
 });
 
 describe("setup task event pipeline", () => {

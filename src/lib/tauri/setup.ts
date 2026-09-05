@@ -11,6 +11,15 @@ export function loadSettings(): Promise<AppSettings> {
   return invoke<AppSettings>("load_settings");
 }
 
+export interface UltralyticsSetupReadiness {
+  managed_python: string;
+  needs_work: boolean;
+}
+
+export function ultralyticsSetupReadiness(): Promise<UltralyticsSetupReadiness> {
+  return invoke<UltralyticsSetupReadiness>("ultralytics_setup_readiness");
+}
+
 export function createRuntimeVenv(runtimeDir: string): Promise<string> {
   return invoke<string>("create_runtime_venv", { runtimeDir });
 }

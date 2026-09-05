@@ -65,8 +65,9 @@ import {
   rebuildManagedRuntime,
   savePythonOverride,
   saveOutputDirOverride,
+  ultralyticsSetupReadiness,
 } from "@/lib/tauri/setup";
-import type { ManagedRuntimeRebuildEligibility } from "@/lib/tauri/setup";
+import type { ManagedRuntimeRebuildEligibility, UltralyticsSetupReadiness } from "@/lib/tauri/setup";
 import { openPythonExecutablePicker, openOutputDirPicker } from "@/lib/tauri/dialog";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import {
@@ -99,20 +100,11 @@ interface InstallUltralyticsOptions {
   /** Skip the cleanup-busy guard. Only Recreate sets this: it sequences its
    * own cleanup before installing, so the flag it holds is stale by design. */
   ignoreCleanupBusy?: boolean;
-  /** Runs after a successful install; a throw fails the install result.
-   * Recreate marks setup complete here so the completion survives a
+  /** Runs inside the setup lifecycle after verification, before the task
+   * succeeds; a throw fails the task so persistence failure cannot coexist
+   * with success. Recreate marks setup complete here, which also survives a
    * Python-required dialog round-trip (the pending retry keeps these opts). */
-  onInstalled?: () => Promise<unknown>;
-}
-
-interface InstallUltralyticsOptions {
-  /** Skip the cleanup-busy guard. Only Recreate sets this: it sequences its
-   * own cleanup before installing, so the flag it holds is stale by design. */
-  ignoreCleanupBusy?: boolean;
-  /** Runs after a successful install; a throw fails the install result.
-   * Recreate marks setup complete here so the completion survives a
-   * Python-required dialog round-trip (the pending retry keeps these opts). */
-  onInstalled?: () => Promise<unknown>;
+  finalize?: () => Promise<unknown>;
 }
 
 export function getManagedRuntimeUpgradeNudge(
@@ -1584,14 +1576,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     // environment on terminal. It never touches sourcePath (loaded model),
     // export options, output-dir/Python overrides (the saved override value
     // is preserved; installs never go into it), or RF-DETR stacks.
-    // Interpreter readiness is checked first through the environment owner:
-    // an explicit probe of the managed interpreter bypasses any saved
-    // override, so Retry on a healthy managed environment never opens the
-    // Python dialog for an unrelated invalid override. Only when the managed
-    // interpreter itself is unusable is a bootstrap required (saved override
-    // preferred automatically, Python-required dialog on missing), and the
-    // backend creates the isolated `.venv` from it. Packages never go into
-    // the bootstrap interpreter either way.
+    // Readiness comes from the backend-owned query command (same predicate
+    // the install enforces: interpreter runs AND pip works), so a healthy
+    // managed environment installs in place without ever consulting the
+    // saved override — Retry never opens the Python dialog for an unrelated
+    // invalid override. Only when work is actually needed is a bootstrap
+    // required (saved override preferred automatically, Python-required
+    // dialog on missing), and the backend creates the isolated `.venv` from
+    // it. Packages never go into the bootstrap interpreter either way.
     // Reuse and creation converge below on one install/error-refresh path:
     // the branches only build the request, never duplicate the install.
     setDepCheckLoading(true);
@@ -1612,23 +1604,16 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       ) {
         dismissTask();
       }
-      let managedPythonPath: string;
+      let readiness: UltralyticsSetupReadiness;
       try {
-        const settings = await loadSettings();
-        managedPythonPath = getManagedPythonPath(settings.runtime_dir);
+        readiness = await ultralyticsSetupReadiness();
       } catch (error) {
         setDepCheckError(String(error));
         return false;
       }
+      const managedPythonPath = readiness.managed_python;
       let request: RuntimeInstallRequest;
-      let managedUsable = false;
-      try {
-        await detectEnvironment(managedPythonPath);
-        managedUsable = true;
-      } catch {
-        managedUsable = false;
-      }
-      if (managedUsable) {
+      if (!readiness.needs_work) {
         request = {
           provider: "ultralytics",
           routeId: null,
@@ -1670,6 +1655,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           pythonPath: bootstrap.python_path,
           verifyPythonPath: managedPythonPath,
           createsEnvironment: true,
+          finalize: opts?.finalize,
           summary: "Creating Ultralytics environment…",
         };
       }
@@ -1682,13 +1668,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       const result = await startRuntimeInstall(request);
       if (!result.ok) {
         return failInstall(result.error);
-      }
-      if (opts?.onInstalled) {
-        try {
-          await opts.onInstalled();
-        } catch (error) {
-          return failInstall(String(error));
-        }
       }
       return true;
     } catch (error) {
@@ -1739,11 +1718,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       setEnvInfo(null);
       // The install runs with an explicit continuation: it skips the
       // cleanup-busy guard this flow holds itself, and marks setup complete
-      // on success — including after a dialog round-trip, whose pending
-      // retry keeps these same opts.
+      // inside the setup lifecycle — including after a dialog round-trip,
+      // whose pending retry keeps these same opts.
       await handleInstallUltralyticsRuntimeRef.current({
         ignoreCleanupBusy: true,
-        onInstalled: async () => {
+        finalize: async () => {
           const settings = await loadSettings();
           await markSetupComplete(settings.runtime_dir);
         },

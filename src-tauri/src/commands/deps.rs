@@ -1204,29 +1204,35 @@ fn missing_stack_results_if_absent(
 // Ultralytics managed environment on-demand creation (ticket 07)
 // ---------------------------------------------------------------------------
 
+/// True when the interpreter runs AND pip works: installs can proceed in
+/// place. Shared by the readiness query command and the install command, so
+/// the displayed initial phase and the performed work cannot disagree: a
+/// present-but-broken interpreter counts as missing in both places.
+fn managed_python_usable(python: &str) -> bool {
+    if probe_python_version(python).is_err() {
+        return false;
+    }
+    Command::new(python)
+        .args(["-m", "pip", "--version"])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
 /// Ensure the app-owned Ultralytics environment is usable, creating or
 /// repairing it from the given bootstrap interpreter when it is not.
 ///
-/// Usable means the interpreter runs AND pip works: a present-but-broken
-/// interpreter would otherwise reinstall into a broken env forever, so it is
-/// repaired in place by re-running `python -m venv` (which keeps existing
-/// files). The bootstrap interpreter only runs `python -m venv`; packages
-/// are never installed into it. A partially created environment is preserved
-/// on failure so Retry can continue in the same directory and the UI can
-/// label it `Setup incomplete`.
+/// A present-but-broken interpreter (or a missing one) is repaired in place
+/// by re-running `python -m venv`, which keeps existing files. The bootstrap
+/// interpreter only runs `python -m venv`; packages are never installed into
+/// it. A partially created environment is preserved on failure so Retry can
+/// continue in the same directory and the UI can label it `Setup incomplete`.
 fn ensure_ultralytics_managed_environment(
     bootstrap_python: &str,
     runtime_root: &str,
 ) -> Result<String, String> {
     let managed_python = venv_python(runtime_root);
-    let pip_works = |python: &str| {
-        Command::new(python)
-            .args(["-m", "pip", "--version"])
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false)
-    };
-    if probe_python_version(&managed_python).is_ok() && pip_works(&managed_python) {
+    if managed_python_usable(&managed_python) {
         return Ok(managed_python);
     }
     // Backend safety outside the UI: refuse to run venv creation from a
@@ -1246,22 +1252,38 @@ fn ensure_ultralytics_managed_environment(
             status.code()
         ));
     }
-    // A "successful" venv without a working interpreter and pip must not
+    // A "successful" venv without a usable interpreter and pip must not
     // proceed to pip: keep the partial directory for Retry/Setup incomplete
     // and fail here.
-    if !Path::new(&managed_python).exists() {
+    if !managed_python_usable(&managed_python) {
         return Err(
-            "failed to create Ultralytics environment: managed Python still missing after creation"
-                .to_string(),
-        );
-    }
-    if !pip_works(&managed_python) {
-        return Err(
-            "failed to create Ultralytics environment: managed pip still unusable after creation"
+            "failed to create Ultralytics environment: managed interpreter still unusable after creation"
                 .to_string(),
         );
     }
     Ok(managed_python)
+}
+
+#[derive(serde::Serialize)]
+pub struct UltralyticsSetupReadiness {
+    pub managed_python: String,
+    pub needs_work: bool,
+}
+
+/// Backend-owned Ultralytics readiness for the provider-wide setup: reports
+/// the same predicate the install command enforces, so the UI picks the
+/// honest initial phase (creating vs installing) without maintaining a
+/// parallel readiness policy.
+#[tauri::command]
+pub async fn ultralytics_setup_readiness(
+    app_handle: tauri::AppHandle,
+) -> Result<UltralyticsSetupReadiness, String> {
+    let runtime_root = load_settings(app_handle)?.runtime_dir;
+    let managed_python = venv_python(&runtime_root);
+    Ok(UltralyticsSetupReadiness {
+        needs_work: !managed_python_usable(&managed_python),
+        managed_python,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -2460,6 +2482,31 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn managed_python_usability_requires_running_interpreter_and_pip() {
+        // The shared readiness predicate behind both the readiness query
+        // command and the install command: present-but-broken counts as
+        // missing in both places.
+        let root = std::env::temp_dir().join(format!("ultralytics-usable-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let working = root.join("working-python");
+        let broken_pip = root.join("broken-pip-python");
+        write_python_stub(&working, true);
+        write_python_stub(&broken_pip, false);
+
+        assert!(managed_python_usable(
+            working.to_str().expect("working path")
+        ));
+        assert!(!managed_python_usable(
+            broken_pip.to_str().expect("broken path")
+        ));
+        assert!(!managed_python_usable(
+            root.join("missing-python").to_str().expect("missing path")
+        ));
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn ultralytics_missing_managed_creates_from_bootstrap_only() {
         let root = std::env::temp_dir().join(format!("ultralytics-create-{}", Uuid::new_v4()));
         let runtime = root.join("runtime").to_string_lossy().into_owned();
@@ -2601,7 +2648,7 @@ mod tests {
         )
         .expect_err("unusable pip after creation errors");
         assert!(
-            error.contains("pip still unusable"),
+            error.contains("still unusable"),
             "unexpected error: {error}"
         );
         assert!(
