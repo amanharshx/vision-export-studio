@@ -926,4 +926,81 @@ describe("python-required pending setup (ticket 06)", () => {
     expect(owner.getPythonGate().dialogOpen).toBe(true);
     expect(owner.getPythonGate().choiceError).toContain("settings file is corrupt");
   });
+
+  test("canceled queued choose performs no write while the live save reconciles", async () => {
+    const savingA = deferred<void>();
+    const startedA = deferred<void>();
+    let runsA = 0;
+    let runsB = 0;
+    const { owner, gateDeps, saves, stored } = createPythonHarness({
+      initialOverride: "/original",
+      beforeSave: async (path) => {
+        if (path === "/a") {
+          startedA.resolve();
+          await savingA.promise;
+        }
+      },
+    });
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), async () => {
+      runsA += 1;
+    });
+    const liveSave = owner.choosePythonForSetup(gateDeps, "/a");
+    await startedA.promise;
+
+    // B queues behind A's in-flight unit, then is canceled before acquiring.
+    owner.requirePythonForSetup("rfdetr.pth.tflite", missingResult("Python 3.12"), async () => {
+      runsB += 1;
+    });
+    const queuedStale = owner.choosePythonForSetup(gateDeps, "/b");
+    owner.cancelPythonGate();
+    savingA.resolve();
+    await liveSave;
+    await queuedStale;
+
+    expect(saves).toEqual(["/a", "/original"]);
+    expect(stored()).toBe("/original");
+    expect(runsA).toBe(0);
+    expect(runsB).toBe(0);
+    expect(owner.getPythonGate().pending).toBeNull();
+  });
+
+  test("canceled queued clear performs no write and skips redetection", async () => {
+    const savingA = deferred<void>();
+    const startedA = deferred<void>();
+    let resolves = 0;
+    let runsA = 0;
+    const { owner, gateDeps, saves, stored } = createPythonHarness({
+      initialOverride: "/original",
+      beforeSave: async (path) => {
+        if (path === "/a") {
+          startedA.resolve();
+          await savingA.promise;
+        }
+      },
+      resolveImpl: async (routeId, override) => {
+        resolves += 1;
+        return availableResult();
+      },
+    });
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), async () => {
+      runsA += 1;
+    });
+    const liveSave = owner.choosePythonForSetup(gateDeps, "/a");
+    await startedA.promise;
+
+    owner.requirePythonForSetup("rfdetr.pth.tflite", missingResult("Python 3.12"), async () => {});
+    const queuedStale = owner.clearPythonGateOverride(gateDeps);
+    owner.cancelPythonGate();
+    savingA.resolve();
+    await liveSave;
+    await queuedStale;
+
+    // One resolve for A's validation; the stale clear never loads, saves,
+    // or redetects.
+    expect(resolves).toBe(1);
+    expect(saves).toEqual(["/a", "/original"]);
+    expect(stored()).toBe("/original");
+    expect(runsA).toBe(0);
+    expect(owner.getPythonGate().pending).toBeNull();
+  });
 });

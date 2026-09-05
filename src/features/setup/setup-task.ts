@@ -424,6 +424,41 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
     }
   };
 
+  // The complete settings transaction as one serialized owner operation:
+  // acquire the lock, re-check currency, snapshot, save, then reconcile a
+  // stale write — all before the next queued flow begins. Checking before
+  // waiting for the lock is not enough: a flow can go stale while queued
+  // and must then perform no write at all. Returns true only when still
+  // live after the unit.
+  const runGateSaveUnit = async (
+    gateDeps: PythonRequiredDeps,
+    generation: number,
+    pending: PendingPythonSetup,
+    value: string | null,
+  ): Promise<boolean> => {
+    return withSaveLock(async () => {
+      if (!isGateCurrent(generation, pending)) return false;
+      let previousOverride: string | null;
+      try {
+        previousOverride = await gateDeps.loadOverride();
+      } catch (error) {
+        failPythonGate(generation, pending, String(error));
+        return false;
+      }
+      if (!isGateCurrent(generation, pending)) return false;
+      try {
+        await gateDeps.saveOverride(value);
+      } catch (error) {
+        failPythonGate(generation, pending, String(error));
+        return false;
+      }
+      if (!isGateCurrent(generation, pending)) {
+        await reconcileStaleSave(gateDeps, value, previousOverride);
+      }
+      return isGateCurrent(generation, pending);
+    });
+  };
+
   // Single redetect/retry transition shared by check-again and
   // clear-override so the two paths cannot drift.
   const settleRedetected = async (
@@ -618,28 +653,11 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
         return;
       }
       // The pending action may have been canceled or replaced while
-      // validation was in flight; never save for a stale choice.
+      // validation was in flight; the save unit re-checks after acquiring
+      // the lock, so a stale choice still never saves.
       if (!isGateCurrent(generation, pending)) return;
-      let previousOverride: string | null;
-      try {
-        previousOverride = await gateDeps.loadOverride();
-      } catch (error) {
-        failPythonGate(generation, pending, String(error));
-        return;
-      }
-      if (!isGateCurrent(generation, pending)) return;
-      try {
-        await withSaveLock(async () => {
-          await gateDeps.saveOverride(chosenPath);
-          if (!isGateCurrent(generation, pending)) {
-            await reconcileStaleSave(gateDeps, chosenPath, previousOverride);
-          }
-        });
-      } catch (error) {
-        failPythonGate(generation, pending, String(error));
-        return;
-      }
-      if (!isGateCurrent(generation, pending)) return;
+      const live = await runGateSaveUnit(gateDeps, generation, pending, chosenPath);
+      if (!live) return;
       const run = pending.run;
       closePythonGate();
       await run();
@@ -663,26 +681,8 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
       const started = beginGateAction();
       if (!started) return;
       const { generation, pending, previous } = started;
-      let previousOverride: string | null;
-      try {
-        previousOverride = await gateDeps.loadOverride();
-      } catch (error) {
-        failPythonGate(generation, pending, String(error));
-        return;
-      }
-      if (!isGateCurrent(generation, pending)) return;
-      try {
-        await withSaveLock(async () => {
-          await gateDeps.saveOverride(null);
-          if (!isGateCurrent(generation, pending)) {
-            await reconcileStaleSave(gateDeps, null, previousOverride);
-          }
-        });
-      } catch (error) {
-        failPythonGate(generation, pending, String(error));
-        return;
-      }
-      if (!isGateCurrent(generation, pending)) return;
+      const live = await runGateSaveUnit(gateDeps, generation, pending, null);
+      if (!live) return;
       let redetected: BootstrapPythonResult;
       try {
         redetected = await gateDeps.resolveBootstrap(pending.routeId);
