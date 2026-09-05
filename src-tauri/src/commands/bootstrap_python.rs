@@ -114,8 +114,9 @@ fn check_usable(
     }
 }
 
-/// Real venv capability: create an environment in a disposable temp dir and
-/// remove it afterwards. Never installs packages anywhere.
+/// Real venv capability: create an environment in a disposable temp dir.
+/// Never installs into the bootstrap interpreter; the disposable
+/// environment is removed afterward.
 fn ensure_venv_capability(python_exe: &str) -> Result<(), String> {
     let dir = std::env::temp_dir().join(format!("ves-bootstrap-venv-{}", uuid::Uuid::new_v4()));
     let status = Command::new(python_exe)
