@@ -121,8 +121,132 @@ describe("setup task representation", () => {
     expect(task.phase).toBe("installing-packages");
     expect(task.status).toBe("active");
     expect(task.pythonPath).toBe("/tmp/python");
+    expect(task.createsEnvironment).toBe(false);
     expect(task.detailsOpen).toBe(false);
     expect(task.dismissed).toBe(false);
+  });
+
+  test("createSetupTask starts in creating-environment for on-demand setups", () => {
+    const task = createSetupTask({
+      provider: "ultralytics",
+      routeId: null,
+      environmentKey: "ultralytics-managed",
+      pythonPath: "/tmp/bootstrap-python",
+      createsEnvironment: true,
+    });
+    expect(task.phase).toBe("creating-environment");
+    expect(task.summary).toBe("Creating ultralytics environment…");
+    expect(task.createsEnvironment).toBe(true);
+  });
+});
+
+describe("on-demand ultralytics creation", () => {
+  test("reports creating-environment then installing-packages then ready", async () => {
+    const { deps, handlers } = createFakeDeps();
+    const owner = createSetupTaskOwner(deps);
+    const promise = owner.startRuntimeInstall({
+      ...request,
+      pythonPath: "/tmp/bootstrap-python",
+      createsEnvironment: true,
+      verifyPythonPath: "/tmp/managed-python",
+    });
+
+    expect(owner.getState()!.phase).toBe("creating-environment");
+    await waitForSession(owner);
+    expect(owner.getState()!.phase).toBe("installing-packages");
+    expect(owner.getState()!.sessionId).toBe("session-1");
+
+    fire(handlers, "install:finished", { session_id: "session-1" });
+    expect(await promise).toEqual({ ok: true });
+    expect(owner.getState()!.phase).toBe("ready");
+    expect(owner.getState()!.status).toBe("succeeded");
+  });
+
+  test("verifies the managed interpreter, not the bootstrap", async () => {
+    const seen: string[] = [];
+    const { deps, handlers } = createFakeDeps();
+    const verifyingDeps: InstallStreamDeps = {
+      ...deps,
+      verifyEnvironment: async (pythonPath) => {
+        seen.push(pythonPath);
+        return deps.verifyEnvironment(pythonPath);
+      },
+    };
+    const owner = createSetupTaskOwner(verifyingDeps);
+    const promise = owner.startRuntimeInstall({
+      ...request,
+      pythonPath: "/tmp/bootstrap-python",
+      createsEnvironment: true,
+      verifyPythonPath: "/tmp/managed-python",
+    });
+    await waitForSession(owner);
+    fire(handlers, "install:finished", { session_id: "session-1" });
+    expect(await promise).toEqual({ ok: true });
+    expect(seen).toEqual(["/tmp/managed-python"]);
+  });
+
+  test("failed creation preserves the task for Retry with Setup incomplete", async () => {
+    const { deps, handlers } = createFakeDeps();
+    const owner = createSetupTaskOwner(deps);
+    const promise = owner.startRuntimeInstall({
+      ...request,
+      pythonPath: "/tmp/bootstrap-python",
+      createsEnvironment: true,
+      verifyPythonPath: "/tmp/managed-python",
+    });
+    await waitForSession(owner);
+    fire(handlers, "install:failed", { session_id: "session-1", error: "venv failed" });
+    expect(await promise).toEqual({ ok: false, error: "venv failed" });
+    const failed = owner.getState()!;
+    expect(failed.phase).toBe("failed");
+    expect(failed.status).toBe("failed");
+    expect(failed.createsEnvironment).toBe(true);
+    // Retry requires explicit dismiss; the failed task stays visible.
+    expect(isSetupTaskVisible(failed)).toBe(true);
+    expect(canDismissSetupTask(failed)).toBe(true);
+  });
+
+  test("finalize runs after verification and before success", async () => {
+    const order: string[] = [];
+    const { deps, handlers } = createFakeDeps();
+    const tracingDeps: InstallStreamDeps = {
+      ...deps,
+      verifyEnvironment: async (pythonPath) => {
+        order.push("verify");
+        return deps.verifyEnvironment(pythonPath);
+      },
+    };
+    const owner = createSetupTaskOwner(tracingDeps);
+    const promise = owner.startRuntimeInstall({
+      ...request,
+      finalize: async () => {
+        order.push("finalize");
+      },
+    });
+    await waitForSession(owner);
+    fire(handlers, "install:finished", { session_id: "session-1" });
+    expect(await promise).toEqual({ ok: true });
+    expect(order).toEqual(["verify", "finalize"]);
+    expect(owner.getState()!.phase).toBe("ready");
+    expect(owner.getState()!.status).toBe("succeeded");
+  });
+
+  test("finalize failure fails the task instead of reporting success", async () => {
+    const { deps, handlers } = createFakeDeps();
+    const owner = createSetupTaskOwner(deps);
+    const promise = owner.startRuntimeInstall({
+      ...request,
+      finalize: async () => {
+        throw new Error("settings save failed");
+      },
+    });
+    await waitForSession(owner);
+    fire(handlers, "install:finished", { session_id: "session-1" });
+    expect(await promise).toEqual({ ok: false, error: "Error: settings save failed" });
+    const failed = owner.getState()!;
+    expect(failed.phase).toBe("failed");
+    expect(failed.status).toBe("failed");
+    expect(failed.error).toBe("Error: settings save failed");
   });
 });
 
