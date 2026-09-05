@@ -61,6 +61,13 @@ pub(crate) fn checkpoint_identity_for_file(
     let canonical = std::fs::canonicalize(checkpoint_path)
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(|_| checkpoint_path.to_string());
+    identity_from_metadata(canonical, &metadata)
+}
+
+fn identity_from_metadata(
+    canonical_path: String,
+    metadata: &std::fs::Metadata,
+) -> Result<RfDetrCheckpointIdentity, String> {
     let modified_ms = metadata
         .modified()
         .map_err(|e| format!("failed to read checkpoint modification time: {}", e))?
@@ -70,7 +77,7 @@ pub(crate) fn checkpoint_identity_for_file(
         .try_into()
         .map_err(|_| "checkpoint modification time out of range".to_string())?;
     Ok(RfDetrCheckpointIdentity {
-        canonical_path: canonical,
+        canonical_path,
         len: metadata.len(),
         modified_ms,
     })
@@ -183,35 +190,43 @@ impl Drop for InspectionSnapshot {
 }
 
 /// Copy exactly the bytes behind an already-open, already-verified handle —
-/// never the live path — then revalidate the copied length against the
-/// verified identity before Python may deserialize it.
+/// never the live path — then re-read the handle's metadata and reject
+/// unless the complete identity still matches. The byte count alone cannot
+/// catch a same-length in-place rewrite; canonical path, length, and
+/// modification time together can.
 pub(crate) fn snapshot_open_handle_for_inspect(
     source: &mut std::fs::File,
     expected: &RfDetrCheckpointIdentity,
 ) -> Result<InspectionSnapshot, String> {
-    use std::io::Write;
+    use std::io::{Seek, SeekFrom, Write};
+    source
+        .seek(SeekFrom::Start(0))
+        .map_err(|e| format!("failed to snapshot checkpoint for inspection: {}", e))?;
     let dir = std::env::temp_dir().join(format!("rfdetr-inspect-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("failed to create inspection snapshot dir: {}", e))?;
     let path = dir.join("checkpoint.pth");
-    let copy_result = (|| -> Result<u64, String> {
+    let copy_result = (|| -> Result<(), String> {
         let mut out = std::fs::File::create(&path)
             .map_err(|e| format!("failed to snapshot checkpoint for inspection: {}", e))?;
-        let copied = std::io::copy(source, &mut out)
+        std::io::copy(source, &mut out)
             .map_err(|e| format!("failed to snapshot checkpoint for inspection: {}", e))?;
         out.flush()
             .map_err(|e| format!("failed to snapshot checkpoint for inspection: {}", e))?;
-        Ok(copied)
-    })();
-    match copy_result {
-        Ok(copied) if copied == expected.len => Ok(InspectionSnapshot { path, dir }),
-        Ok(_) => {
-            let _ = std::fs::remove_dir_all(&dir);
-            Err(
+        let after = source
+            .metadata()
+            .map_err(|e| format!("failed to stat checkpoint: {}", e))?;
+        let after = identity_from_metadata(expected.canonical_path.clone(), &after)?;
+        if after != *expected {
+            return Err(
                 "checkpoint changed during snapshot; confirm trust again before inspection."
                     .to_string(),
-            )
+            );
         }
+        Ok(())
+    })();
+    match copy_result {
+        Ok(()) => Ok(InspectionSnapshot { path, dir }),
         Err(e) => {
             let _ = std::fs::remove_dir_all(&dir);
             Err(e)
@@ -570,6 +585,28 @@ mod tests {
         let mut handle = std::fs::File::open(&path).unwrap();
         let mut expected = checkpoint_identity_for_file(path.to_str().unwrap(), &handle).unwrap();
         expected.len += 100;
+        let error = snapshot_open_handle_for_inspect(&mut handle, &expected).unwrap_err();
+        assert!(error.contains("changed during snapshot"));
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn snapshot_rejects_same_length_in_place_rewrite() {
+        use std::io::Write;
+        use std::time::{Duration, UNIX_EPOCH};
+        let path = temp_checkpoint("rewrite.pth", b"aaaaaa");
+        let mut handle = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let expected = checkpoint_identity_for_file(path.to_str().unwrap(), &handle).unwrap();
+        // Same-length in-place rewrite after verification with a distinct
+        // mtime: byte count alone cannot catch it.
+        handle.write_all(b"bbbbbb").unwrap();
+        handle
+            .set_modified(UNIX_EPOCH + Duration::from_secs(1_700_000_001))
+            .unwrap();
         let error = snapshot_open_handle_for_inspect(&mut handle, &expected).unwrap_err();
         assert!(error.contains("changed during snapshot"));
         std::fs::remove_file(&path).unwrap();
