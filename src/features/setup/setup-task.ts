@@ -36,6 +36,11 @@ export interface SetupTaskInput {
   // Bootstrap interpreter captured when setup starts. Terminal refresh uses
   // this stable path, never the live editable Python input.
   pythonPath: string;
+  // True when the managed environment may not exist yet and the backend will
+  // create it from the bootstrap interpreter before installing. The task
+  // reports creating-environment until the install session starts, then
+  // installing-packages; terminal refresh publishes the managed interpreter.
+  createsEnvironment?: boolean;
 }
 
 export interface SetupTask {
@@ -43,6 +48,7 @@ export interface SetupTask {
   routeId: string | null;
   environmentKey: ManagedEnvironmentKey;
   pythonPath: string;
+  createsEnvironment: boolean;
   phase: SetupTaskPhase;
   summary: string;
   logs: string[];
@@ -126,13 +132,17 @@ export function canDismissSetupTask(task: SetupTask): boolean {
 }
 
 export function createSetupTask(input: SetupTaskInput): SetupTask {
+  const initialPhase: SetupTaskPhase = input.createsEnvironment
+    ? "creating-environment"
+    : "installing-packages";
   return {
     provider: input.provider,
     routeId: input.routeId,
     environmentKey: input.environmentKey,
     pythonPath: input.pythonPath,
-    phase: "installing-packages",
-    summary: setupTaskSummaryForPhase("installing-packages", input.provider),
+    createsEnvironment: input.createsEnvironment ?? false,
+    phase: initialPhase,
+    summary: setupTaskSummaryForPhase(initialPhase, input.provider),
     logs: [],
     sessionId: "",
     status: "active",
@@ -251,6 +261,9 @@ export async function runInstallStream(
 export interface RuntimeInstallRequest extends SetupTaskInput {
   packages: InstallableDependency[];
   summary?: string;
+  // Managed interpreter to verify after install when the bootstrap Python
+  // differs (on-demand creation). Defaults to pythonPath.
+  verifyPythonPath?: string;
 }
 
 export interface InstallEventDeps {
@@ -529,10 +542,10 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
         };
       }
       teardownInstallListeners();
+      const initial = createSetupTask(request);
       setTask({
-        ...createSetupTask(request),
-        summary:
-          request.summary ?? setupTaskSummaryForPhase("installing-packages", request.provider),
+        ...initial,
+        summary: request.summary ?? initial.summary,
       });
 
       const group = createListenerGroup();
@@ -556,7 +569,20 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
             },
             onSession: (sessionId) => {
               const current = task;
-              if (current) setTask({ ...current, sessionId });
+              if (!current) return;
+              // Backend venv creation finishes before the install session is
+              // assigned, so the session marks the honest creation → install
+              // transition for on-demand setups.
+              if (current.createsEnvironment && current.phase === "creating-environment") {
+                setTask({
+                  ...current,
+                  sessionId,
+                  phase: "installing-packages",
+                  summary: setupTaskSummaryForPhase("installing-packages", current.provider),
+                });
+              } else {
+                setTask({ ...current, sessionId });
+              }
             },
           },
         );
@@ -583,7 +609,7 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
       });
       let verified: { yoloPath: string | null };
       try {
-        verified = await deps.verifyEnvironment(request.pythonPath);
+        verified = await deps.verifyEnvironment(request.verifyPythonPath ?? request.pythonPath);
       } catch (error) {
         const message = String(error);
         failActiveTask(message);

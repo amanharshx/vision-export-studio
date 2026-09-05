@@ -14,7 +14,7 @@ use crate::commands::provider_registry::{
 use crate::commands::runtime_operations::{
     emit_after_operation_released, RuntimeOperation, RuntimeOperationCoordinator,
 };
-use crate::commands::setup::{build_venv_command, load_settings};
+use crate::commands::setup::{build_venv_command, load_settings, venv_python};
 use crate::commands::stack_environments::{stack_for_route, stack_python, stack_venv_dir};
 
 // ---------------------------------------------------------------------------
@@ -1198,6 +1198,70 @@ fn missing_stack_results_if_absent(
 }
 
 // ---------------------------------------------------------------------------
+// Ultralytics managed environment on-demand creation (ticket 07)
+// ---------------------------------------------------------------------------
+
+/// App-owned Ultralytics environment directory: `<runtime>/.venv`.
+fn ultralytics_managed_venv_dir(runtime_root: &str) -> std::path::PathBuf {
+    Path::new(runtime_root).join(".venv")
+}
+
+/// True when the app-owned Ultralytics interpreter already exists, so Retry
+/// continues in place instead of recreating.
+fn ultralytics_managed_ready(runtime_root: &str) -> bool {
+    Path::new(&venv_python(runtime_root)).exists()
+}
+
+/// Ensure the app-owned Ultralytics environment exists, creating it from the
+/// resolved bootstrap interpreter when its Python is absent.
+///
+/// `install_dependencies` with `route_id = None` is only invoked by the
+/// explicit provider-wide Ultralytics setup action, and the frontend passes
+/// the resolved bootstrap interpreter (via the Python-required dialog) when
+/// the managed environment is missing. The bootstrap interpreter only runs
+/// `python -m venv`; packages are never installed into it. A partially
+/// created environment is preserved on failure so Retry can continue in the
+/// same directory and the UI can label it `Setup incomplete`. Confirmed
+/// Remove in the Environment panel stays the only full reset. Re-running
+/// `python -m venv` onto a partial directory repairs it in place and keeps
+/// existing files.
+fn ensure_ultralytics_managed_environment(
+    bootstrap_python: &str,
+    runtime_root: &str,
+) -> Result<String, String> {
+    let managed_python = venv_python(runtime_root);
+    if ultralytics_managed_ready(runtime_root) {
+        return Ok(managed_python);
+    }
+    // Backend safety outside the UI: refuse to run venv creation from a
+    // non-Python or unusable bootstrap instead of spawning it blindly.
+    probe_python_version(bootstrap_python)?;
+    let venv_dir = ultralytics_managed_venv_dir(runtime_root);
+    if let Some(parent) = venv_dir.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create runtime dir: {}", e))?;
+    }
+    let status = build_venv_command(bootstrap_python, &venv_dir)
+        .status()
+        .map_err(|e| format!("failed to create Ultralytics environment: {}", e))?;
+    if !status.success() {
+        return Err(format!(
+            "failed to create Ultralytics environment: exit code {:?}",
+            status.code()
+        ));
+    }
+    // A "successful" venv without an interpreter must not proceed to pip:
+    // keep the partial directory for Retry/Setup incomplete and fail here.
+    if !Path::new(&managed_python).exists() {
+        return Err(
+            "failed to create Ultralytics environment: managed Python still missing after creation"
+                .to_string(),
+        );
+    }
+    Ok(managed_python)
+}
+
+// ---------------------------------------------------------------------------
 // Per-dep check helpers
 // ---------------------------------------------------------------------------
 
@@ -1412,7 +1476,24 @@ pub async fn install_dependencies(
             python_path.clone()
         }
     } else {
-        python_path.clone()
+        // Provider-wide Ultralytics setup installs only into the app-owned
+        // managed interpreter — never into the bootstrap or saved-override
+        // interpreter (a chosen Python is bootstrap-only). When the managed
+        // interpreter is absent, create it from the passed bootstrap Python
+        // first; the frontend passes the resolved bootstrap (via the
+        // Python-required dialog) when the environment is missing. An
+        // existing environment is reused so Retry continues in place;
+        // confirmed Remove stays the only full reset. The partial directory
+        // counts as a mutation, so inventory is invalidated even when
+        // creation fails. Only this explicit setup action reaches
+        // `route_id = None`; route-scoped installs always pass a route id.
+        if !ultralytics_managed_ready(&runtime_root) {
+            let creation = ensure_ultralytics_managed_environment(&python_path, &runtime_root);
+            managed_environments.invalidate(Path::new(&runtime_root), [invalidation_key.as_str()]);
+            creation?
+        } else {
+            venv_python(&runtime_root)
+        }
     };
 
     let (stable_packages, prerelease_packages) = partition_install_packages(&packages);
@@ -2313,6 +2394,179 @@ mod tests {
             install.get_program(),
             std::ffi::OsStr::new(&stack_python("/tmp/runtime", "rfdetr.pth.onnx").unwrap())
         );
+    }
+
+    #[cfg(unix)]
+    fn write_fake_bootstrap(path: &std::path::Path, succeed: bool) {
+        use std::os::unix::fs::PermissionsExt;
+        // Mimics a working Python 3.12: `-c` probes print a version,
+        // `-m venv <venv_path>` creates `<venv>/bin/python` (success) or
+        // exits 1 leaving partial files (failure).
+        let script = if succeed {
+            "#!/bin/sh\nif [ \"$1\" = \"-c\" ]; then echo \"3.12.12\"; exit 0; fi\nvenv_path=\"$3\"\nmkdir -p \"$venv_path/bin\"\ntouch \"$venv_path/bin/python\"\n"
+        } else {
+            "#!/bin/sh\nif [ \"$1\" = \"-c\" ]; then echo \"3.12.12\"; exit 0; fi\nexit 1\n"
+        };
+        std::fs::write(path, script).expect("write fake bootstrap");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .expect("make fake bootstrap executable");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ultralytics_missing_managed_creates_from_bootstrap_only() {
+        let root = std::env::temp_dir().join(format!("ultralytics-create-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        let bootstrap = root.join("bootstrap-python");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        write_fake_bootstrap(&bootstrap, true);
+        let bootstrap_str = bootstrap.to_string_lossy().into_owned();
+        // Sibling state the setup must not touch: RF-DETR stack, output
+        // settings, and saved Python selection live outside `.venv`.
+        let sibling_python = Path::new(&runtime)
+            .join("envs")
+            .join("rfdetr-default")
+            .join(".venv")
+            .join("bin")
+            .join("python");
+        std::fs::create_dir_all(sibling_python.parent().unwrap()).expect("create sibling");
+        std::fs::write(&sibling_python, b"sibling").expect("write sibling");
+        std::fs::write(root.join("output-settings.json"), b"{\"dir\":\"keep\"}")
+            .expect("write output settings");
+        std::fs::write(root.join("python-selection.txt"), b"/chosen/python")
+            .expect("write python selection");
+        // Loaded model state lives outside the runtime root and must survive setup.
+        std::fs::write(root.join("model.pt"), b"loaded-model").expect("write loaded model");
+
+        let managed = ensure_ultralytics_managed_environment(&bootstrap_str, &runtime)
+            .expect("creation succeeds");
+        assert_eq!(managed, venv_python(&runtime));
+        assert_ne!(managed, bootstrap_str);
+        assert!(Path::new(&managed).exists(), "managed python created");
+        // Bootstrap itself is untouched: still the fake script, no venv created inside it.
+        assert!(Path::new(&bootstrap_str).exists());
+        assert_eq!(
+            std::fs::read(&sibling_python).expect("read sibling"),
+            b"sibling",
+            "RF-DETR environments preserved"
+        );
+        assert!(
+            root.join("output-settings.json").exists(),
+            "output settings preserved"
+        );
+        assert!(
+            root.join("python-selection.txt").exists(),
+            "python selection preserved"
+        );
+        assert_eq!(
+            std::fs::read(root.join("model.pt")).expect("read loaded model"),
+            b"loaded-model",
+            "loaded model state preserved"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ultralytics_existing_managed_reuses_same_environment() {
+        let root = std::env::temp_dir().join(format!("ultralytics-reuse-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        let bootstrap = root.join("bootstrap-python");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        // Failing bootstrap must never run when the managed env already exists (Retry continues).
+        write_fake_bootstrap(&bootstrap, false);
+        let managed_string = venv_python(&runtime);
+        let managed_path = Path::new(&managed_string);
+        std::fs::create_dir_all(managed_path.parent().unwrap()).expect("create managed parent");
+        std::fs::write(managed_path, b"existing").expect("write existing managed python");
+
+        let reused = ensure_ultralytics_managed_environment(
+            bootstrap.to_str().expect("bootstrap path"),
+            &runtime,
+        )
+        .expect("reuse succeeds without invoking bootstrap");
+        assert_eq!(reused, venv_python(&runtime));
+        assert_eq!(
+            std::fs::read(managed_path).expect("read managed"),
+            b"existing"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ultralytics_failed_creation_preserves_partial_environment() {
+        let root = std::env::temp_dir().join(format!("ultralytics-partial-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        let bootstrap = root.join("bootstrap-python");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        write_fake_bootstrap(&bootstrap, false);
+        // Partial env: .venv exists with a sentinel but no python binary.
+        let venv_dir = ultralytics_managed_venv_dir(&runtime);
+        std::fs::create_dir_all(&venv_dir).expect("create partial venv");
+        std::fs::write(venv_dir.join("keep.txt"), b"keep").expect("write sentinel");
+
+        let error = ensure_ultralytics_managed_environment(
+            bootstrap.to_str().expect("bootstrap path"),
+            &runtime,
+        )
+        .expect_err("creation failure errors");
+        assert!(error.contains("failed to create Ultralytics environment"));
+        assert!(
+            venv_dir.join("keep.txt").exists(),
+            "partial environment preserved for Retry/Setup incomplete"
+        );
+        assert!(
+            !Path::new(&venv_python(&runtime)).exists(),
+            "managed python still absent"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ultralytics_unusable_bootstrap_creates_nothing() {
+        let root = std::env::temp_dir().join(format!("ultralytics-unusable-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        std::fs::create_dir_all(&root).expect("create temp root");
+
+        let error = ensure_ultralytics_managed_environment("/missing/bootstrap-python", &runtime)
+            .expect_err("unusable bootstrap errors before creating");
+        assert!(
+            error.contains("python probe exited") || error.contains("failed to spawn probe"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !ultralytics_managed_venv_dir(&runtime).exists(),
+            "no environment created from an unusable bootstrap"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ultralytics_retry_repairs_partial_managed_in_place() {
+        // Stock `python -m venv` repairs a partial directory in place and
+        // keeps existing files, so Retry continues without a full reset.
+        let root = std::env::temp_dir().join(format!("ultralytics-retry-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let venv_dir = ultralytics_managed_venv_dir(&runtime);
+        std::fs::create_dir_all(&venv_dir).expect("create partial venv");
+        std::fs::write(venv_dir.join("keep.txt"), b"keep").expect("write sentinel");
+
+        let repaired = ensure_ultralytics_managed_environment("python3", &runtime)
+            .expect("retry repairs the partial environment");
+        assert_eq!(repaired, venv_python(&runtime));
+        assert!(
+            Path::new(&repaired).exists(),
+            "managed Python exists after retry"
+        );
+        assert!(
+            venv_dir.join("keep.txt").exists(),
+            "retry preserves partial environment files"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
     }
 
     #[test]

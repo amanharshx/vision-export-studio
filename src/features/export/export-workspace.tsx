@@ -82,6 +82,12 @@ import { RouteGrid } from "./route-grid";
 import { getEffectiveHostSupportResult, getHostSupportResult } from "./host-support";
 import { normalizeOptionsForRoute } from "./options/normalize";
 import { validateRfDetrImgsz } from "./rfdetr-image-size";
+import { getManagedPythonPath } from "@/features/setup/managed-runtime";
+import { PythonRequiredDialog } from "@/features/setup/python-required-dialog";
+import {
+  isPythonRequiredResult,
+  resolveBootstrapPython,
+} from "@/lib/tauri/bootstrap-python";
 
 type WorkspaceView = "drop" | "formats";
 type RuntimeInstallPhase = "idle" | "installing" | "ready" | "failed";
@@ -170,6 +176,35 @@ export function getUltralyticsRuntimeDisabledReason(runtimeInstallPhase: Runtime
   return runtimeInstallPhase === "installing"
     ? undefined
     : "Install the Ultralytics runtime before choosing a YOLO export target.";
+}
+
+export interface UltralyticsSetupBanner {
+  title: string;
+  body: string;
+  action: string;
+  secondaryAction: string | null;
+}
+
+/** Provider-wide Ultralytics setup entry (kept until ticket 08). Failed setups
+ * keep the partially created environment and offer Retry in place before the
+ * confirmed full recreation (Remove, limited to the known app-owned key). */
+export function getUltralyticsSetupBannerContent(
+  runtimeInstallPhase: RuntimeInstallPhase,
+): UltralyticsSetupBanner {
+  if (runtimeInstallPhase === "failed") {
+    return {
+      title: "Setup incomplete",
+      body: "The partially created environment was preserved. Retry to continue in the same environment, or remove it for a confirmed fresh start.",
+      action: "Retry setup",
+      secondaryAction: "Remove…",
+    };
+  }
+  return {
+    title: "Ultralytics runtime required",
+    body: "Install once to enable YOLO exports on this machine.",
+    action: "Install Runtime",
+    secondaryAction: null,
+  };
 }
 
 const defaultOptions: ExportOptions = {
@@ -1091,7 +1126,17 @@ interface ExportWorkspaceProps {
 }
 
 export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupCompleteChange }: ExportWorkspaceProps) {
-  const { task: setupTask, startRuntimeInstall, dismissTask } = useSetupTask();
+  const {
+    task: setupTask,
+    startRuntimeInstall,
+    dismissTask,
+    pythonGate: pythonRequiredState,
+    requirePythonForSetup: requirePython,
+    cancelPythonGate: cancelPythonRequired,
+    choosePythonForSetup: choosePythonRequired,
+    checkAgainPythonGate: checkAgainPythonRequired,
+    clearPythonGateOverride: clearPythonOverrideRequired,
+  } = useSetupTask();
   const [appPlatform, setAppPlatform] = useState<AppPlatform>({ os: getOS(), arch: UNKNOWN_ARCH });
   const [platformResolved, setPlatformResolved] = useState(false);
   const [view, setView] = useState<WorkspaceView>("drop");
@@ -1183,6 +1228,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       : ultralyticsSetupTask.status === "succeeded"
         ? "ready"
         : "failed";
+  // Provider-wide setup entry content (kept until ticket 08); bound once.
+  const ultralyticsSetupBanner = getUltralyticsSetupBannerContent(runtimeInstallPhase);
   const [managedRuntimeUpgrade, setManagedRuntimeUpgrade] = useState<ManagedRuntimeRebuildEligibility | null>(null);
   const [managedRuntimeUpgradeOpen, setManagedRuntimeUpgradeOpen] = useState(false);
   const [managedRuntimeRebuilding, setManagedRuntimeRebuilding] = useState(false);
@@ -1390,16 +1437,16 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     });
   }, [selectedRouteId, envInfo, refreshRouteDependencies]);
 
-  // On setup terminal, publish the fresh environment and let the dependency
-  // effect above refresh the currently selected route. Detection uses the
-  // interpreter captured on the task, never the live editable Python input,
-  // so typing an unsaved path cannot publish the wrong environment. Keyed by
-  // task session/status; overlapping detections are generation-guarded.
+  // On setup terminal, publish the managed environment and let the dependency
+  // effect above refresh the currently selected route. The provider-wide
+  // setup installs only into the app-owned managed interpreter (never the
+  // bootstrap or saved override), so terminal always publishes the managed
+  // interpreter. Keyed by task session/status; overlapping detections are
+  // generation-guarded.
   const setupTerminalSession = ultralyticsSetupTask?.sessionId ?? null;
   const setupTerminalStatus = ultralyticsSetupTask?.status ?? null;
   const setupTerminalError = ultralyticsSetupTask?.error ?? null;
   const setupTerminalDismissed = ultralyticsSetupTask?.dismissed ?? null;
-  const setupTerminalPythonPath = ultralyticsSetupTask?.pythonPath ?? null;
   useEffect(() => {
     if (!setupTerminalSession) return;
     if (setupTerminalStatus !== "succeeded" && setupTerminalStatus !== "failed") return;
@@ -1409,9 +1456,16 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       setDepCheckError(setupTerminalError ?? "Setup failed.");
       return;
     }
-    if (!setupTerminalPythonPath) return;
-    void environmentPublisher.publish(setupTerminalPythonPath);
-  }, [environmentPublisher, invalidateManagedEnvironmentSizesForMutation, setupTerminalDismissed, setupTerminalError, setupTerminalPythonPath, setupTerminalSession, setupTerminalStatus]);
+    // Success: publish the managed interpreter for inventory + dependency
+    // refresh. If settings cannot reload, surface the error and rescan
+    // inventory explicitly instead of activating a stale interpreter.
+    void loadSettings()
+      .then((settings) => environmentPublisher.publish(getManagedPythonPath(settings.runtime_dir)))
+      .catch((error: unknown) => {
+        setDepCheckError(String(error));
+        void scanProviderEnvironments("ultralytics").catch(() => {});
+      });
+  }, [environmentPublisher, invalidateManagedEnvironmentSizesForMutation, scanProviderEnvironments, setupTerminalDismissed, setupTerminalError, setupTerminalSession, setupTerminalStatus]);
 
   // Register once; handlers filter events through the current session ref.
   useEffect(() => {
@@ -1527,11 +1581,19 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   }, []);
 
   const handleInstallUltralyticsRuntime = useCallback(async () => {
-    const pythonPath = envInfo?.python_path;
-    if (!pythonPath) return;
     if (blockOnSetupConflict(setDepCheckError)) return;
     if (cleanupBusy) return;
 
+    // This flow only starts the app-wide setup task and publishes the fresh
+    // environment on terminal. It never touches sourcePath (loaded model),
+    // export options, output-dir/Python overrides (the saved override value
+    // is preserved; installs never go into it), or RF-DETR stacks.
+    // The install target is always the app-owned managed interpreter: when
+    // it exists, install in place so Retry continues in the same directory;
+    // otherwise resolve the bootstrap interpreter (saved override preferred
+    // automatically, Python-required dialog on missing) and let the backend
+    // create the isolated `.venv` from it. Packages never go into the
+    // bootstrap interpreter either way.
     setDepCheckLoading(true);
     setDepCheckError(null);
 
@@ -1543,27 +1605,96 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       ) {
         dismissTask();
       }
-      // Install → verify → terminal lives in the app-wide owner, so
-      // unmounting (e.g. Landing navigation) cannot strand completion.
-      // Environment + current-route refresh happens in the terminal effect.
+      let managedPythonPath: string;
+      try {
+        const settings = await loadSettings();
+        managedPythonPath = getManagedPythonPath(settings.runtime_dir);
+      } catch (error) {
+        setDepCheckError(String(error));
+        return;
+      }
+      // Truthful existence without depending on the detected env (which
+      // follows the override): cached inventory first, fresh scan fallback.
+      // Unknown after both means missing — the bootstrap path is safe either
+      // way because the backend probes before creating and never installs
+      // into the passed interpreter for this command.
+      let managedExists: boolean | null =
+        managedEnvironmentSizes["ultralytics-managed"]?.exists ?? null;
+      if (managedExists === null) {
+        try {
+          const scanned = await scanProviderEnvironments("ultralytics");
+          const row = scanned.find((item) => item.key === "ultralytics-managed");
+          if (row?.exists !== undefined && row.exists !== null) managedExists = row.exists;
+        } catch {
+          // Keep unknown; the bootstrap path below stays safe.
+        }
+      }
+      if (managedExists) {
+        // Install → verify → terminal lives in the app-wide owner, so
+        // unmounting (e.g. Landing navigation) cannot strand completion.
+        // Environment + current-route refresh happens in the terminal effect.
+        const result = await startRuntimeInstall({
+          provider: "ultralytics",
+          routeId: null,
+          environmentKey: "ultralytics-managed",
+          packages: [{ package: "ultralytics", prerelease: false }],
+          pythonPath: managedPythonPath,
+          summary: "Installing Ultralytics runtime…",
+        });
+        if (!result.ok) {
+          setDepCheckError(result.error);
+          invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
+          return;
+        }
+        return;
+      }
+
+      const setupRouteId = defaultRouteForProvider("ultralytics").id;
+      let bootstrap;
+      try {
+        bootstrap = await resolveBootstrapPython(setupRouteId);
+      } catch (error) {
+        setDepCheckError(String(error));
+        return;
+      }
+      if (isPythonRequiredResult(bootstrap)) {
+        requirePython(setupRouteId, bootstrap, () => handleInstallUltralyticsRuntimeRef.current());
+        setDepCheckError(
+          "Python required to set up the Ultralytics environment. Choose a compatible Python to continue.",
+        );
+        return;
+      }
+      if (bootstrap.status === "error") {
+        setDepCheckError(bootstrap.reason);
+        return;
+      }
       const result = await startRuntimeInstall({
         provider: "ultralytics",
         routeId: null,
         environmentKey: "ultralytics-managed",
         packages: [{ package: "ultralytics", prerelease: false }],
-        pythonPath,
-        summary: "Installing Ultralytics runtime…",
+        pythonPath: bootstrap.python_path,
+        verifyPythonPath: managedPythonPath,
+        createsEnvironment: true,
+        summary: "Creating Ultralytics environment…",
       });
       if (!result.ok) {
+        // Creation failure happens before any install session exists, so the
+        // terminal effect cannot invalidate: refresh inventory here so the
+        // preserved partial environment is visible as Setup incomplete.
         setDepCheckError(result.error);
+        invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
         return;
       }
     } catch (error) {
       setDepCheckError(String(error));
+      invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
     } finally {
       setDepCheckLoading(false);
     }
-  }, [blockOnSetupConflict, cleanupBusy, dismissTask, envInfo?.python_path, startRuntimeInstall, ultralyticsSetupTask]);
+  }, [blockOnSetupConflict, cleanupBusy, dismissTask, invalidateManagedEnvironmentSizesForMutation, managedEnvironmentSizes, requirePython, scanProviderEnvironments, startRuntimeInstall, ultralyticsSetupTask]);
+  const handleInstallUltralyticsRuntimeRef = useRef(handleInstallUltralyticsRuntime);
+  handleInstallUltralyticsRuntimeRef.current = handleInstallUltralyticsRuntime;
 
   const failExportStart = useCallback((message: string) => {
     setInstallPhase("idle");
@@ -2642,12 +2773,19 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           {selectedProviderId === "ultralytics" && !ultralyticsRuntimeReady && !ultralyticsRuntimeInstalling && (
             <div className="flex items-center justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
               <div>
-                <p className="font-medium">Ultralytics runtime required</p>
-                <p className="mt-1">Install once to enable YOLO exports on this machine.</p>
+                <p className="font-medium">{ultralyticsSetupBanner.title}</p>
+                <p className="mt-1">{ultralyticsSetupBanner.body}</p>
               </div>
-              <Button size="sm" onClick={handleInstallUltralyticsRuntime} disabled={!envInfo?.python_path || cleanupBusy}>
-                Install Runtime
-              </Button>
+              <div className="flex shrink-0 items-center gap-2">
+                {ultralyticsSetupBanner.secondaryAction && (
+                  <Button size="sm" variant="outline" onClick={() => void prepareCleanup("ultralytics")} disabled={cleanupBusy}>
+                    {ultralyticsSetupBanner.secondaryAction}
+                  </Button>
+                )}
+                <Button size="sm" onClick={handleInstallUltralyticsRuntime} disabled={cleanupBusy}>
+                  {ultralyticsSetupBanner.action}
+                </Button>
+              </div>
             </div>
           )}
           <div>
@@ -2715,6 +2853,27 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
 
       {managedRuntimeUpgradeDialog}
       {cleanupDialog}
+      {pythonRequiredState.result && (
+        <PythonRequiredDialog
+          open={pythonRequiredState.dialogOpen}
+          onOpenChange={(open) => {
+            if (!open) cancelPythonRequired();
+          }}
+          routeId={pythonRequiredState.pending?.routeId ?? defaultRouteForProvider("ultralytics").id}
+          result={pythonRequiredState.result}
+          choiceError={pythonRequiredState.choiceError}
+          busy={pythonRequiredState.busy}
+          showClearOverride={pythonRequiredState.result.status === "invalid_override"}
+          onCancel={() => cancelPythonRequired()}
+          onChoosePython={async () => {
+            const expected = pythonRequiredState.pending;
+            const picked = await openPythonExecutablePicker();
+            if (picked) await choosePythonRequired(picked, expected);
+          }}
+          onCheckAgain={() => void checkAgainPythonRequired()}
+          onClearOverride={() => void clearPythonOverrideRequired()}
+        />
+      )}
     </div>
   );
 }
