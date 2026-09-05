@@ -16,6 +16,7 @@ import {
   mayStartManagedRuntimeUpgrade,
   mayActivateRoute,
   refreshStackEnvironments,
+  RfDetrTrustPrompt,
 } from "./export-workspace";
 import { SETUP_CONFLICT_MESSAGE } from "@/features/setup/setup-task";
 import { emptyRouteDepCheck, type RouteDepCheck } from "./ultralytics-route-setup";
@@ -319,6 +320,19 @@ describe("stack environment refresh", () => {
     }, async () => stacks);
 
     expect(received).toEqual(stacks);
+  });
+});
+
+describe("rfdetr trusted checkpoint prompt (ticket 09)", () => {
+  test("offers only Cancel and Trust checkpoint actions", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RfDetrTrustPrompt, { onCancel: () => {}, onTrust: () => {} }),
+    );
+    expect(html).toContain("Trusted checkpoint required");
+    expect(html).toContain("trusted sources only");
+    expect(html).toContain("Cancel");
+    expect(html).toContain("Trust checkpoint");
+    expect(html).not.toContain("Trust and inspect");
   });
 });
 

@@ -1,9 +1,13 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::UNIX_EPOCH;
 
 use tauri::Manager;
 
+use crate::commands::deps::probe;
 use crate::commands::provider_registry::{validate_source_extension, ProviderId};
+use crate::commands::setup::{load_settings, venv_python_at};
+use crate::commands::stack_environments::{known_stacks, stack_venv_dir_for_key};
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct RfDetrInspectResult {
@@ -20,6 +24,112 @@ pub struct RfDetrInspectResult {
     pub token_grid: Option<u32>,
     pub resolution_source: Option<String>,
     pub error: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
+pub struct RfDetrCheckpointIdentity {
+    pub canonical_path: String,
+    pub len: u64,
+    pub modified_ms: u64,
+}
+
+pub(crate) fn checkpoint_identity_for_path(
+    checkpoint_path: &str,
+) -> Result<RfDetrCheckpointIdentity, String> {
+    if !Path::new(checkpoint_path).exists() {
+        return Err(format!(
+            "checkpoint path does not exist: {}",
+            checkpoint_path
+        ));
+    }
+    validate_source_extension(ProviderId::RfDetr, checkpoint_path)?;
+    let metadata = std::fs::metadata(checkpoint_path)
+        .map_err(|e| format!("failed to stat checkpoint: {}", e))?;
+    let canonical = std::fs::canonicalize(checkpoint_path)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| checkpoint_path.to_string());
+    let modified_ms = metadata
+        .modified()
+        .map_err(|e| format!("failed to read checkpoint modification time: {}", e))?
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("checkpoint modification time is before epoch: {}", e))?
+        .as_millis()
+        .try_into()
+        .map_err(|_| "checkpoint modification time out of range".to_string())?;
+    Ok(RfDetrCheckpointIdentity {
+        canonical_path: canonical,
+        len: metadata.len(),
+        modified_ms,
+    })
+}
+
+#[tauri::command]
+pub async fn rfdetr_checkpoint_identity(
+    checkpoint_path: String,
+) -> Result<RfDetrCheckpointIdentity, String> {
+    checkpoint_identity_for_path(&checkpoint_path)
+}
+
+pub(crate) fn verify_trusted_identity(
+    current: &RfDetrCheckpointIdentity,
+    trusted: Option<&RfDetrCheckpointIdentity>,
+) -> Result<(), String> {
+    if let Some(trusted) = trusted {
+        if trusted != current {
+            return Err(
+                "checkpoint changed since trust was confirmed; confirm trust again before inspection."
+                    .to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Actual inspection capability probe: folder existence or distribution
+/// metadata alone is insufficient, so the candidate interpreter must import
+/// `rfdetr` successfully.
+fn stack_can_inspect(python: &str) -> bool {
+    probe(python, "import rfdetr").is_ok()
+}
+
+pub(crate) fn resolve_inspection_stack(
+    runtime_dir: &Path,
+    requested: Option<&str>,
+    can_inspect: &dyn Fn(&str) -> bool,
+) -> Result<(String, String), String> {
+    if let Some(key) = requested {
+        let stack = known_stacks()
+            .iter()
+            .find(|stack| stack.key == key)
+            .ok_or_else(|| format!("unknown RF-DETR stack: {}", key))?;
+        let venv = stack_venv_dir_for_key(runtime_dir, stack.key)
+            .ok_or_else(|| format!("unknown RF-DETR stack: {}", key))?;
+        let python = venv_python_at(&venv);
+        if !Path::new(&python).exists() || !can_inspect(&python) {
+            return Err(format!(
+                "RF-DETR stack '{}' is not ready for inspection. Set up the route environment before inspection.",
+                stack.key,
+            ));
+        }
+        return Ok((stack.key.to_string(), python));
+    }
+    // Deterministic reuse: first healthy stack in known-stack order wins.
+    for stack in known_stacks() {
+        let Some(venv) = stack_venv_dir_for_key(runtime_dir, stack.key) else {
+            continue;
+        };
+        let python = venv_python_at(&venv);
+        if !Path::new(&python).exists() {
+            continue;
+        }
+        if can_inspect(&python) {
+            return Ok((stack.key.to_string(), python));
+        }
+    }
+    Err(
+        "No healthy RF-DETR environment found. Set up a route environment before inspection."
+            .to_string(),
+    )
 }
 
 #[allow(dead_code)]
@@ -44,8 +154,9 @@ fn parse_inspect_stdout(stdout: &[u8]) -> Result<RfDetrInspectResult, String> {
 pub async fn inspect_rfdetr_checkpoint(
     app_handle: tauri::AppHandle,
     checkpoint_path: String,
-    python_path: String,
+    stack_key: Option<String>,
     trust_confirmed: bool,
+    trusted_identity: Option<RfDetrCheckpointIdentity>,
 ) -> Result<RfDetrInspectResult, String> {
     if !trust_confirmed {
         return Err(
@@ -59,9 +170,16 @@ pub async fn inspect_rfdetr_checkpoint(
         ));
     }
     validate_source_extension(ProviderId::RfDetr, &checkpoint_path)?;
-    if python_path.is_empty() {
-        return Err("python_path must not be empty".to_string());
-    }
+    let current = checkpoint_identity_for_path(&checkpoint_path)?;
+    verify_trusted_identity(&current, trusted_identity.as_ref())?;
+
+    // Resolve inspection through a known app-owned RF-DETR stack. An
+    // arbitrary frontend-supplied interpreter is never used: only a known
+    // stack key (or deterministic auto-selection) can provide the Python.
+    let settings = load_settings(app_handle.clone())?;
+    let runtime_dir = Path::new(&settings.runtime_dir);
+    let (_key, python_path) =
+        resolve_inspection_stack(runtime_dir, stack_key.as_deref(), &stack_can_inspect)?;
 
     let helper = app_handle
         .path()
@@ -126,5 +244,173 @@ mod tests {
     fn helper_path_points_to_bundled_script() {
         let path = helper_path().expect("helper path");
         assert!(path.ends_with("python/rfdetr_export_helper.py"));
+    }
+
+    fn temp_checkpoint(name: &str, contents: &[u8]) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "rfdetr-trust-{}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4(),
+            name
+        ));
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    fn temp_runtime() -> PathBuf {
+        std::env::temp_dir().join(format!("rfdetr-inspect-{}", uuid::Uuid::new_v4()))
+    }
+
+    fn make_stack_python(runtime: &Path, stack_key: &str) -> String {
+        let venv = stack_venv_dir_for_key(runtime, stack_key).expect("known stack");
+        let python = venv_python_at(&venv);
+        std::fs::create_dir_all(Path::new(&python).parent().unwrap()).unwrap();
+        std::fs::write(&python, b"python").unwrap();
+        python
+    }
+
+    #[test]
+    fn checkpoint_identity_binds_canonical_size_and_mtime() {
+        let path = temp_checkpoint("a.pth", b"weights-v1");
+        let identity = checkpoint_identity_for_path(path.to_str().unwrap()).unwrap();
+        assert_eq!(identity.len, 10);
+        assert!(!identity.canonical_path.is_empty());
+        assert!(identity.modified_ms > 0);
+
+        // Same content, same file: identical fingerprint.
+        let again = checkpoint_identity_for_path(path.to_str().unwrap()).unwrap();
+        assert_eq!(identity, again);
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_identity_changes_when_file_changes() {
+        let path = temp_checkpoint("b.pth", b"weights-v1");
+        let before = checkpoint_identity_for_path(path.to_str().unwrap()).unwrap();
+        // Ensure mtime advances on filesystems with coarse granularity.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(&path, b"weights-v2-longer").unwrap();
+        let after = checkpoint_identity_for_path(path.to_str().unwrap()).unwrap();
+        assert_ne!(before, after);
+        assert_ne!(before.len, after.len);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_identity_rejects_missing_and_wrong_extension() {
+        let missing =
+            std::env::temp_dir().join(format!("rfdetr-missing-{}.pth", uuid::Uuid::new_v4()));
+        assert!(checkpoint_identity_for_path(missing.to_str().unwrap()).is_err());
+
+        let wrong = temp_checkpoint("c.pt", b"yolo");
+        let error = checkpoint_identity_for_path(wrong.to_str().unwrap()).unwrap_err();
+        assert!(error.contains(".pth"), "unexpected error: {}", error);
+        std::fs::remove_file(&wrong).unwrap();
+    }
+
+    #[test]
+    fn trusted_identity_mismatch_is_rejected() {
+        let path = temp_checkpoint("d.pth", b"v1");
+        let current = checkpoint_identity_for_path(path.to_str().unwrap()).unwrap();
+        // No trusted fingerprint is allowed (fresh trust still gates on the flag).
+        assert!(verify_trusted_identity(&current, None).is_ok());
+        assert!(verify_trusted_identity(&current, Some(&current)).is_ok());
+
+        let stale = RfDetrCheckpointIdentity {
+            canonical_path: current.canonical_path.clone(),
+            len: current.len + 1,
+            modified_ms: current.modified_ms,
+        };
+        let error = verify_trusted_identity(&current, Some(&stale)).unwrap_err();
+        assert!(error.contains("changed since trust"));
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn inspection_reuses_first_healthy_stack_deterministically() {
+        let runtime = temp_runtime();
+        // Create two healthy stacks; deterministic order must prefer the
+        // first known stack (rfdetr-default) regardless of creation order.
+        make_stack_python(&runtime, "rfdetr-coreml");
+        make_stack_python(&runtime, "rfdetr-default");
+        let can_inspect = |_: &str| true;
+
+        let (key, python) = resolve_inspection_stack(&runtime, None, &can_inspect).unwrap();
+        assert_eq!(key, "rfdetr-default");
+        assert!(python.contains("rfdetr-default"));
+        assert!(!Path::new(
+            &runtime
+                .join("envs")
+                .join("rfdetr-default")
+                .join("created-by-inspect")
+        )
+        .exists());
+        std::fs::remove_dir_all(&runtime).unwrap();
+    }
+
+    #[test]
+    fn inspection_skips_broken_stacks_with_only_folder_or_metadata() {
+        let runtime = temp_runtime();
+        // Folder + interpreter exist but capability probe fails: must be
+        // rejected even though the directory is present.
+        make_stack_python(&runtime, "rfdetr-default");
+        let healthy = make_stack_python(&runtime, "rfdetr-coreml");
+        let can_inspect = |python: &str| python == healthy;
+
+        let (key, python) = resolve_inspection_stack(&runtime, None, &can_inspect).unwrap();
+        assert_eq!(key, "rfdetr-coreml");
+        assert_eq!(python, healthy);
+        std::fs::remove_dir_all(&runtime).unwrap();
+    }
+
+    #[test]
+    fn requested_broken_stack_is_rejected_without_fallback() {
+        let runtime = temp_runtime();
+        make_stack_python(&runtime, "rfdetr-default");
+        let can_inspect = |_: &str| false;
+
+        let error =
+            resolve_inspection_stack(&runtime, Some("rfdetr-default"), &can_inspect).unwrap_err();
+        assert!(error.contains("rfdetr-default"));
+        assert!(error.contains("before inspection"));
+        std::fs::remove_dir_all(&runtime).unwrap();
+    }
+
+    #[test]
+    fn no_healthy_stack_preserves_trust_guidance_without_creating_default() {
+        let runtime = temp_runtime();
+        let can_inspect = |_: &str| true;
+
+        let error = resolve_inspection_stack(&runtime, None, &can_inspect).unwrap_err();
+        assert!(error.contains("No healthy"));
+        assert!(error.contains("Set up a route environment before inspection."));
+
+        // Inspection must never create rfdetr-default merely because a
+        // checkpoint was uploaded.
+        assert!(!runtime.join("envs").join("rfdetr-default").exists());
+        let _ = std::fs::remove_dir_all(&runtime);
+    }
+
+    #[test]
+    fn arbitrary_python_path_is_rejected_as_unknown_stack() {
+        let runtime = temp_runtime();
+        let can_inspect = |_: &str| true;
+
+        for arbitrary in [
+            "/usr/bin/python3",
+            "/tmp/runtime/.venv/bin/python",
+            "python3",
+        ] {
+            let error =
+                resolve_inspection_stack(&runtime, Some(arbitrary), &can_inspect).unwrap_err();
+            assert!(
+                error.contains("unknown RF-DETR stack"),
+                "unexpected error for {}: {}",
+                arbitrary,
+                error
+            );
+        }
+        let _ = std::fs::remove_dir_all(&runtime);
     }
 }
