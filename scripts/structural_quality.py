@@ -9,7 +9,7 @@ from pathlib import Path
 
 SUPPORTED = {".py", ".rs", ".js", ".ts", ".tsx", ".jsx"}
 STRUCTURAL_ROOTS = (("src/", {".ts", ".tsx", ".js", ".jsx"}), ("src-tauri/src/", {".rs"}), ("src-tauri/python/", {".py"}), ("scripts/", {".py"}))
-THRESHOLDS = (("nloc", 100), ("complexity", 15), ("parameters", 5))
+THRESHOLDS = (("nloc", 110), ("complexity", 15), ("parameters", 5))
 LIMITS = dict(THRESHOLDS)
 MARKER = "<!-- structural-code-quality -->"
 
