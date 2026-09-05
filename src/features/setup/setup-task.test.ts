@@ -851,7 +851,6 @@ describe("python-required pending setup (ticket 06)", () => {
   test("a replacement that saves while the old save is in flight wins", async () => {
     const savingA = deferred<void>();
     const startedA = deferred<void>();
-    const validatingB = deferred<BootstrapPythonResult>();
     let runsA = 0;
     let runsB = 0;
     const { owner, gateDeps, saves, stored } = createPythonHarness({
@@ -861,10 +860,6 @@ describe("python-required pending setup (ticket 06)", () => {
           await savingA.promise;
         }
       },
-      resolveImpl: (routeId) => {
-        if (routeId === "rfdetr.pth.tflite") return validatingB.promise;
-        return Promise.resolve(availableResult());
-      },
     });
     owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), async () => {
       runsA += 1;
@@ -872,17 +867,15 @@ describe("python-required pending setup (ticket 06)", () => {
     const stale = owner.choosePythonForSetup(gateDeps, "/choice-a/python");
     await startedA.promise;
 
+    // The replacement queues behind the in-flight save: the stale unit
+    // finishes first and puts back what it found, then the live unit saves
+    // its own choice and retries. Writes: /choice-a, null, /choice-b.
     owner.requirePythonForSetup("rfdetr.pth.tflite", missingResult("Python 3.12"), async () => {
       runsB += 1;
     });
     const live = owner.choosePythonForSetup(gateDeps, "/choice-b/python");
-    // The stale save completes while the replacement is still validating:
-    // nothing newer wrote, so it puts back what it found.
     savingA.resolve();
     await stale;
-    expect(stored()).toBeNull();
-    // The live choice then validates, saves, and retries normally.
-    validatingB.resolve(availableResult());
     await live;
 
     expect(saves).toEqual(["/choice-a/python", null, "/choice-b/python"]);

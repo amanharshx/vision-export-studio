@@ -336,10 +336,27 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
   // without running anything or touching the new state.
   let pythonGate: PythonRequiredState = emptyPythonRequiredState();
   let pythonGeneration = 0;
-  // Generation of the most recently completed gate save. A stale flow
-  // restores only when no newer generation saved and its own write is still
-  // current; anything newer, or anything the user wrote, always stands.
-  let lastGateSaveGeneration: number | null = null;
+  // Serializes every gate settings write (plus its staleness
+  // reconciliation) so overlapping choose/clear flows cannot interleave
+  // writes: each unit completes fully before the next begins. Without this,
+  // a stale flow finishing after its replacement would leave its own write
+  // persisted last, and no post-hoc check could put the winner's back.
+  let saveLock: Promise<void> = Promise.resolve();
+
+  const withSaveLock = async <T>(work: () => Promise<T>): Promise<T> => {
+    const previous = saveLock;
+    let release!: () => void;
+    const mine = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    saveLock = mine;
+    await previous;
+    try {
+      return await work();
+    } finally {
+      release();
+    }
+  };
 
   const setPythonGate = (next: PythonRequiredState) => {
     pythonGate = next;
@@ -382,16 +399,16 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
     setPythonGate({ ...pythonGate, busy: false, choiceError: message });
   };
 
-  // Restore the override a stale flow persisted, unless something newer
-  // wrote after it. A gate action that never reaches retry leaves settings
-  // exactly as it found them; a replacement's or user's newer save stands.
+  // Restore the override a stale flow persisted, unless something else
+  // already wrote after it. A gate action that never reaches retry leaves
+  // settings exactly as it found them; whatever wrote last always stands,
+  // so this re-reads before touching anything. Callers run it inside the
+  // save lock, which keeps overlapping flows from interleaving with it.
   const reconcileStaleSave = async (
     gateDeps: PythonRequiredDeps,
-    generation: number,
     myWrite: string | null,
     previousOverride: string | null,
   ): Promise<void> => {
-    if (lastGateSaveGeneration !== null && lastGateSaveGeneration > generation) return;
     let current: string | null;
     try {
       current = await gateDeps.loadOverride();
@@ -612,16 +629,17 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
       }
       if (!isGateCurrent(generation, pending)) return;
       try {
-        await gateDeps.saveOverride(chosenPath);
+        await withSaveLock(async () => {
+          await gateDeps.saveOverride(chosenPath);
+          if (!isGateCurrent(generation, pending)) {
+            await reconcileStaleSave(gateDeps, chosenPath, previousOverride);
+          }
+        });
       } catch (error) {
         failPythonGate(generation, pending, String(error));
         return;
       }
-      lastGateSaveGeneration = generation;
-      if (!isGateCurrent(generation, pending)) {
-        await reconcileStaleSave(gateDeps, generation, chosenPath, previousOverride);
-        return;
-      }
+      if (!isGateCurrent(generation, pending)) return;
       const run = pending.run;
       closePythonGate();
       await run();
@@ -654,16 +672,17 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
       }
       if (!isGateCurrent(generation, pending)) return;
       try {
-        await gateDeps.saveOverride(null);
+        await withSaveLock(async () => {
+          await gateDeps.saveOverride(null);
+          if (!isGateCurrent(generation, pending)) {
+            await reconcileStaleSave(gateDeps, null, previousOverride);
+          }
+        });
       } catch (error) {
         failPythonGate(generation, pending, String(error));
         return;
       }
-      lastGateSaveGeneration = generation;
-      if (!isGateCurrent(generation, pending)) {
-        await reconcileStaleSave(gateDeps, generation, null, previousOverride);
-        return;
-      }
+      if (!isGateCurrent(generation, pending)) return;
       let redetected: BootstrapPythonResult;
       try {
         redetected = await gateDeps.resolveBootstrap(pending.routeId);
