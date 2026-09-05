@@ -178,35 +178,6 @@ export function getUltralyticsRuntimeDisabledReason(runtimeInstallPhase: Runtime
     : "Install the Ultralytics runtime before choosing a YOLO export target.";
 }
 
-export interface UltralyticsSetupBanner {
-  title: string;
-  body: string;
-  action: string;
-  secondaryAction: string | null;
-}
-
-/** Provider-wide Ultralytics setup entry (kept until ticket 08). Failed setups
- * keep the partially created environment and offer Retry in place before the
- * confirmed full recreation (Remove, limited to the known app-owned key). */
-export function getUltralyticsSetupBannerContent(
-  runtimeInstallPhase: RuntimeInstallPhase,
-): UltralyticsSetupBanner {
-  if (runtimeInstallPhase === "failed") {
-    return {
-      title: "Setup incomplete",
-      body: "The partially created environment was preserved. Retry to continue in the same environment, or remove it for a confirmed fresh start.",
-      action: "Retry setup",
-      secondaryAction: "Remove…",
-    };
-  }
-  return {
-    title: "Ultralytics runtime required",
-    body: "Install once to enable YOLO exports on this machine.",
-    action: "Install Runtime",
-    secondaryAction: null,
-  };
-}
-
 const defaultOptions: ExportOptions = {
   imgsz: 640,
   batch: 1,
@@ -1228,8 +1199,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       : ultralyticsSetupTask.status === "succeeded"
         ? "ready"
         : "failed";
-  // Provider-wide setup entry content (kept until ticket 08); bound once.
-  const ultralyticsSetupBanner = getUltralyticsSetupBannerContent(runtimeInstallPhase);
   const [managedRuntimeUpgrade, setManagedRuntimeUpgrade] = useState<ManagedRuntimeRebuildEligibility | null>(null);
   const [managedRuntimeUpgradeOpen, setManagedRuntimeUpgradeOpen] = useState(false);
   const [managedRuntimeRebuilding, setManagedRuntimeRebuilding] = useState(false);
@@ -1456,15 +1425,19 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       setDepCheckError(setupTerminalError ?? "Setup failed.");
       return;
     }
-    // Success: publish the managed interpreter for inventory + dependency
-    // refresh. If settings cannot reload, surface the error and rescan
-    // inventory explicitly instead of activating a stale interpreter.
-    void loadSettings()
-      .then((settings) => environmentPublisher.publish(getManagedPythonPath(settings.runtime_dir)))
-      .catch((error: unknown) => {
+    // Success: publish the managed interpreter, then rescan inventory
+    // explicitly so the panel reflects the new environment without waiting
+    // for another interaction. If settings cannot reload, surface the error
+    // and still rescan instead of activating a stale interpreter.
+    void (async () => {
+      try {
+        const settings = await loadSettings();
+        await environmentPublisher.publish(getManagedPythonPath(settings.runtime_dir));
+      } catch (error: unknown) {
         setDepCheckError(String(error));
-        void scanProviderEnvironments("ultralytics").catch(() => {});
-      });
+      }
+      await scanProviderEnvironments("ultralytics").catch(() => {});
+    })();
   }, [environmentPublisher, invalidateManagedEnvironmentSizesForMutation, scanProviderEnvironments, setupTerminalDismissed, setupTerminalError, setupTerminalSession, setupTerminalStatus]);
 
   // Register once; handlers filter events through the current session ref.
@@ -1588,12 +1561,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     // environment on terminal. It never touches sourcePath (loaded model),
     // export options, output-dir/Python overrides (the saved override value
     // is preserved; installs never go into it), or RF-DETR stacks.
-    // The install target is always the app-owned managed interpreter: when
-    // it exists, install in place so Retry continues in the same directory;
-    // otherwise resolve the bootstrap interpreter (saved override preferred
-    // automatically, Python-required dialog on missing) and let the backend
-    // create the isolated `.venv` from it. Packages never go into the
-    // bootstrap interpreter either way.
+    // Readiness lives in the backend: the frontend always passes the resolved
+    // bootstrap interpreter and the backend installs into the managed
+    // environment (creating it first when its interpreter is missing), so a
+    // partial environment missing its interpreter still gets repaired by Retry.
     setDepCheckLoading(true);
     setDepCheckError(null);
 
@@ -1613,42 +1584,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         setDepCheckError(String(error));
         return;
       }
-      // Truthful existence without depending on the detected env (which
-      // follows the override): cached inventory first, fresh scan fallback.
-      // Unknown after both means missing — the bootstrap path is safe either
-      // way because the backend probes before creating and never installs
-      // into the passed interpreter for this command.
-      let managedExists: boolean | null =
-        managedEnvironmentSizes["ultralytics-managed"]?.exists ?? null;
-      if (managedExists === null) {
-        try {
-          const scanned = await scanProviderEnvironments("ultralytics");
-          const row = scanned.find((item) => item.key === "ultralytics-managed");
-          if (row?.exists !== undefined && row.exists !== null) managedExists = row.exists;
-        } catch {
-          // Keep unknown; the bootstrap path below stays safe.
-        }
-      }
-      if (managedExists) {
-        // Install → verify → terminal lives in the app-wide owner, so
-        // unmounting (e.g. Landing navigation) cannot strand completion.
-        // Environment + current-route refresh happens in the terminal effect.
-        const result = await startRuntimeInstall({
-          provider: "ultralytics",
-          routeId: null,
-          environmentKey: "ultralytics-managed",
-          packages: [{ package: "ultralytics", prerelease: false }],
-          pythonPath: managedPythonPath,
-          summary: "Installing Ultralytics runtime…",
-        });
-        if (!result.ok) {
-          setDepCheckError(result.error);
-          invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
-          return;
-        }
-        return;
-      }
-
       const setupRouteId = defaultRouteForProvider("ultralytics").id;
       let bootstrap;
       try {
@@ -1668,6 +1603,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         setDepCheckError(bootstrap.reason);
         return;
       }
+      // Install → verify → terminal lives in the app-wide owner, so
+      // unmounting (e.g. Landing navigation) cannot strand completion.
+      // Environment + current-route refresh happens in the terminal effect.
       const result = await startRuntimeInstall({
         provider: "ultralytics",
         routeId: null,
@@ -1679,20 +1617,22 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         summary: "Creating Ultralytics environment…",
       });
       if (!result.ok) {
-        // Creation failure happens before any install session exists, so the
-        // terminal effect cannot invalidate: refresh inventory here so the
-        // preserved partial environment is visible as Setup incomplete.
+        // The terminal effect only runs with a session; creation failure has
+        // none, so refresh inventory here and keep the partial environment
+        // visible as Setup incomplete.
         setDepCheckError(result.error);
         invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
+        void scanProviderEnvironments("ultralytics").catch(() => {});
         return;
       }
     } catch (error) {
       setDepCheckError(String(error));
       invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
+      void scanProviderEnvironments("ultralytics").catch(() => {});
     } finally {
       setDepCheckLoading(false);
     }
-  }, [blockOnSetupConflict, cleanupBusy, dismissTask, invalidateManagedEnvironmentSizesForMutation, managedEnvironmentSizes, requirePython, scanProviderEnvironments, startRuntimeInstall, ultralyticsSetupTask]);
+  }, [blockOnSetupConflict, cleanupBusy, dismissTask, invalidateManagedEnvironmentSizesForMutation, requirePython, scanProviderEnvironments, startRuntimeInstall, ultralyticsSetupTask]);
   const handleInstallUltralyticsRuntimeRef = useRef(handleInstallUltralyticsRuntime);
   handleInstallUltralyticsRuntimeRef.current = handleInstallUltralyticsRuntime;
 
@@ -2770,20 +2710,25 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
               )}
             </div>
           )}
+          {/* Provider-wide setup entry (kept until ticket 08). A failed setup
+              keeps the partial environment: Retry continues in place, while
+              Remove… opens the existing confirmed cleanup for
+              ultralytics-managed only — removing it and setting up again is
+              the confirmed full recreation. */}
           {selectedProviderId === "ultralytics" && !ultralyticsRuntimeReady && !ultralyticsRuntimeInstalling && (
             <div className="flex items-center justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
               <div>
-                <p className="font-medium">{ultralyticsSetupBanner.title}</p>
-                <p className="mt-1">{ultralyticsSetupBanner.body}</p>
+                <p className="font-medium">{runtimeInstallPhase === "failed" ? "Setup incomplete" : "Ultralytics runtime required"}</p>
+                <p className="mt-1">{runtimeInstallPhase === "failed" ? "The partially created environment was preserved. Retry to continue in the same environment, or remove it for a confirmed fresh start." : "Install once to enable YOLO exports on this machine."}</p>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                {ultralyticsSetupBanner.secondaryAction && (
+                {runtimeInstallPhase === "failed" && (
                   <Button size="sm" variant="outline" onClick={() => void prepareCleanup("ultralytics")} disabled={cleanupBusy}>
-                    {ultralyticsSetupBanner.secondaryAction}
+                    Remove…
                   </Button>
                 )}
                 <Button size="sm" onClick={handleInstallUltralyticsRuntime} disabled={cleanupBusy}>
-                  {ultralyticsSetupBanner.action}
+                  {runtimeInstallPhase === "failed" ? "Retry setup" : "Install Runtime"}
                 </Button>
               </div>
             </div>

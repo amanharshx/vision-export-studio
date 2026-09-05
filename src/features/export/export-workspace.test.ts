@@ -11,7 +11,6 @@ import {
   getIncompatibleExportMessage,
   getManagedRuntimeRebuildFailureMessage,
   getManagedRuntimeUpgradeNudge,
-  getUltralyticsSetupBannerContent,
   ManagedRuntimeUpgradeDialogBody,
   mayStartManagedRuntimeUpgrade,
   mayActivateRoute,
@@ -177,33 +176,6 @@ describe("runtime operation UI guards", () => {
       refused: false,
       message: "[error] Failed to start install: spawn failed",
     });
-  });
-});
-
-describe("ultralytics on-demand setup banner (ticket 07)", () => {
-  test("keeps the provider-wide entry point when no setup has run", () => {
-    expect(getUltralyticsSetupBannerContent("idle")).toEqual({
-      title: "Ultralytics runtime required",
-      body: "Install once to enable YOLO exports on this machine.",
-      action: "Install Runtime",
-      secondaryAction: null,
-    });
-  });
-
-  test("labels a failed setup incomplete with Retry first and confirmed Remove", () => {
-    expect(getUltralyticsSetupBannerContent("failed")).toEqual({
-      title: "Setup incomplete",
-      body: "The partially created environment was preserved. Retry to continue in the same environment, or remove it for a confirmed fresh start.",
-      action: "Retry setup",
-      secondaryAction: "Remove…",
-    });
-  });
-
-  test("installing and ready keep the entry point copy, not the failure copy", () => {
-    expect(getUltralyticsSetupBannerContent("installing").title).toBe(
-      "Ultralytics runtime required",
-    );
-    expect(getUltralyticsSetupBannerContent("ready").action).toBe("Install Runtime");
   });
 });
 

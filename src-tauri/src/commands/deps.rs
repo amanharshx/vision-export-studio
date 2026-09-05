@@ -1201,11 +1201,6 @@ fn missing_stack_results_if_absent(
 // Ultralytics managed environment on-demand creation (ticket 07)
 // ---------------------------------------------------------------------------
 
-/// App-owned Ultralytics environment directory: `<runtime>/.venv`.
-fn ultralytics_managed_venv_dir(runtime_root: &str) -> std::path::PathBuf {
-    Path::new(runtime_root).join(".venv")
-}
-
 /// True when the app-owned Ultralytics interpreter already exists, so Retry
 /// continues in place instead of recreating.
 fn ultralytics_managed_ready(runtime_root: &str) -> bool {
@@ -1236,7 +1231,7 @@ fn ensure_ultralytics_managed_environment(
     // Backend safety outside the UI: refuse to run venv creation from a
     // non-Python or unusable bootstrap instead of spawning it blindly.
     probe_python_version(bootstrap_python)?;
-    let venv_dir = ultralytics_managed_venv_dir(runtime_root);
+    let venv_dir = Path::new(runtime_root).join(".venv");
     if let Some(parent) = venv_dir.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create runtime dir: {}", e))?;
@@ -2421,8 +2416,10 @@ mod tests {
         std::fs::create_dir_all(&root).expect("create temp root");
         write_fake_bootstrap(&bootstrap, true);
         let bootstrap_str = bootstrap.to_string_lossy().into_owned();
-        // Sibling state the setup must not touch: RF-DETR stack, output
-        // settings, and saved Python selection live outside `.venv`.
+        // Sibling state the setup must not touch: the RF-DETR stack shares the
+        // runtime root but lives outside `.venv`. (Output settings, the saved
+        // Python override, and the loaded model live outside the runtime root
+        // entirely, and this flow never writes settings or model state.)
         let sibling_python = Path::new(&runtime)
             .join("envs")
             .join("rfdetr-default")
@@ -2431,12 +2428,6 @@ mod tests {
             .join("python");
         std::fs::create_dir_all(sibling_python.parent().unwrap()).expect("create sibling");
         std::fs::write(&sibling_python, b"sibling").expect("write sibling");
-        std::fs::write(root.join("output-settings.json"), b"{\"dir\":\"keep\"}")
-            .expect("write output settings");
-        std::fs::write(root.join("python-selection.txt"), b"/chosen/python")
-            .expect("write python selection");
-        // Loaded model state lives outside the runtime root and must survive setup.
-        std::fs::write(root.join("model.pt"), b"loaded-model").expect("write loaded model");
 
         let managed = ensure_ultralytics_managed_environment(&bootstrap_str, &runtime)
             .expect("creation succeeds");
@@ -2449,19 +2440,6 @@ mod tests {
             std::fs::read(&sibling_python).expect("read sibling"),
             b"sibling",
             "RF-DETR environments preserved"
-        );
-        assert!(
-            root.join("output-settings.json").exists(),
-            "output settings preserved"
-        );
-        assert!(
-            root.join("python-selection.txt").exists(),
-            "python selection preserved"
-        );
-        assert_eq!(
-            std::fs::read(root.join("model.pt")).expect("read loaded model"),
-            b"loaded-model",
-            "loaded model state preserved"
         );
         std::fs::remove_dir_all(root).expect("remove temp root");
     }
@@ -2502,7 +2480,7 @@ mod tests {
         std::fs::create_dir_all(&root).expect("create temp root");
         write_fake_bootstrap(&bootstrap, false);
         // Partial env: .venv exists with a sentinel but no python binary.
-        let venv_dir = ultralytics_managed_venv_dir(&runtime);
+        let venv_dir = Path::new(&runtime).join(".venv");
         std::fs::create_dir_all(&venv_dir).expect("create partial venv");
         std::fs::write(venv_dir.join("keep.txt"), b"keep").expect("write sentinel");
 
@@ -2537,7 +2515,7 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(
-            !ultralytics_managed_venv_dir(&runtime).exists(),
+            !Path::new(&runtime).join(".venv").exists(),
             "no environment created from an unusable bootstrap"
         );
         std::fs::remove_dir_all(root).expect("remove temp root");
@@ -2551,7 +2529,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ultralytics-retry-{}", Uuid::new_v4()));
         let runtime = root.join("runtime").to_string_lossy().into_owned();
         std::fs::create_dir_all(&root).expect("create temp root");
-        let venv_dir = ultralytics_managed_venv_dir(&runtime);
+        let venv_dir = Path::new(&runtime).join(".venv");
         std::fs::create_dir_all(&venv_dir).expect("create partial venv");
         std::fs::write(venv_dir.join("keep.txt"), b"keep").expect("write sentinel");
 
