@@ -1003,4 +1003,57 @@ describe("python-required pending setup (ticket 06)", () => {
     expect(runsA).toBe(0);
     expect(owner.getPythonGate().pending).toBeNull();
   });
+
+  test("replacement during close-and-run keeps B and never runs A", async () => {
+    let runsA = 0;
+    let runsB = 0;
+    const { owner, gateDeps } = createPythonHarness();
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), async () => {
+      runsA += 1;
+    });
+    const result = owner.choosePythonForSetup(gateDeps, "/valid/python");
+    // The close emit below fires after live was calculated but before run
+    // is invoked; hooking it models replacement landing in that seam.
+    let hooked = false;
+    const unsub = owner.subscribe(() => {
+      if (!hooked && owner.getPythonGate().pending === null) {
+        hooked = true;
+        owner.requirePythonForSetup("rfdetr.pth.tflite", missingResult("Python 3.12"), async () => {
+          runsB += 1;
+        });
+      }
+    });
+    await result;
+    unsub();
+
+    expect(hooked).toBe(true);
+    expect(runsA).toBe(0);
+    expect(runsB).toBe(0);
+    expect(owner.getPythonGate().pending?.routeId).toBe("rfdetr.pth.tflite");
+    expect(owner.getPythonGate().dialogOpen).toBe(true);
+  });
+
+  test("cancellation during close-and-run never runs the stale action", async () => {
+    let runs = 0;
+    const { owner, gateDeps, run } = createPythonHarness();
+    const countingRun = async () => {
+      runs += 1;
+      await run();
+    };
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), countingRun);
+    const result = owner.choosePythonForSetup(gateDeps, "/valid/python");
+    let hooked = false;
+    const unsub = owner.subscribe(() => {
+      if (!hooked && owner.getPythonGate().pending === null) {
+        hooked = true;
+        owner.cancelPythonGate();
+      }
+    });
+    await result;
+    unsub();
+
+    expect(hooked).toBe(true);
+    expect(runs).toBe(0);
+    expect(owner.getPythonGate().pending).toBeNull();
+  });
 });

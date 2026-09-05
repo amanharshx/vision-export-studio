@@ -367,6 +367,19 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
     setPythonGate({ pending: null, result: null, dialogOpen: false, choiceError: null, busy: false });
   };
 
+  // Close the gate and run only when nothing replaced or canceled it while
+  // closing: subscribers run synchronously inside the close emit, so the
+  // ownership check must happen after closePythonGate returns, not before.
+  const closeGateAndRunIfCurrent = async (
+    generation: number,
+    pending: PendingPythonSetup,
+  ): Promise<void> => {
+    const run = pending.run;
+    closePythonGate();
+    if (pythonGeneration !== generation) return;
+    await run();
+  };
+
   const isGateCurrent = (generation: number, pending: PendingPythonSetup) =>
     generation === pythonGeneration && pythonGate.pending === pending;
 
@@ -469,9 +482,7 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
   ): Promise<void> => {
     if (!isGateCurrent(generation, pending)) return;
     if (redetected.status === "available") {
-      const run = pending.run;
-      closePythonGate();
-      await run();
+      await closeGateAndRunIfCurrent(generation, pending);
       return;
     }
     if (isPythonRequiredResult(redetected)) {
@@ -627,8 +638,10 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
     },
 
     cancelPythonGate: () => {
-      if (!pythonGate.dialogOpen && !pythonGate.pending) return;
+      // Bump even when already closed: a finishing flow may be sitting
+      // between its final check and its run, and that run must not happen.
       pythonGeneration += 1;
+      if (!pythonGate.dialogOpen && !pythonGate.pending) return;
       closePythonGate();
     },
 
@@ -657,10 +670,8 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
       // the lock, so a stale choice still never saves.
       if (!isGateCurrent(generation, pending)) return;
       const live = await runGateSaveUnit(gateDeps, generation, pending, chosenPath);
-      if (!live) return;
-      const run = pending.run;
-      closePythonGate();
-      await run();
+      if (!live || !isGateCurrent(generation, pending)) return;
+      await closeGateAndRunIfCurrent(generation, pending);
     },
 
     checkAgainPythonGate: async (gateDeps) => {
@@ -682,7 +693,7 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
       if (!started) return;
       const { generation, pending, previous } = started;
       const live = await runGateSaveUnit(gateDeps, generation, pending, null);
-      if (!live) return;
+      if (!live || !isGateCurrent(generation, pending)) return;
       let redetected: BootstrapPythonResult;
       try {
         redetected = await gateDeps.resolveBootstrap(pending.routeId);
