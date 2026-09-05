@@ -38,6 +38,7 @@ import type {
   ManagedEnvironmentKey,
   ManagedEnvironmentScanResult,
   ProviderId,
+  ProviderSpec,
   RfDetrInspectResult,
   RfDetrInspectStatus,
   RfDetrVariantMode,
@@ -81,8 +82,19 @@ import {
 import type { UpdaterController } from "@/features/updater/use-updater-controller";
 
 import { DropZone } from "./drop-zone";
-import { ExportModal } from "./export-modal";
+import { ExportModal, type UltralyticsSetupModalState } from "./export-modal";
 import { RouteGrid } from "./route-grid";
+import {
+  emptyRouteDepCheck,
+  getUltralyticsRouteSetupFallbackPackages,
+  getUltralyticsRouteSetupStatus,
+  hasBlockingDependencies,
+  installSpecFromHint,
+  selectRouteDepCheck,
+  shouldHideUltralyticsExportControls,
+  type RouteDepCheck,
+  type SetupInstallTarget,
+} from "./ultralytics-route-setup";
 import { getEffectiveHostSupportResult, getHostSupportResult } from "./host-support";
 import { normalizeOptionsForRoute } from "./options/normalize";
 import { validateRfDetrImgsz } from "./rfdetr-image-size";
@@ -182,12 +194,6 @@ export function ManagedRuntimeUpgradeDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-export function getUltralyticsRuntimeDisabledReason(runtimeInstallPhase: RuntimeInstallPhase): string | undefined {
-  return runtimeInstallPhase === "installing"
-    ? undefined
-    : "Install the Ultralytics runtime before choosing a YOLO export target.";
 }
 
 const defaultOptions: ExportOptions = {
@@ -481,14 +487,52 @@ export function getInstallableMissingPackages(results: DepCheckResult[] | null):
     if (result.install_package) {
       return [{ package: result.install_package, prerelease: result.prerelease === true }];
     }
-    if (result.status === "missing_binary" && result.install_hint.startsWith("pip install ")) {
-      return [{ package: result.install_hint.replace("pip install ", "").trim(), prerelease: false }];
+    if (result.status === "missing_binary") {
+      const spec = installSpecFromHint(result.install_hint);
+      return spec ? [{ package: spec, prerelease: false }] : [];
     }
     return [];
   });
   return packages.filter((dependency, index) =>
     packages.findIndex((candidate) => candidate.package === dependency.package) === index,
   );
+}
+
+/**
+ * Install list for one route's setup: the checked route's own missing
+ * packages (with backend version pins), falling back to the route spec only
+ * when no check for this route could run because the environment is absent.
+ */
+export function getSetupPackagesForCheck(
+  provider: ProviderSpec,
+  route: RouteSpec,
+  check: RouteDepCheck,
+): InstallableDependency[] {
+  if (check.results) return getInstallableMissingPackages(check.results);
+  return getUltralyticsRouteSetupFallbackPackages(provider, route);
+}
+
+/**
+ * Authoritative install list for one route's setup. A missing managed
+ * environment always installs the full route fallback: a check that ran
+ * against another interpreter (e.g. a saved override with partial packages)
+ * must never decide what lands in the fresh environment. Missing-only
+ * results are used solely when they were checked against the managed
+ * interpreter they install into.
+ */
+export function getSetupInstallPackages(
+  provider: ProviderSpec,
+  route: RouteSpec,
+  check: RouteDepCheck,
+  managed: SetupInstallTarget,
+): InstallableDependency[] {
+  if (managed.needsWork) {
+    return getUltralyticsRouteSetupFallbackPackages(provider, route);
+  }
+  if (check.results && check.pythonPath === managed.pythonPath) {
+    return getInstallableMissingPackages(check.results);
+  }
+  return getUltralyticsRouteSetupFallbackPackages(provider, route);
 }
 
 export function mayActivateRoute(exportStatus: ExportStatus, installPhase: InstallPhase): boolean {
@@ -532,14 +576,6 @@ export function getInstallStartFailureOutcome(error: string): {
 export function getManagedRuntimeRebuildFailureMessage(error: string): string {
   return getRuntimeOperationRefusalMessage(error, "setting up a new runtime")
     ?? `Runtime upgrade failed: ${error}. Previous runtime is unchanged.`;
-}
-
-function hasBlockingDependencies(results: DepCheckResult[] | null): boolean {
-  if (!results) {
-    return true;
-  }
-
-  return results.some((result) => result.status !== "ready" && result.status !== "warning");
 }
 
 export function getExportFailedUserMessage(error: string): string {
@@ -1194,10 +1230,17 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Export options
   const [options, setOptions] = useState<ExportOptions>(defaultOptions);
 
-  // Dependency check state
-  const [depResults, setDepResults] = useState<DepCheckResult[] | null>(null);
+  // Dependency check state. Results and errors belong to exactly one route:
+  // the id travels with them so a stale check can never drive another
+  // route's status, install list, or displayed requirements.
+  const [routeDepCheck, setRouteDepCheck] = useState<RouteDepCheck>(emptyRouteDepCheck());
   const [depCheckLoading, setDepCheckLoading] = useState(false);
-  const [depCheckError, setDepCheckError] = useState<string | null>(null);
+  /** Stamp a route-scoped error, dropping results checked for another route. */
+  const setRouteDepCheckError = useCallback((routeId: string, error: string | null) => {
+    setRouteDepCheck((prev) => (prev.routeId === routeId
+      ? { results: prev.results, routeId, error, pythonPath: prev.pythonPath }
+      : { results: null, routeId, error, pythonPath: null }));
+  }, []);
 
   // Install phase state
   const [installPhase, setInstallPhase] = useState<InstallPhase>("idle");
@@ -1252,12 +1295,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     },
     [selectedRouteId, sourcePath],
   );
-
-  const missingPackageNames = useMemo(() => {
-    return getInstallableMissingPackages(depResults);
-  }, [depResults]);
-  const ultralyticsRuntimeReady = selectedProviderId !== "ultralytics" || Boolean(envInfo?.yolo_path);
-  const ultralyticsRuntimeInstalling = runtimeInstallPhase === "installing";
   const setupConflictMessage = isSetupTaskActive(setupTask) ? SETUP_CONFLICT_MESSAGE : null;
   // Single shared guard for every setup-owned conflict (setup, export,
   // cleanup, rebuild). Each handler passes its own inline error setter.
@@ -1268,12 +1305,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   };
   // Navigation stays available while setup runs; only the setup-owned
   // conflicts (setup/export/cleanup/rebuild) are blocked via the message.
-  // Route activation keeps its existing rebuild/redetect guards and drops
-  // only the setup restriction.
-  const ultralyticsRuntimeBlocking =
-    selectedProviderId === "ultralytics" &&
-    !envInfo?.yolo_path &&
-    runtimeInstallPhase !== "installing";
+  // Route cards stay visible and selectable while the managed environment or
+  // route packages are missing: each route owns its setup in its modal.
   const routeActivationAllowed =
     !cleanupBusy &&
     mayActivateRoute(exportStatus, installPhase) &&
@@ -1287,10 +1320,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     managedRuntimeRebuilding,
     redetecting,
   });
-  const routeGridDisabled = ultralyticsRuntimeBlocking || !routeActivationAllowed;
+  const routeGridDisabled = !routeActivationAllowed;
   const routeGridDisabledReason = !routeActivationAllowed
     ? (installPhase === "installing" ? "Dependency installation in progress" : "Export in progress")
-    : getUltralyticsRuntimeDisabledReason(runtimeInstallPhase);
+    : undefined;
   const mayStartRuntimeUpgrade = !cleanupBusy && mayStartManagedRuntimeUpgrade(
     exportStatus,
     installPhase,
@@ -1301,6 +1334,50 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     managedRuntimeUpgrade,
     mayStartRuntimeUpgrade,
   );
+  // Route-owned Ultralytics setup (ticket 08): the selected route's own
+  // check drives the modal's setup-only mode, so a stale check from another
+  // route can never leak in. A task marks setting-up only the route it runs
+  // for and setup-incomplete only the route it failed for (a null task route
+  // keeps the legacy global behavior). RF-DETR keeps its existing flow until
+  // its own setup tickets land.
+  const selectedRouteHostStatus = getHostSupportResult(effectiveHostSupportResults, selectedRoute.id)?.status ?? "checking";
+  const selectedCheck = selectRouteDepCheck(routeDepCheck, selectedRouteId);
+  const setupTaskAppliesToSelectedRoute = (ultralyticsSetupTask?.routeId ?? selectedRouteId) === selectedRouteId;
+  const setupActiveForSelectedRoute = ultralyticsSetupTask?.status === "active" && setupTaskAppliesToSelectedRoute;
+  const ultralyticsRouteSetupStatus = selectedProviderId === "ultralytics"
+    ? getUltralyticsRouteSetupStatus({
+      hostStatus: selectedRouteHostStatus,
+      depResults: selectedCheck.results,
+      depCheckLoading,
+      depCheckError: selectedCheck.error,
+      setupActive: setupActiveForSelectedRoute,
+      setupFailed: ultralyticsSetupTask?.status === "failed" && setupTaskAppliesToSelectedRoute,
+    })
+    : null;
+  const ultralyticsRouteSetupPackages = ultralyticsRouteSetupStatus != null && ultralyticsRouteSetupStatus !== "ready"
+    ? getSetupPackagesForCheck(selectedProvider, selectedRoute, selectedCheck)
+    : [];
+  const selectedMissingPackages = useMemo(() => {
+    return getInstallableMissingPackages(selectedCheck.results);
+  }, [selectedCheck]);
+  const ultralyticsSetupModalState: UltralyticsSetupModalState | null = ultralyticsRouteSetupStatus == null
+    ? null
+    : {
+      status: ultralyticsRouteSetupStatus,
+      actionLabel: `Set up ${selectedRoute.title}`,
+      busy: cleanupBusy || setupActiveForSelectedRoute,
+      canSetup: (ultralyticsRouteSetupStatus === "not-set-up" ? ultralyticsRouteSetupPackages.length > 0 : true)
+        && !cleanupBusy
+        && !setupConflictMessage,
+      showRecovery: ultralyticsRouteSetupStatus === "setup-incomplete",
+      error: selectedCheck.error,
+    };
+  // Export chrome (runtime-upgrade nudge, artifact banners, export errors,
+  // and — inside the modal — options, preview, and Start export) stays
+  // hidden until the exact Ultralytics route is ready. The setup-conflict
+  // message is not export chrome: it also blocks the setup action itself.
+  const ultralyticsSetupHidesExport = ultralyticsRouteSetupStatus != null
+    && shouldHideUltralyticsExportControls(selectedProviderId, ultralyticsRouteSetupStatus);
   // Ref to current sessionId for use inside event listener closures
   const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = sessionId;
@@ -1370,17 +1447,15 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
 
     if (!routeId || !pythonPath) {
       if (depRefreshRequestRef.current === requestId) {
-        setDepResults(null);
-        setDepCheckError(null);
+        setRouteDepCheck(emptyRouteDepCheck());
         setDepCheckLoading(false);
       }
       return;
     }
 
     if (depRefreshRequestRef.current === requestId) {
-      setDepResults(null);
+      setRouteDepCheck(emptyRouteDepCheck());
       setDepCheckLoading(true);
-      setDepCheckError(null);
     }
 
     try {
@@ -1388,13 +1463,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       if (depRefreshRequestRef.current !== requestId) {
         return;
       }
-      setDepResults(response.results);
+      setRouteDepCheck({ results: response.results, routeId, error: null, pythonPath });
     } catch (error) {
       if (depRefreshRequestRef.current !== requestId) {
         return;
       }
-      setDepResults(null);
-      setDepCheckError(String(error));
+      setRouteDepCheck({ results: null, routeId, error: String(error), pythonPath });
       throw error;
     } finally {
       if (depRefreshRequestRef.current === requestId) {
@@ -1409,7 +1483,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   useEffect(() => {
     const pythonPath = envInfo?.python_path;
     if (!pythonPath || !selectedRouteId) {
-      setDepResults(null);
+      setRouteDepCheck(emptyRouteDepCheck());
       return;
     }
 
@@ -1428,13 +1502,15 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   const setupTerminalStatus = ultralyticsSetupTask?.status ?? null;
   const setupTerminalError = ultralyticsSetupTask?.error ?? null;
   const setupTerminalDismissed = ultralyticsSetupTask?.dismissed ?? null;
+  const setupTerminalRoute = ultralyticsSetupTask?.routeId ?? null;
   useEffect(() => {
     if (!setupTerminalSession) return;
     if (setupTerminalStatus !== "succeeded" && setupTerminalStatus !== "failed") return;
     if (setupTerminalDismissed) return;
     invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
     if (setupTerminalStatus === "failed") {
-      setDepCheckError(setupTerminalError ?? "Setup failed.");
+      // Stamp the failed task's route so only that route reports the error.
+      setRouteDepCheckError(setupTerminalRoute ?? selectedRouteId, setupTerminalError ?? "Setup failed.");
       return;
     }
     // Success: publish the managed interpreter, then rescan inventory
@@ -1446,11 +1522,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         const settings = await loadSettings();
         await environmentPublisher.publish(getManagedPythonPath(settings.runtime_dir));
       } catch (error: unknown) {
-        setDepCheckError(String(error));
+        setRouteDepCheckError(setupTerminalRoute ?? selectedRouteId, String(error));
       }
       await scanProviderEnvironments("ultralytics").catch(() => {});
     })();
-  }, [environmentPublisher, invalidateManagedEnvironmentSizesForMutation, scanProviderEnvironments, setupTerminalDismissed, setupTerminalError, setupTerminalSession, setupTerminalStatus]);
+  }, [environmentPublisher, invalidateManagedEnvironmentSizesForMutation, scanProviderEnvironments, selectedRouteId, setRouteDepCheckError, setupTerminalDismissed, setupTerminalError, setupTerminalRoute, setupTerminalSession, setupTerminalStatus]);
 
   // Register once; handlers filter events through the current session ref.
   useEffect(() => {
@@ -1565,13 +1641,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     }
   }, []);
 
-  // Shared core installer for the provider-wide Ultralytics setup: probe the
+  // Shared core installer for route-owned Ultralytics setup: probe the
   // backend-owned readiness, resolve a bootstrap only when work is needed,
-  // and run one install call. Both banner setup and Recreate call this same
-  // core; only the click handler below adds the cleanup-busy guard, so a
-  // sequenced caller never trips on a flag it holds itself.
-  const runUltralyticsInstall = useCallback(async (opts?: InstallUltralyticsOptions): Promise<boolean> => {
-    if (blockOnSetupConflict(setDepCheckError)) return false;
+  // and run one install call for the selected route only. Modal setup,
+  // Retry, and Recreate call this same core; only the click handler below
+  // adds the cleanup-busy guard, so a sequenced caller never trips on a flag
+  // it holds itself.
+  const runUltralyticsRouteSetup = useCallback(async (routeId: string, opts?: InstallUltralyticsOptions): Promise<boolean> => {
+    if (blockOnSetupConflict((message) => setRouteDepCheckError(routeId, message))) return false;
 
     // This flow only starts the app-wide setup task and publishes the fresh
     // environment on terminal. It never touches sourcePath (loaded model),
@@ -1587,11 +1664,23 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     // it. Packages never go into the bootstrap interpreter either way.
     // Reuse and creation converge below on one install/error-refresh path:
     // the branches only build the request, never duplicate the install.
-    setDepCheckLoading(true);
-    setDepCheckError(null);
+    // Packages are selected after readiness (see getSetupInstallPackages): a
+    // missing managed environment always installs the full route fallback,
+    // because a check that ran against another interpreter (e.g. a saved
+    // override with partial packages) must never decide what lands in the
+    // fresh environment. Other routes keep their independent readiness and
+    // nothing here marks them ready.
+    const route = findRoute(routeId) ?? defaultRouteForProvider("ultralytics");
+    const routeProvider = providers[route.providerId] ?? providers.ultralytics;
+    // depCheckLoading stays false here on purpose: it means a dependency
+    // check is in flight, and setup progress is already represented by the
+    // app-wide setup task (setting-up) plus the activity bar. Setting it
+    // would force every other route's panel into Checking while this one
+    // installs.
+    setRouteDepCheckError(routeId, null);
 
     const failInstall = (error: string): false => {
-      setDepCheckError(error);
+      setRouteDepCheckError(routeId, error);
       invalidateManagedEnvironmentSizesForMutation(["ultralytics-managed"]);
       void scanProviderEnvironments("ultralytics").catch(() => {});
       return false;
@@ -1609,55 +1698,64 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       try {
         readiness = await ultralyticsSetupReadiness();
       } catch (error) {
-        setDepCheckError(String(error));
+        setRouteDepCheckError(routeId, String(error));
         return false;
       }
       const managedPythonPath = readiness.managed_python;
+      const packages = getSetupInstallPackages(routeProvider, route, selectRouteDepCheck(routeDepCheck, routeId), {
+        needsWork: readiness.needs_work,
+        pythonPath: managedPythonPath,
+      });
+      if (packages.length === 0) {
+        setRouteDepCheckError(routeId, "No installable packages were reported for this route. Re-run the dependency check before setup.");
+        return false;
+      }
       let request: RuntimeInstallRequest;
       if (!readiness.needs_work) {
         request = {
           provider: "ultralytics",
-          routeId: null,
+          routeId,
           environmentKey: "ultralytics-managed",
-          packages: [{ package: "ultralytics", prerelease: false }],
+          packages,
           pythonPath: managedPythonPath,
-          summary: "Installing Ultralytics runtime…",
+          summary: `Setting up ${route.title}…`,
         };
       } else {
-        const setupRouteId = defaultRouteForProvider("ultralytics").id;
         let bootstrap;
         try {
-          bootstrap = await resolveBootstrapPython(setupRouteId);
+          bootstrap = await resolveBootstrapPython(routeId);
         } catch (error) {
-          setDepCheckError(String(error));
+          setRouteDepCheckError(routeId, String(error));
           return false;
         }
         if (isPythonRequiredResult(bootstrap)) {
-          // The pending retry keeps the caller's opts, so a Recreate that
-          // detours through the dialog still marks setup complete after.
+          // The pending retry keeps the caller's route and opts, so a
+          // Recreate that detours through the dialog still marks setup
+          // complete after.
           const pendingOpts = opts;
-          requirePython(setupRouteId, bootstrap, () => handleInstallUltralyticsRuntimeRef.current(pendingOpts));
+          requirePython(routeId, bootstrap, () => handleRouteSetupRef.current(routeId, pendingOpts));
           // No mutation happened, so no inventory refresh: the dialog owns
           // the next step (choose, check again, clear, or cancel).
-          setDepCheckError(
+          setRouteDepCheckError(
+            routeId,
             "Python required to set up the Ultralytics environment. Choose a compatible Python to continue.",
           );
           return false;
         }
         if (bootstrap.status === "error") {
-          setDepCheckError(bootstrap.reason);
+          setRouteDepCheckError(routeId, bootstrap.reason);
           return false;
         }
         request = {
           provider: "ultralytics",
-          routeId: null,
+          routeId,
           environmentKey: "ultralytics-managed",
-          packages: [{ package: "ultralytics", prerelease: false }],
+          packages,
           pythonPath: bootstrap.python_path,
           verifyPythonPath: managedPythonPath,
           createsEnvironment: true,
           finalize: opts?.finalize,
-          summary: "Creating Ultralytics environment…",
+          summary: `Creating environment for ${route.title}…`,
         };
       }
       // Install → verify → terminal lives in the app-wide owner, so
@@ -1673,31 +1771,30 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       return true;
     } catch (error) {
       return failInstall(String(error));
-    } finally {
-      setDepCheckLoading(false);
     }
-  }, [blockOnSetupConflict, dismissTask, invalidateManagedEnvironmentSizesForMutation, requirePython, scanProviderEnvironments, startRuntimeInstall, ultralyticsSetupTask]);
-  // Guarded click handler for banner buttons and dialog retries: blocks while
-  // an Environment-panel cleanup owns the runtime. Recreate calls the core
-  // above directly instead, sequencing cleanup before install itself.
-  const handleInstallUltralyticsRuntime = useCallback(async (opts?: InstallUltralyticsOptions): Promise<void> => {
+  }, [blockOnSetupConflict, dismissTask, invalidateManagedEnvironmentSizesForMutation, requirePython, routeDepCheck, scanProviderEnvironments, setRouteDepCheckError, startRuntimeInstall, ultralyticsSetupTask]);
+  // Guarded click handler for the route modal setup action and dialog
+  // retries: blocks while an Environment-panel cleanup owns the runtime.
+  // Recreate calls the core above directly instead, sequencing cleanup
+  // before install itself.
+  const handleRouteSetup = useCallback(async (routeId: string, opts?: InstallUltralyticsOptions): Promise<void> => {
     if (cleanupBusy) return;
-    await runUltralyticsInstall(opts);
-  }, [cleanupBusy, runUltralyticsInstall]);
-  const handleInstallUltralyticsRuntimeRef = useRef(handleInstallUltralyticsRuntime);
-  handleInstallUltralyticsRuntimeRef.current = handleInstallUltralyticsRuntime;
+    await runUltralyticsRouteSetup(routeId, opts);
+  }, [cleanupBusy, runUltralyticsRouteSetup]);
+  const handleRouteSetupRef = useRef(handleRouteSetup);
+  handleRouteSetupRef.current = handleRouteSetup;
 
-  // Confirmed full recreation for a failed Ultralytics setup: removes only
-  // ultralytics-managed through the existing cleanup command, then sets it
-  // up again through the install path above. The global Setup screen is
-  // bypassed deliberately (no onSetupCompleteChange call): marking setup
-  // complete after a successful reinstall keeps the workspace stable instead
-  // of forcing a global reset. Output settings, the saved Python override,
-  // RF-DETR environments, the loaded model, and unrelated runtime files are
-  // untouched: cleanup deletes exactly one known key and the install only
-  // writes `.venv`.
-  const handleRecreateUltralytics = useCallback(async () => {
-    if (blockOnSetupConflict(setDepCheckError)) return;
+  // Confirmed full recreation for a failed route setup: removes only
+  // ultralytics-managed through the existing cleanup command, then sets the
+  // same route up again through the install path above. The global Setup
+  // screen is bypassed deliberately (no onSetupCompleteChange call): marking
+  // setup complete after a successful reinstall keeps the workspace stable
+  // instead of forcing a global reset. Output settings, the saved Python
+  // override, RF-DETR environments, the loaded model, and unrelated runtime
+  // files are untouched: cleanup deletes exactly one known key and the
+  // install only writes `.venv`.
+  const handleRecreateUltralytics = useCallback(async (routeId: string) => {
+    if (blockOnSetupConflict((message) => setRouteDepCheckError(routeId, message))) return;
     if (cleanupBusy) return;
     let confirmed = false;
     try {
@@ -1710,12 +1807,13 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     }
     if (!confirmed) return;
     setCleanupBusy(true);
-    setDepCheckError(null);
+    setRouteDepCheckError(routeId, null);
     try {
       const keys = managedEnvironmentKeysForProvider("ultralytics");
       const report = await cleanupManagedEnvironments(keys);
       if (!managedEnvironmentDeletionSucceeded(report, "ultralytics-managed")) {
-        setDepCheckError(
+        setRouteDepCheckError(
+          routeId,
           managedEnvironmentCleanupErrorMessage(report) ?? "Recreate failed before setup could restart.",
         );
         return;
@@ -1727,18 +1825,18 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       // Sequenced directly on the shared core, which performs no busy check
       // of its own: cleanup already finished, so no bypass flag is needed and
       // nothing depends on which render's callback runs.
-      await runUltralyticsInstall({
+      await runUltralyticsRouteSetup(routeId, {
         finalize: async () => {
           const settings = await loadSettings();
           await markSetupComplete(settings.runtime_dir);
         },
       });
     } catch (error) {
-      setDepCheckError(String(error));
+      setRouteDepCheckError(routeId, String(error));
     } finally {
       setCleanupBusy(false);
     }
-  }, [blockOnSetupConflict, cleanupBusy, invalidateManagedEnvironmentSizesForMutation, runUltralyticsInstall, stackEnvironments]);
+  }, [blockOnSetupConflict, cleanupBusy, invalidateManagedEnvironmentSizesForMutation, runUltralyticsRouteSetup, setRouteDepCheckError, stackEnvironments]);
 
   const failExportStart = useCallback((message: string) => {
     setInstallPhase("idle");
@@ -1875,7 +1973,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       setInvokeError("Dependency check still running. Wait for it to finish before export.");
       return;
     }
-    if (depCheckError || depResults === null) {
+    if (selectedCheck.error || selectedCheck.results === null) {
       setInvokeError("Dependency check not ready. Resolve dependency check before export.");
       return;
     }
@@ -1885,18 +1983,18 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       return;
     }
 
-    if (missingPackageNames.length > 0) {
+    if (selectedMissingPackages.length > 0) {
       setInvokeError(null);
       setInstallPhase("pending_consent");
       return;
     }
-    if (hasBlockingDependencies(depResults)) {
+    if (hasBlockingDependencies(selectedCheck.results)) {
       failExportStart("Blocking dependencies still unresolved. Review dependency panel before export.");
       return;
     }
 
     setLogLines([]);
-    await doStartExport(missingPackageNames.length);
+    await doStartExport(selectedMissingPackages.length);
   };
 
   // Install missing deps then auto-start export
@@ -1936,7 +2034,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       failExportStart(rfdetrImgszError);
       return;
     }
-    const missingPkgs = getInstallableMissingPackages(depResults);
+    const missingPkgs = getInstallableMissingPackages(selectedCheck.results);
 
     if (missingPkgs.length === 0) {
       setInstallPhase("idle");
@@ -1986,12 +2084,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
 
     setInstallPhase("done");
     setDepCheckLoading(true);
-    setDepCheckError(null);
+    setRouteDepCheck(emptyRouteDepCheck());
     let refreshedMissingPkgs: InstallableDependency[] = [];
     let freshEnv: EnvironmentInfo | undefined;
     try {
       const refreshed = await checkDependencies(selectedRoute.id, pythonPath);
-      setDepResults(refreshed.results);
+      setRouteDepCheck({ results: refreshed.results, routeId: selectedRoute.id, error: null, pythonPath });
       refreshedMissingPkgs = getInstallableMissingPackages(refreshed.results);
       if (refreshedMissingPkgs.length > 0) {
         captureAnalyticsEvent("export_failed", {
@@ -2051,8 +2149,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         failure_stage: "recheck_dependencies",
         failure_kind: "dependency_recheck_failed",
       });
-      setDepResults(null);
-      setDepCheckError(String(e));
+      setRouteDepCheck({ results: null, routeId: selectedRoute.id, error: String(e), pythonPath });
       setInstallPhase("failed");
       setInvokeError("Dependency re-check failed after install. Export blocked.");
       return;
@@ -2100,9 +2197,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     setLogLines([]);
     setInvokeError(null);
     setCompletedOutputDir(null);
-    setDepResults(null);
+    setRouteDepCheck(emptyRouteDepCheck());
     setDepCheckLoading(false);
-    setDepCheckError(null);
     setInstallPhase("idle");
     setExportStatus("idle");
     setSessionId(null);
@@ -2814,39 +2910,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
               )}
             </div>
           )}
-          {/* Provider-wide setup entry (kept until ticket 08). A failed setup
-              keeps the partial environment: Retry continues in place, Remove…
-              opens the existing confirmed cleanup for ultralytics-managed
-              only, and Recreate environment… removes that same key and sets
-              it up again after confirmation. */}
-          {selectedProviderId === "ultralytics" && !ultralyticsRuntimeReady && !ultralyticsRuntimeInstalling && (
-            <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              <div>
-                <p className="font-medium">{runtimeInstallPhase === "failed" ? "Setup incomplete" : "Ultralytics runtime required"}</p>
-                <p className="mt-1">{runtimeInstallPhase === "failed" ? "The partially created environment was preserved. Retry continues in the same environment. Recreate removes it and sets it up again, after confirmation." : "Install once to enable YOLO exports on this machine."}</p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {runtimeInstallPhase === "failed" && (
-                  <Button size="sm" variant="outline" onClick={() => void prepareCleanup("ultralytics")} disabled={cleanupBusy}>
-                    Remove…
-                  </Button>
-                )}
-                {runtimeInstallPhase === "failed" && (
-                  <Button size="sm" variant="outline" onClick={() => void handleRecreateUltralytics()} disabled={cleanupBusy}>
-                    Recreate environment…
-                  </Button>
-                )}
-                <Button size="sm" onClick={() => void handleInstallUltralyticsRuntime()} disabled={cleanupBusy}>
-                  {runtimeInstallPhase === "failed" ? "Retry setup" : "Install Runtime"}
-                </Button>
-              </div>
-              {depCheckError && (
-                <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                  {depCheckError}
-                </p>
-              )}
-            </div>
-          )}
           <div>
             <h2 className="mb-3 text-sm font-medium uppercase text-zinc-400">
               Export Target
@@ -2882,12 +2945,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         onOptionsChange={(next) => setOptionsWithSource(next, "user")}
         onExport={handleExport}
         onStopExport={handleCancel}
-        depResults={depResults ?? undefined}
+        depResults={selectedCheck.results ?? undefined}
         depCheckLoading={depCheckLoading}
-        depCheckError={depCheckError}
+        depCheckError={selectedCheck.error}
         errorMsg={invokeError}
         installPhase={installPhase}
-        missingPackageNames={missingPackageNames}
+        missingPackages={selectedMissingPackages}
         onInstallAndExport={handleInstallAndExport}
         outputDir={getResolvedOutputDir(sourcePath, outputDirOverride)}
         completedOutputDir={completedOutputDir}
@@ -2895,10 +2958,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         publishedRun={publishedRun}
         publishedArtifactCount={publishedArtifactCount}
         onShowExportFolder={handleShowExportFolder}
-        managedRuntimeUpgradeEligible={Boolean(managedRuntimeUpgrade?.eligible)}
+        managedRuntimeUpgradeEligible={Boolean(managedRuntimeUpgrade?.eligible) && !ultralyticsSetupHidesExport}
         managedRuntimeUpgradeDisabled={!mayStartRuntimeUpgrade}
         onManagedRuntimeUpgrade={openManagedRuntimeUpgrade}
         setupConflictMessage={setupConflictMessage}
+        ultralyticsSetup={ultralyticsSetupModalState}
+        onSetupRoute={() => void handleRouteSetup(selectedRoute.id)}
+        onRemoveEnvironment={() => void prepareCleanup("ultralytics")}
+        onRecreateEnvironment={() => void handleRecreateUltralytics(selectedRoute.id)}
         rfdetrSummary={selectedProviderId === "rfdetr" ? {
           variantMode: rfdetrVariantMode,
           detectedClass: rfdetrInspectResult?.class_symbol ?? null,

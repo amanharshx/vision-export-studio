@@ -26,6 +26,12 @@ import { DependencyPanel } from "./dependency-panel";
 import { ExportLog } from "./export-log";
 import { OptionsPanel } from "./options-panel";
 import { validateRfDetrImgsz } from "./rfdetr-image-size";
+import {
+  getUltralyticsRouteSetupCopy,
+  getUltralyticsRouteSetupPrimaryAction,
+  shouldHideUltralyticsExportControls,
+  type UltralyticsRouteSetupStatus,
+} from "./ultralytics-route-setup";
 import { formatIconMap } from "@/components/format-icons";
 import { categoryBg, categoryIcon } from "./route-card";
 
@@ -47,7 +53,7 @@ interface ExportModalProps {
   depCheckError?: string | null;
   errorMsg?: string | null;
   installPhase: InstallPhase;
-  missingPackageNames: InstallableDependency[];
+  missingPackages: InstallableDependency[];
   onInstallAndExport: () => void;
   outputDir?: string;
   completedOutputDir?: string | null;
@@ -59,6 +65,10 @@ interface ExportModalProps {
   managedRuntimeUpgradeDisabled: boolean;
   onManagedRuntimeUpgrade: () => void;
   setupConflictMessage?: string | null;
+  ultralyticsSetup?: UltralyticsSetupModalState | null;
+  onSetupRoute?: () => void;
+  onRemoveEnvironment?: () => void;
+  onRecreateEnvironment?: () => void;
   rfdetrSummary?: {
     variantMode: RfDetrVariantMode;
     detectedClass?: string | null;
@@ -118,10 +128,10 @@ export function HostSupportReason({ result }: { result: HostSupportResult | null
 
 export function PendingInstallConsent({
   depResults,
-  missingPackageNames,
+  missingPackages,
 }: {
   depResults?: DepCheckResult[];
-  missingPackageNames: InstallableDependency[];
+  missingPackages: InstallableDependency[];
 }) {
   const involvesUpdate = involvesPackageUpdate(depResults);
   return (
@@ -135,7 +145,7 @@ export function PendingInstallConsent({
           : "These will be installed into your Python environment before export:"}
       </p>
       <ul className="space-y-0.5">
-        {missingPackageNames.map((pkg) => (
+        {missingPackages.map((pkg) => (
           <li key={pkg.package} className="font-mono text-xs text-blue-900">
             • {pkg.package}
           </li>
@@ -178,6 +188,63 @@ export function PrimaryExportActionLabel({
   );
 }
 
+export interface UltralyticsSetupModalState {
+  status: UltralyticsRouteSetupStatus;
+  actionLabel: string;
+  busy: boolean;
+  canSetup: boolean;
+  showRecovery: boolean;
+  error: string | null;
+}
+
+function ultralyticsSetupTones(status: UltralyticsRouteSetupStatus): { container: string; text: string } {
+  if (status === "check-failed") return { container: "border-red-200 bg-red-50", text: "text-red-800" };
+  if (status === "setup-incomplete" || status === "unavailable" || status === "manual-step-required") {
+    return { container: "border-amber-200 bg-amber-50", text: "text-amber-900" };
+  }
+  return { container: "border-blue-200 bg-blue-50", text: "text-blue-800" };
+}
+
+export function UltralyticsSetupPanel({
+  status,
+  routeTitle,
+  error,
+  showRecovery,
+  onRemoveEnvironment,
+  onRecreateEnvironment,
+}: {
+  status: UltralyticsRouteSetupStatus;
+  routeTitle: string;
+  error: string | null;
+  showRecovery: boolean;
+  onRemoveEnvironment?: () => void;
+  onRecreateEnvironment?: () => void;
+}) {
+  const copy = getUltralyticsRouteSetupCopy(status, routeTitle);
+  const tones = ultralyticsSetupTones(status);
+  return (
+    <div className={`rounded-md border p-3 ${tones.container}`}>
+      <p className={`text-sm font-medium ${tones.text}`}>{copy.title}</p>
+      <p className={`mt-1 text-xs ${tones.text}`}>{copy.body}</p>
+      {error && <p className="mt-2 text-xs text-red-700">{error}</p>}
+      {showRecovery && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {onRemoveEnvironment && (
+            <Button size="sm" variant="outline" onClick={onRemoveEnvironment}>
+              Remove…
+            </Button>
+          )}
+          {onRecreateEnvironment && (
+            <Button size="sm" variant="outline" onClick={onRecreateEnvironment}>
+              Recreate environment…
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ExportModal({
   open,
   onOpenChange,
@@ -196,7 +263,7 @@ export function ExportModal({
   depCheckError,
   errorMsg,
   installPhase,
-  missingPackageNames,
+  missingPackages,
   onInstallAndExport,
   outputDir,
   completedOutputDir,
@@ -208,6 +275,10 @@ export function ExportModal({
   managedRuntimeUpgradeDisabled,
   onManagedRuntimeUpgrade,
   setupConflictMessage,
+  ultralyticsSetup,
+  onSetupRoute,
+  onRemoveEnvironment,
+  onRecreateEnvironment,
   rfdetrSummary,
 }: ExportModalProps) {
   const format = formats[route.targetFormat];
@@ -220,6 +291,19 @@ export function ExportModal({
   const isStarting = exportStatus === "starting";
   const isRunning = exportStatus === "running";
   const setupBlocked = Boolean(setupConflictMessage);
+  // Route-owned Ultralytics setup (ticket 08): the same modal opens in a
+  // setup-only mode until the exact route is ready, then transforms into the
+  // export configuration below.
+  const setupMode = ultralyticsSetup != null
+    && shouldHideUltralyticsExportControls(provider.id, ultralyticsSetup.status);
+  const setupPrimary = setupMode
+    ? getUltralyticsRouteSetupPrimaryAction(ultralyticsSetup.status, ultralyticsSetup.actionLabel)
+    : null;
+  const setupPrimaryEnabled = setupMode
+    && setupPrimary != null
+    && setupPrimary.enabled
+    && ultralyticsSetup.canSetup
+    && !ultralyticsSetup.busy;
   const rfdetrImgszError =
     provider.id === "rfdetr" && rfdetrSummary
       ? validateRfDetrImgsz(options.imgsz, rfdetrSummary.requiredMultiple ?? null)
@@ -329,6 +413,21 @@ export function ExportModal({
               />
             </div>
 
+            {/* Route-owned setup status (setup-only mode hides export controls) */}
+            {setupMode && ultralyticsSetup && (
+              <UltralyticsSetupPanel
+                status={ultralyticsSetup.status}
+                routeTitle={route.title}
+                error={ultralyticsSetup.error}
+                showRecovery={ultralyticsSetup.showRecovery}
+                onRemoveEnvironment={onRemoveEnvironment}
+                onRecreateEnvironment={onRecreateEnvironment}
+              />
+            )}
+
+            {/* Export configuration — hidden as one group while setup is incomplete */}
+            {!setupMode && (
+            <>
             {/* Default options notice + advanced toggle */}
             <div className="space-y-3">
               {!advancedOpen && (
@@ -361,19 +460,13 @@ export function ExportModal({
               )}
             </div>
 
-            {isPendingConsent && missingPackageNames.length > 0 && (
-              <PendingInstallConsent depResults={depResults} missingPackageNames={missingPackageNames} />
+            {isPendingConsent && missingPackages.length > 0 && (
+              <PendingInstallConsent depResults={depResults} missingPackages={missingPackages} />
             )}
 
             {rfdetrImgszError && (
               <div className="rounded-md border border-red-200 bg-red-50 p-3">
                 <p className="text-sm text-red-800">{rfdetrImgszError}</p>
-              </div>
-            )}
-
-            {setupBlocked && setupConflictMessage && (
-              <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
-                <p className="text-sm text-amber-900">{setupConflictMessage}</p>
               </div>
             )}
 
@@ -401,11 +494,39 @@ export function ExportModal({
                 />
               </div>
             )}
+            </>
+            )}
+
+            {/* Setup guard — visible in both modes: it also blocks the setup action itself */}
+            {setupBlocked && setupConflictMessage && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+                <p className="text-sm text-amber-900">{setupConflictMessage}</p>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Footer */}
         <div className="flex justify-end gap-2 border-t px-6 py-4">
+          {setupMode && setupPrimary ? (
+            <>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                Cancel
+              </Button>
+              <Button
+                disabled={!setupPrimaryEnabled}
+                onClick={onSetupRoute}
+                title={setupBlocked && setupConflictMessage ? setupConflictMessage : undefined}
+                className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                {(ultralyticsSetup?.status === "setting-up" || ultralyticsSetup?.status === "checking") && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                {setupPrimary.label}
+              </Button>
+            </>
+          ) : (
+          <>
           {footerActions.secondary === "stop" ? (
             <Button variant="outline" onClick={onStopExport}>
               <Square className="mr-2 h-4 w-4" />
@@ -447,6 +568,8 @@ export function ExportModal({
                 involvesUpdate={involvesUpdate}
               />
             </Button>
+          )}
+          </>
           )}
         </div>
       </DialogContent>

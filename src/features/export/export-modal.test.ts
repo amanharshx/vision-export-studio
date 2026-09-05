@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { HostSupportBadge, HostSupportReason, PendingInstallConsent, PrimaryExportActionLabel } from "./export-modal";
+import { HostSupportBadge, HostSupportReason, PendingInstallConsent, PrimaryExportActionLabel, UltralyticsSetupPanel } from "./export-modal";
 import type { DepCheckResult } from "@/lib/types";
 
 const outdatedUltralytics: DepCheckResult = {
@@ -54,7 +54,7 @@ describe("PendingInstallConsent", () => {
     const html = renderToStaticMarkup(
       React.createElement(PendingInstallConsent, {
         depResults: [outdatedUltralytics],
-        missingPackageNames: [{ package: "ultralytics>=8.4.80", prerelease: false }],
+        missingPackages: [{ package: "ultralytics>=8.4.80", prerelease: false }],
       }),
     );
 
@@ -70,7 +70,7 @@ describe("PendingInstallConsent", () => {
     const html = renderToStaticMarkup(
       React.createElement(PendingInstallConsent, {
         depResults: [missingOnnx],
-        missingPackageNames: [{ package: "onnx", prerelease: false }],
+        missingPackages: [{ package: "onnx", prerelease: false }],
       }),
     );
 
@@ -85,7 +85,7 @@ describe("PendingInstallConsent", () => {
     const html = renderToStaticMarkup(
       React.createElement(PendingInstallConsent, {
         depResults: [pythonFloor],
-        missingPackageNames: [{ package: "onnx", prerelease: false }],
+        missingPackages: [{ package: "onnx", prerelease: false }],
       }),
     );
 
@@ -134,5 +134,57 @@ describe("PrimaryExportActionLabel", () => {
     );
 
     expect(html).toContain("Installing...");
+  });
+});
+
+describe("UltralyticsSetupPanel", () => {
+  test("setup-incomplete offers retry guidance with remove and recreate recovery", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(UltralyticsSetupPanel, {
+        status: "setup-incomplete",
+        routeTitle: "ONNX",
+        error: "pip exited with code 1",
+        showRecovery: true,
+        onRemoveEnvironment: () => {},
+        onRecreateEnvironment: () => {},
+      }),
+    );
+
+    expect(html).toContain("Setup incomplete");
+    expect(html).toContain("Retry");
+    expect(html).toContain("Recreate");
+    expect(html).toContain("Remove…");
+    expect(html).toContain("Recreate environment…");
+    expect(html).toContain("pip exited with code 1");
+  });
+
+  test("not-set-up hides recovery and names the route", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(UltralyticsSetupPanel, {
+        status: "not-set-up",
+        routeTitle: "ONNX",
+        error: null,
+        showRecovery: false,
+      }),
+    );
+
+    expect(html).toContain("Not set up");
+    expect(html).toContain("ONNX");
+    expect(html).not.toContain("Remove…");
+    expect(html).not.toContain("Recreate environment…");
+  });
+
+  test("unavailable names the state without setup recovery", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(UltralyticsSetupPanel, {
+        status: "unavailable",
+        routeTitle: "TensorRT",
+        error: null,
+        showRecovery: false,
+      }),
+    );
+
+    expect(html).toContain("Unavailable");
+    expect(html).toContain("TensorRT");
   });
 });
