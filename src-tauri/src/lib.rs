@@ -59,6 +59,7 @@ pub fn run() {
             commands::export::open_export_folder,
             commands::gpu::list_gpus,
             commands::rfdetr::inspect_rfdetr_checkpoint,
+            commands::rfdetr::rfdetr_checkpoint_identity,
             commands::setup::load_settings,
             commands::setup::get_managed_runtime_rebuild_eligibility,
             commands::setup::create_runtime_venv,

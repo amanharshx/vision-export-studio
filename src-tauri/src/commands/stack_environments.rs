@@ -57,6 +57,17 @@ pub(crate) fn stack_venv_dir_for_key(runtime_dir: &Path, stack_key: &str) -> Opt
         .map(|stack| runtime_dir.join("envs").join(stack.key).join(".venv"))
 }
 
+/// The inventory eligibility rule: a stack root counts only when it is a
+/// real directory, never a symlink. Inspection reuses this owner instead of
+/// merely checking the derived interpreter path.
+pub(crate) fn stack_venv_dir_if_usable(runtime_dir: &Path, stack_key: &str) -> Option<PathBuf> {
+    let venv = stack_venv_dir_for_key(runtime_dir, stack_key)?;
+    fs::symlink_metadata(&venv)
+        .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        .unwrap_or(false)
+        .then_some(venv)
+}
+
 #[test]
 fn stack_key_resolves_exact_known_venv() {
     let root = Path::new("/tmp/runtime");
@@ -108,27 +119,24 @@ pub(crate) fn list_stack_environments_for_runtime(runtime_dir: &str) -> Vec<Stac
     known_stacks()
         .iter()
         .filter_map(|stack| {
-            let venv_path = stack_venv_dir_for_key(Path::new(runtime_dir), stack.key)?;
+            let venv_path = stack_venv_dir_if_usable(Path::new(runtime_dir), stack.key)?;
             let python_path = venv_python_at(&venv_path);
-            fs::symlink_metadata(&venv_path)
-                .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
-                .unwrap_or(false)
-                .then(|| StackEnvironmentInfo {
-                    key: stack.key.to_string(),
-                    display_name: stack.display_name.to_string(),
-                    route_ids: stack
-                        .route_ids
-                        .iter()
-                        .map(|route_id| (*route_id).to_string())
-                        .collect(),
-                    python_version: probe_python_version(&python_path)
-                        .map(|version| PythonVersion::Available { version })
-                        .unwrap_or(PythonVersion::Unavailable),
-                    rfdetr_version: probe_distribution_version(&python_path, "rfdetr")
-                        .map(|version| PackageVersion::Available { version })
-                        .unwrap_or(PackageVersion::Unavailable),
-                    python_path,
-                })
+            Some(StackEnvironmentInfo {
+                key: stack.key.to_string(),
+                display_name: stack.display_name.to_string(),
+                route_ids: stack
+                    .route_ids
+                    .iter()
+                    .map(|route_id| (*route_id).to_string())
+                    .collect(),
+                python_version: probe_python_version(&python_path)
+                    .map(|version| PythonVersion::Available { version })
+                    .unwrap_or(PythonVersion::Unavailable),
+                rfdetr_version: probe_distribution_version(&python_path, "rfdetr")
+                    .map(|version| PackageVersion::Available { version })
+                    .unwrap_or(PackageVersion::Unavailable),
+                python_path,
+            })
         })
         .collect()
 }
