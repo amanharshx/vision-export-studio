@@ -43,7 +43,20 @@ pub(crate) fn checkpoint_identity_for_path(
         ));
     }
     validate_source_extension(ProviderId::RfDetr, checkpoint_path)?;
-    let metadata = std::fs::metadata(checkpoint_path)
+    let file = std::fs::File::open(checkpoint_path)
+        .map_err(|e| format!("failed to open checkpoint: {}", e))?;
+    checkpoint_identity_for_file(checkpoint_path, &file)
+}
+
+/// Identity derived from an already-open handle (fstat), so verification
+/// observes the same bytes a later copy will read instead of re-statting —
+/// and potentially re-resolving — the live path.
+pub(crate) fn checkpoint_identity_for_file(
+    checkpoint_path: &str,
+    file: &std::fs::File,
+) -> Result<RfDetrCheckpointIdentity, String> {
+    let metadata = file
+        .metadata()
         .map_err(|e| format!("failed to stat checkpoint: {}", e))?;
     let canonical = std::fs::canonicalize(checkpoint_path)
         .map(|path| path.to_string_lossy().into_owned())
@@ -154,20 +167,56 @@ fn helper_path() -> Result<PathBuf, String> {
         .join("rfdetr_export_helper.py"))
 }
 
-/// Copy the verified checkpoint to a stable snapshot so a replacement
-/// between verification and deserialization cannot swap the trusted bytes.
-/// Returns the snapshot file path and its parent directory (removed by the
-/// caller afterwards).
-pub(crate) fn snapshot_checkpoint_for_inspect(
-    checkpoint_path: &str,
-) -> Result<(PathBuf, PathBuf), String> {
+/// Stable snapshot of verified checkpoint bytes. The directory is removed
+/// when the guard drops, so snapshot files cannot be left behind on any
+/// error path after creation.
+#[derive(Debug)]
+pub(crate) struct InspectionSnapshot {
+    pub path: PathBuf,
+    pub dir: PathBuf,
+}
+
+impl Drop for InspectionSnapshot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// Copy exactly the bytes behind an already-open, already-verified handle —
+/// never the live path — then revalidate the copied length against the
+/// verified identity before Python may deserialize it.
+pub(crate) fn snapshot_open_handle_for_inspect(
+    source: &mut std::fs::File,
+    expected: &RfDetrCheckpointIdentity,
+) -> Result<InspectionSnapshot, String> {
+    use std::io::Write;
     let dir = std::env::temp_dir().join(format!("rfdetr-inspect-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("failed to create inspection snapshot dir: {}", e))?;
-    let snapshot = dir.join("checkpoint.pth");
-    std::fs::copy(checkpoint_path, &snapshot)
-        .map_err(|e| format!("failed to snapshot checkpoint for inspection: {}", e))?;
-    Ok((snapshot, dir))
+    let path = dir.join("checkpoint.pth");
+    let copy_result = (|| -> Result<u64, String> {
+        let mut out = std::fs::File::create(&path)
+            .map_err(|e| format!("failed to snapshot checkpoint for inspection: {}", e))?;
+        let copied = std::io::copy(source, &mut out)
+            .map_err(|e| format!("failed to snapshot checkpoint for inspection: {}", e))?;
+        out.flush()
+            .map_err(|e| format!("failed to snapshot checkpoint for inspection: {}", e))?;
+        Ok(copied)
+    })();
+    match copy_result {
+        Ok(copied) if copied == expected.len => Ok(InspectionSnapshot { path, dir }),
+        Ok(_) => {
+            let _ = std::fs::remove_dir_all(&dir);
+            Err(
+                "checkpoint changed during snapshot; confirm trust again before inspection."
+                    .to_string(),
+            )
+        }
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&dir);
+            Err(e)
+        }
+    }
 }
 
 fn parse_inspect_stdout(stdout: &[u8]) -> Result<RfDetrInspectResult, String> {
@@ -201,17 +250,14 @@ pub async fn inspect_rfdetr_checkpoint(
     }
     validate_source_extension(ProviderId::RfDetr, &checkpoint_path)?;
 
-    // Resolve the slow capability probes first, then verify and snapshot the
-    // trusted bytes: the helper deserializes the snapshot, never the live
-    // path, so a replacement in between cannot swap what gets trusted.
+    // Resolve the slow capability probes first, then open the checkpoint
+    // once: identity, verification, and the snapshot copy all observe the
+    // same open handle, and the helper deserializes the snapshot — never the
+    // live path — so a replacement in between cannot swap what gets trusted.
     let settings = load_settings(app_handle.clone())?;
     let runtime_dir = Path::new(&settings.runtime_dir);
     let (_key, python_path) =
         resolve_inspection_stack(runtime_dir, stack_key.as_deref(), &stack_can_inspect)?;
-
-    let current = checkpoint_identity_for_path(&checkpoint_path)?;
-    verify_trusted_identity(&current, trusted_identity.as_ref())?;
-    let (snapshot, snapshot_dir) = snapshot_checkpoint_for_inspect(&checkpoint_path)?;
 
     let helper = app_handle
         .path()
@@ -220,17 +266,23 @@ pub async fn inspect_rfdetr_checkpoint(
             tauri::path::BaseDirectory::Resource,
         )
         .map_err(|e| format!("failed to resolve RF-DETR helper resource: {}", e))?;
+
+    let mut source = std::fs::File::open(&checkpoint_path)
+        .map_err(|e| format!("failed to open checkpoint: {}", e))?;
+    let current = checkpoint_identity_for_file(&checkpoint_path, &source)?;
+    verify_trusted_identity(&current, trusted_identity.as_ref())?;
+    let snapshot = snapshot_open_handle_for_inspect(&mut source, &current)?;
+
     let output = Command::new(&python_path)
         .arg(helper)
         .arg("inspect")
         .arg("--checkpoint")
-        .arg(&snapshot)
+        .arg(&snapshot.path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output();
-    let _ = std::fs::remove_dir_all(&snapshot_dir);
+    drop(snapshot);
     let output = output.map_err(|e| format!("failed to run RF-DETR inspect helper: {}", e))?;
-
     let parsed = parse_inspect_stdout(&output.stdout)?;
     if output.status.success() || parsed.requires_plus || parsed.error.is_some() {
         Ok(parsed)
@@ -477,11 +529,60 @@ mod tests {
     #[test]
     fn inspect_snapshot_copies_verified_bytes_to_stable_path() {
         let path = temp_checkpoint("snap.pth", b"weights-snapshot");
-        let (snapshot, dir) = snapshot_checkpoint_for_inspect(path.to_str().unwrap()).unwrap();
-        assert_ne!(snapshot, path);
-        assert_eq!(snapshot.extension().and_then(|e| e.to_str()), Some("pth"));
-        assert_eq!(std::fs::read(&snapshot).unwrap(), b"weights-snapshot");
-        std::fs::remove_dir_all(&dir).unwrap();
+        let mut handle = std::fs::File::open(&path).unwrap();
+        let expected = checkpoint_identity_for_file(path.to_str().unwrap(), &handle).unwrap();
+        let snapshot = snapshot_open_handle_for_inspect(&mut handle, &expected).unwrap();
+        assert_ne!(snapshot.path, path);
+        assert_eq!(
+            snapshot.path.extension().and_then(|e| e.to_str()),
+            Some("pth")
+        );
+        assert_eq!(std::fs::read(&snapshot.path).unwrap(), b"weights-snapshot");
+        let dir = snapshot.dir.clone();
+        drop(snapshot);
+        assert!(!dir.exists());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn snapshot_reads_open_handle_not_live_path() {
+        let path = temp_checkpoint("race.pth", b"trusted-bytes-1234");
+        let mut handle = std::fs::File::open(&path).unwrap();
+        let expected = checkpoint_identity_for_file(path.to_str().unwrap(), &handle).unwrap();
+        // Atomically replace the live path after opening: the snapshot must
+        // still carry the trusted bytes from the open handle, never B.
+        let swap = temp_checkpoint("race-swap.tmp", b"untrusted-replacement-bytes-much-longer");
+        std::fs::rename(&swap, &path).unwrap();
+        let snapshot = snapshot_open_handle_for_inspect(&mut handle, &expected).unwrap();
+        assert_eq!(
+            std::fs::read(&snapshot.path).unwrap(),
+            b"trusted-bytes-1234"
+        );
+        let dir = snapshot.dir.clone();
+        drop(snapshot);
+        assert!(!dir.exists());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn snapshot_rejects_length_mismatch() {
+        let path = temp_checkpoint("drift.pth", b"short");
+        let mut handle = std::fs::File::open(&path).unwrap();
+        let mut expected = checkpoint_identity_for_file(path.to_str().unwrap(), &handle).unwrap();
+        expected.len += 100;
+        let error = snapshot_open_handle_for_inspect(&mut handle, &expected).unwrap_err();
+        assert!(error.contains("changed during snapshot"));
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn identity_from_open_handle_ignores_later_replacement() {
+        let path = temp_checkpoint("handle.pth", b"aaa");
+        let handle = std::fs::File::open(&path).unwrap();
+        let swap = temp_checkpoint("handle-swap.tmp", b"much-longer-replacement");
+        std::fs::rename(&swap, &path).unwrap();
+        let identity = checkpoint_identity_for_file(path.to_str().unwrap(), &handle).unwrap();
+        assert_eq!(identity.len, 3);
         std::fs::remove_file(&path).unwrap();
     }
 }

@@ -2281,7 +2281,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     resetRfDetrTrust("idle");
     setRfDetrVariantMode("auto");
     setRfDetrManualClassSymbol("");
-    rfdetrInspectRequestRef.current += 1;
   }
 
   const handleProviderChange = (providerId: ProviderId) => {
@@ -2411,7 +2410,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     setRfDetrManualClassSymbol("");
     setCompletedOutputDir(null);
     currentExportOutputDirRef.current = null;
-    rfdetrInspectRequestRef.current += 1;
   };
 
   // Re-detect environment with current override. Detection and loading-state
