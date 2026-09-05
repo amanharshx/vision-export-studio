@@ -5,7 +5,7 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import { installDependencies } from "@/lib/tauri/deps";
 import { detectEnvironment } from "@/lib/tauri/environment";
 import { resolveBootstrapPython, type BootstrapPythonResult } from "@/lib/tauri/bootstrap-python";
-import { savePythonOverride } from "@/lib/tauri/setup";
+import { loadSettings, savePythonOverride } from "@/lib/tauri/setup";
 import {
   createSetupTaskOwner,
   getSetupCloseWarning,
@@ -55,6 +55,7 @@ const realDeps: InstallStreamDeps = {
 const realGateDeps: PythonRequiredDeps = {
   resolveBootstrap: (routeId, override) => resolveBootstrapPython(routeId, override),
   saveOverride: (path) => savePythonOverride(path),
+  loadOverride: async () => (await loadSettings()).python_path_override ?? null,
 };
 
 export function SetupTaskProvider({ children }: { children: React.ReactNode }) {

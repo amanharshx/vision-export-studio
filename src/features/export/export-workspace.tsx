@@ -1083,6 +1083,32 @@ export function createEnvironmentPublisher(deps: {
   return { publish, isCurrent };
 }
 
+export interface PythonOverrideSaveDeps {
+  save: (path: string | null) => Promise<void>;
+  redetect: (path: string) => void;
+  setError: (message: string | null) => void;
+}
+
+/**
+ * Single save-then-redetect path for the Settings Python override. A fresh
+ * attempt clears the previous error first; a rejected save shows its exact
+ * reason and skips redetection; a corrected save leaves no stale error
+ * behind.
+ */
+export async function savePythonOverrideAndRedetect(
+  deps: PythonOverrideSaveDeps,
+  trimmedValue: string,
+): Promise<void> {
+  deps.setError(null);
+  try {
+    await deps.save(trimmedValue || null);
+  } catch (error) {
+    deps.setError(String(error));
+    return;
+  }
+  deps.redetect(trimmedValue);
+}
+
 interface ExportWorkspaceProps {
   onBack: () => void;
   updatesEnabled: boolean;
@@ -2131,14 +2157,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Save python path override and re-detect
   const handleSaveAndRedetect = useCallback(async () => {
     if (cleanupBusy) return;
-    const val = pythonOverride.trim();
-    try {
-      await savePythonOverride(val || null);
-    } catch (error) {
-      setEnvironmentPanelError(String(error));
-      return;
-    }
-    handleRedetect(val);
+    await savePythonOverrideAndRedetect(
+      {
+        save: (path) => savePythonOverride(path),
+        redetect: (path) => handleRedetect(path),
+        setError: (message) => setEnvironmentPanelError(message),
+      },
+      pythonOverride.trim(),
+    );
   }, [cleanupBusy, pythonOverride, handleRedetect]);
 
   // Browse for python executable

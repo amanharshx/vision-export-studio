@@ -336,6 +336,10 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
   // without running anything or touching the new state.
   let pythonGate: PythonRequiredState = emptyPythonRequiredState();
   let pythonGeneration = 0;
+  // Generation of the most recently completed gate save. A stale flow
+  // restores only when no newer generation saved and its own write is still
+  // current; anything newer, or anything the user wrote, always stands.
+  let lastGateSaveGeneration: number | null = null;
 
   const setPythonGate = (next: PythonRequiredState) => {
     pythonGate = next;
@@ -376,6 +380,31 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
   ) => {
     if (!isGateCurrent(generation, pending)) return;
     setPythonGate({ ...pythonGate, busy: false, choiceError: message });
+  };
+
+  // Restore the override a stale flow persisted, unless something newer
+  // wrote after it. A gate action that never reaches retry leaves settings
+  // exactly as it found them; a replacement's or user's newer save stands.
+  const reconcileStaleSave = async (
+    gateDeps: PythonRequiredDeps,
+    generation: number,
+    myWrite: string | null,
+    previousOverride: string | null,
+  ): Promise<void> => {
+    if (lastGateSaveGeneration !== null && lastGateSaveGeneration > generation) return;
+    let current: string | null;
+    try {
+      current = await gateDeps.loadOverride();
+    } catch {
+      return;
+    }
+    if (current !== myWrite) return;
+    try {
+      await gateDeps.saveOverride(previousOverride);
+    } catch {
+      // No live dialog owns this error: the stale flow is closed and the
+      // replacement, if any, shows its own state.
+    }
   };
 
   // Single redetect/retry transition shared by check-again and
@@ -574,13 +603,25 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
       // The pending action may have been canceled or replaced while
       // validation was in flight; never save for a stale choice.
       if (!isGateCurrent(generation, pending)) return;
+      let previousOverride: string | null;
+      try {
+        previousOverride = await gateDeps.loadOverride();
+      } catch (error) {
+        failPythonGate(generation, pending, String(error));
+        return;
+      }
+      if (!isGateCurrent(generation, pending)) return;
       try {
         await gateDeps.saveOverride(chosenPath);
       } catch (error) {
         failPythonGate(generation, pending, String(error));
         return;
       }
-      if (!isGateCurrent(generation, pending)) return;
+      lastGateSaveGeneration = generation;
+      if (!isGateCurrent(generation, pending)) {
+        await reconcileStaleSave(gateDeps, generation, chosenPath, previousOverride);
+        return;
+      }
       const run = pending.run;
       closePythonGate();
       await run();
@@ -604,13 +645,25 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
       const started = beginGateAction();
       if (!started) return;
       const { generation, pending, previous } = started;
+      let previousOverride: string | null;
+      try {
+        previousOverride = await gateDeps.loadOverride();
+      } catch (error) {
+        failPythonGate(generation, pending, String(error));
+        return;
+      }
+      if (!isGateCurrent(generation, pending)) return;
       try {
         await gateDeps.saveOverride(null);
       } catch (error) {
         failPythonGate(generation, pending, String(error));
         return;
       }
-      if (!isGateCurrent(generation, pending)) return;
+      lastGateSaveGeneration = generation;
+      if (!isGateCurrent(generation, pending)) {
+        await reconcileStaleSave(gateDeps, generation, null, previousOverride);
+        return;
+      }
       let redetected: BootstrapPythonResult;
       try {
         redetected = await gateDeps.resolveBootstrap(pending.routeId);
@@ -642,6 +695,7 @@ export interface PythonRequiredDeps {
     override?: string,
   ) => Promise<BootstrapPythonResult>;
   saveOverride: (path: string | null) => Promise<void>;
+  loadOverride: () => Promise<string | null>;
 }
 
 export interface PythonRequiredState {

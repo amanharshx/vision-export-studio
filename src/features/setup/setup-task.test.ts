@@ -439,9 +439,13 @@ describe("python-required pending setup (ticket 06)", () => {
   function createPythonHarness(options?: {
     resolveImpl?: (routeId: string, override?: string) => Promise<BootstrapPythonResult>;
     saveImpl?: (path: string | null) => Promise<void>;
+    beforeSave?: (path: string | null) => Promise<void>;
+    loadImpl?: () => Promise<string | null>;
+    initialOverride?: string | null;
   }) {
     const saves: Array<string | null> = [];
     let runs = 0;
+    let stored: string | null = options?.initialOverride ?? null;
     const gateDeps: PythonRequiredDeps = {
       resolveBootstrap: async (routeId, override) => {
         if (options?.resolveImpl) return options.resolveImpl(routeId, override);
@@ -449,14 +453,20 @@ describe("python-required pending setup (ticket 06)", () => {
       },
       saveOverride: async (path) => {
         saves.push(path);
+        if (options?.beforeSave) await options.beforeSave(path);
         if (options?.saveImpl) return options.saveImpl(path);
+        stored = path;
+      },
+      loadOverride: async () => {
+        if (options?.loadImpl) return options.loadImpl();
+        return stored;
       },
     };
     const owner = createSetupTaskOwner(createFakeDeps().deps);
     const run = async () => {
       runs += 1;
     };
-    return { owner, gateDeps, saves, runs: () => runs, run };
+    return { owner, gateDeps, saves, stored: () => stored, runs: () => runs, run };
   }
 
   function deferred<T>() {
@@ -753,9 +763,13 @@ describe("python-required pending setup (ticket 06)", () => {
 
   test("cancel during override clearing skips redetection and runs nothing", async () => {
     const saving = deferred<void>();
+    const started = deferred<void>();
     let resolves = 0;
     const { owner, gateDeps, saves, runs, run } = createPythonHarness({
-      saveImpl: () => saving.promise,
+      beforeSave: async () => {
+        started.resolve();
+        await saving.promise;
+      },
       resolveImpl: () => {
         resolves += 1;
         return Promise.resolve(availableResult());
@@ -764,13 +778,159 @@ describe("python-required pending setup (ticket 06)", () => {
     owner.requirePythonForSetup("ultralytics.pt.onnx", invalidResult(), run);
 
     const pending = owner.clearPythonGateOverride(gateDeps);
+    await started.promise;
     owner.cancelPythonGate();
     saving.resolve();
     await pending;
 
-    expect(saves).toEqual([null]);
+    expect(saves).toEqual([null, null]);
     expect(runs()).toBe(0);
     expect(resolves).toBe(0);
     expect(owner.getPythonGate().pending).toBeNull();
+  });
+
+  test("cancel during save restores the previous override and runs nothing", async () => {
+    const saving = deferred<void>();
+    const started = deferred<void>();
+    const { owner, gateDeps, saves, stored, runs, run } = createPythonHarness({
+      initialOverride: "/user/python",
+      beforeSave: async (path) => {
+        if (path === "/valid/python") {
+          started.resolve();
+          await saving.promise;
+        }
+      },
+    });
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), run);
+
+    const pending = owner.choosePythonForSetup(gateDeps, "/valid/python");
+    await started.promise;
+    owner.cancelPythonGate();
+    saving.resolve();
+    await pending;
+
+    expect(saves).toEqual(["/valid/python", "/user/python"]);
+    expect(stored()).toBe("/user/python");
+    expect(runs()).toBe(0);
+    expect(owner.getPythonGate().pending).toBeNull();
+  });
+
+  test("replacement during save restores the previous override and keeps the new pending", async () => {
+    const saving = deferred<void>();
+    const started = deferred<void>();
+    let runsA = 0;
+    let runsB = 0;
+    const { owner, gateDeps, saves, stored } = createPythonHarness({
+      beforeSave: async (path) => {
+        if (path === "/choice-a/python") {
+          started.resolve();
+          await saving.promise;
+        }
+      },
+    });
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), async () => {
+      runsA += 1;
+    });
+
+    const stale = owner.choosePythonForSetup(gateDeps, "/choice-a/python");
+    await started.promise;
+    owner.requirePythonForSetup("rfdetr.pth.tflite", missingResult("Python 3.12"), async () => {
+      runsB += 1;
+    });
+    saving.resolve();
+    await stale;
+
+    expect(saves).toEqual(["/choice-a/python", null]);
+    expect(stored()).toBeNull();
+    expect(runsA).toBe(0);
+    expect(runsB).toBe(0);
+    expect(owner.getPythonGate().pending?.routeId).toBe("rfdetr.pth.tflite");
+    expect(owner.getPythonGate().dialogOpen).toBe(true);
+  });
+
+  test("a replacement that saves while the old save is in flight wins", async () => {
+    const savingA = deferred<void>();
+    const startedA = deferred<void>();
+    const validatingB = deferred<BootstrapPythonResult>();
+    let runsA = 0;
+    let runsB = 0;
+    const { owner, gateDeps, saves, stored } = createPythonHarness({
+      beforeSave: async (path) => {
+        if (path === "/choice-a/python") {
+          startedA.resolve();
+          await savingA.promise;
+        }
+      },
+      resolveImpl: (routeId) => {
+        if (routeId === "rfdetr.pth.tflite") return validatingB.promise;
+        return Promise.resolve(availableResult());
+      },
+    });
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), async () => {
+      runsA += 1;
+    });
+    const stale = owner.choosePythonForSetup(gateDeps, "/choice-a/python");
+    await startedA.promise;
+
+    owner.requirePythonForSetup("rfdetr.pth.tflite", missingResult("Python 3.12"), async () => {
+      runsB += 1;
+    });
+    const live = owner.choosePythonForSetup(gateDeps, "/choice-b/python");
+    // The stale save completes while the replacement is still validating:
+    // nothing newer wrote, so it puts back what it found.
+    savingA.resolve();
+    await stale;
+    expect(stored()).toBeNull();
+    // The live choice then validates, saves, and retries normally.
+    validatingB.resolve(availableResult());
+    await live;
+
+    expect(saves).toEqual(["/choice-a/python", null, "/choice-b/python"]);
+    expect(stored()).toBe("/choice-b/python");
+    expect(runsA).toBe(0);
+    expect(runsB).toBe(1);
+    expect(owner.getPythonGate().pending).toBeNull();
+  });
+
+  test("stale clear restores the previous override instead of leaving it cleared", async () => {
+    const saving = deferred<void>();
+    const started = deferred<void>();
+    const { owner, gateDeps, saves, stored, runs, run } = createPythonHarness({
+      initialOverride: "/bad/python",
+      beforeSave: async (path) => {
+        if (path === null) {
+          started.resolve();
+          await saving.promise;
+        }
+      },
+    });
+    owner.requirePythonForSetup("ultralytics.pt.onnx", invalidResult(), run);
+
+    const pending = owner.clearPythonGateOverride(gateDeps);
+    await started.promise;
+    owner.cancelPythonGate();
+    saving.resolve();
+    await pending;
+
+    expect(saves).toEqual([null, "/bad/python"]);
+    expect(stored()).toBe("/bad/python");
+    expect(runs()).toBe(0);
+    expect(owner.getPythonGate().pending).toBeNull();
+  });
+
+  test("override read failure shows the exact reason without saving", async () => {
+    const { owner, gateDeps, saves, runs, run } = createPythonHarness({
+      loadImpl: async () => {
+        throw new Error("settings file is corrupt");
+      },
+    });
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), run);
+
+    await owner.choosePythonForSetup(gateDeps, "/valid/python");
+
+    expect(saves).toEqual([]);
+    expect(runs()).toBe(0);
+    expect(owner.getPythonGate().dialogOpen).toBe(true);
+    expect(owner.getPythonGate().choiceError).toContain("settings file is corrupt");
   });
 });
