@@ -2820,12 +2820,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
               only, and Recreate environment… removes that same key and sets
               it up again after confirmation. */}
           {selectedProviderId === "ultralytics" && !ultralyticsRuntimeReady && !ultralyticsRuntimeInstalling && (
-            <div className="flex items-center justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
               <div>
                 <p className="font-medium">{runtimeInstallPhase === "failed" ? "Setup incomplete" : "Ultralytics runtime required"}</p>
                 <p className="mt-1">{runtimeInstallPhase === "failed" ? "The partially created environment was preserved. Retry continues in the same environment. Recreate removes it and sets it up again, after confirmation." : "Install once to enable YOLO exports on this machine."}</p>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {runtimeInstallPhase === "failed" && (
                   <Button size="sm" variant="outline" onClick={() => void prepareCleanup("ultralytics")} disabled={cleanupBusy}>
                     Remove…

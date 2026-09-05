@@ -16,7 +16,7 @@ use crate::commands::runtime_operations::{
     emit_after_operation_released, RuntimeOperation, RuntimeOperationCoordinator,
 };
 use crate::commands::setup::{
-    build_venv_command, load_settings, venv_python, DEFAULT_SETUP_ROUTE_ID,
+    build_venv_command, load_settings, venv_python, venv_yolo, DEFAULT_SETUP_ROUTE_ID,
 };
 use crate::commands::stack_environments::{stack_for_route, stack_python, stack_venv_dir};
 
@@ -1264,6 +1264,47 @@ fn ensure_ultralytics_managed_environment(
     Ok(managed_python)
 }
 
+/// Reinstall just the Ultralytics CLI scripts when the package is importable
+/// but its `yolo` binary is missing. pip trusts dist-info metadata, so a
+/// plain reinstall is a no-op that would loop pip-success into verify-fail
+/// forever. `--no-deps` bounds the repair to megabytes: dependencies are
+/// never re-downloaded here. Returns true when a repair install ran.
+fn repair_ultralytics_cli_if_needed(
+    managed_python: &str,
+    runtime_root: &str,
+) -> Result<bool, String> {
+    if Path::new(&venv_yolo(runtime_root)).exists() {
+        return Ok(false);
+    }
+    let importable = probe(
+        managed_python,
+        "import importlib.util; print(importlib.util.find_spec('ultralytics') is not None)",
+    )
+    .map(|output| output == "True")
+    .unwrap_or(false);
+    if !importable {
+        return Ok(false);
+    }
+    let status = Command::new(managed_python)
+        .args([
+            "-m",
+            "pip",
+            "install",
+            "--force-reinstall",
+            "--no-deps",
+            "ultralytics",
+        ])
+        .status()
+        .map_err(|error| format!("failed to reinstall Ultralytics CLI: {error}"))?;
+    if !status.success() {
+        return Err(format!(
+            "failed to reinstall Ultralytics CLI: exit code {:?}",
+            status.code()
+        ));
+    }
+    Ok(true)
+}
+
 #[derive(serde::Serialize)]
 pub struct UltralyticsSetupReadiness {
     pub managed_python: String,
@@ -1545,6 +1586,14 @@ pub async fn install_dependencies(
         managed_environments.invalidate(Path::new(&runtime_root), [invalidation_key.as_str()]);
         install_python?
     };
+
+    // Heal a satisfied-but-scriptless install (deleted `yolo` binary with an
+    // intact dist-info): the plain pip stage below would no-op while
+    // verification keeps failing. Scoped to the base setup; route installs
+    // are untouched.
+    if route_id.is_none() {
+        repair_ultralytics_cli_if_needed(&install_python, &runtime_root)?;
+    }
 
     let (stable_packages, prerelease_packages) = partition_install_packages(&packages);
     let session_id = Uuid::new_v4().to_string();
@@ -2654,6 +2703,134 @@ mod tests {
         assert!(
             venv_dir.join("keep.txt").exists(),
             "partial environment preserved for Retry/Setup incomplete"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    fn write_managed_stub(path: &std::path::Path, importable: bool, pip_ok: bool) {
+        use std::os::unix::fs::PermissionsExt;
+        // Fake managed interpreter with controllable importability: `-c`
+        // probes answer find_spec from `importable`, every `-m pip`
+        // invocation appends its args to `<stub>.pip.log` and exits from
+        // `pip_ok`, everything else exits 0.
+        let script = format!(
+            "#!/bin/sh\nif [ \"$1\" = \"-c\" ]; then case \"$2\" in *find_spec*) if [ \"{}\" = \"1\" ]; then echo \"True\"; else echo \"False\"; fi; exit 0;; *) echo \"3.12.12\"; exit 0;; esac; fi\nif [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pip\" ]; then echo \"$@\" >> \"$0.pip.log\"; exit {}; fi\nexit 0\n",
+            if importable { "1" } else { "0" },
+            u8::from(!pip_ok)
+        );
+        std::fs::write(path, script).expect("write fake managed interpreter");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .expect("make fake managed interpreter executable");
+    }
+
+    fn managed_pip_log(path: &std::path::Path) -> std::path::PathBuf {
+        let mut log = path.as_os_str().to_owned();
+        log.push(".pip.log");
+        std::path::PathBuf::from(log)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ultralytics_scriptless_but_importable_repairs_cli() {
+        // pip trusts dist-info metadata, so a deleted `yolo` binary with an
+        // intact install would otherwise loop pip-noop into verify-fail
+        // forever. The repair reinstalls just ultralytics, never dependencies.
+        let root = std::env::temp_dir().join(format!("ultralytics-heal-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let managed_string = venv_python(&runtime);
+        let managed_path = Path::new(&managed_string);
+        std::fs::create_dir_all(managed_path.parent().unwrap()).expect("create managed parent");
+        write_managed_stub(managed_path, true, true);
+
+        let repaired = repair_ultralytics_cli_if_needed(
+            managed_path.to_str().expect("managed path"),
+            &runtime,
+        )
+        .expect("repair runs");
+        assert!(repaired);
+        let logged = std::fs::read_to_string(managed_pip_log(managed_path)).expect("read pip log");
+        assert!(
+            logged.contains("-m pip install --force-reinstall --no-deps ultralytics"),
+            "unexpected pip args: {logged}"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ultralytics_healthy_skips_cli_repair() {
+        let root = std::env::temp_dir().join(format!("ultralytics-noslop-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let managed_string = venv_python(&runtime);
+        let managed_path = Path::new(&managed_string);
+        std::fs::create_dir_all(managed_path.parent().unwrap()).expect("create managed parent");
+        write_managed_stub(managed_path, true, true);
+        std::fs::write(managed_path.parent().unwrap().join("yolo"), b"cli")
+            .expect("write yolo binary");
+
+        let repaired = repair_ultralytics_cli_if_needed(
+            managed_path.to_str().expect("managed path"),
+            &runtime,
+        )
+        .expect("healthy check runs");
+        assert!(!repaired);
+        assert!(
+            !managed_pip_log(managed_path).exists(),
+            "healthy environments must not run pip"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ultralytics_missing_package_skips_cli_repair() {
+        // A fresh environment has no dist-info to satisfy pip: the normal
+        // install below handles it, so no forced repair runs here.
+        let root = std::env::temp_dir().join(format!("ultralytics-fresh-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let managed_string = venv_python(&runtime);
+        let managed_path = Path::new(&managed_string);
+        std::fs::create_dir_all(managed_path.parent().unwrap()).expect("create managed parent");
+        write_managed_stub(managed_path, false, true);
+
+        let repaired = repair_ultralytics_cli_if_needed(
+            managed_path.to_str().expect("managed path"),
+            &runtime,
+        )
+        .expect("fresh check runs");
+        assert!(!repaired);
+        assert!(
+            !managed_pip_log(managed_path).exists(),
+            "fresh environments must not run pip early"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ultralytics_cli_repair_failure_errors() {
+        let root = std::env::temp_dir().join(format!("ultralytics-healfail-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let managed_string = venv_python(&runtime);
+        let managed_path = Path::new(&managed_string);
+        std::fs::create_dir_all(managed_path.parent().unwrap()).expect("create managed parent");
+        // Importable, yolo missing, but pip itself fails: the repair must
+        // surface instead of silently proceeding to a doomed install.
+        write_managed_stub(managed_path, true, false);
+
+        let error = repair_ultralytics_cli_if_needed(
+            managed_path.to_str().expect("managed path"),
+            &runtime,
+        )
+        .expect_err("failed repair errors");
+        assert!(
+            error.contains("failed to reinstall Ultralytics CLI"),
+            "unexpected error: {error}"
         );
         std::fs::remove_dir_all(root).expect("remove temp root");
     }
