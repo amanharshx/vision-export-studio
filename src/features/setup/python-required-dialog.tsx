@@ -9,15 +9,10 @@ import {
 } from "@/components/ui/dialog";
 import type {
   BootstrapIncompatible,
-  BootstrapPythonResult,
+  PythonRequiredResult,
 } from "@/lib/tauri/bootstrap-python";
 
 export const PYTHON_DOWNLOAD_URL = "https://www.python.org/downloads/";
-
-type PythonRequiredResult = Extract<
-  BootstrapPythonResult,
-  { status: "missing" | "invalid_override" }
->;
 
 function IncompatibleList({ entries }: { entries: BootstrapIncompatible[] }) {
   if (entries.length === 0) return null;

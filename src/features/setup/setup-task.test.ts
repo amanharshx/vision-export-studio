@@ -717,6 +717,40 @@ describe("python-required pending setup (ticket 06)", () => {
     expect(owner.getPythonGate().pending?.routeId).toBe("rfdetr.pth.tflite");
   });
 
+  test("stale picker choice for a replaced pending saves and runs nothing", async () => {
+    let runsA = 0;
+    let runsB = 0;
+    const { owner, gateDeps, saves } = createPythonHarness();
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), async () => {
+      runsA += 1;
+    });
+    const staleExpected = owner.getPythonGate().pending;
+    owner.requirePythonForSetup("rfdetr.pth.tflite", missingResult("Python 3.12"), async () => {
+      runsB += 1;
+    });
+
+    await owner.choosePythonForSetup(gateDeps, "/stale-pick/python", staleExpected);
+
+    expect(saves).toEqual([]);
+    expect(runsA).toBe(0);
+    expect(runsB).toBe(0);
+    expect(owner.getPythonGate().pending?.routeId).toBe("rfdetr.pth.tflite");
+    expect(owner.getPythonGate().dialogOpen).toBe(true);
+    expect(owner.getPythonGate().busy).toBe(false);
+  });
+
+  test("picker choice matching the live pending retries normally", async () => {
+    const { owner, gateDeps, saves, runs, run } = createPythonHarness();
+    owner.requirePythonForSetup("ultralytics.pt.onnx", missingResult(), run);
+    const expected = owner.getPythonGate().pending;
+
+    await owner.choosePythonForSetup(gateDeps, "/valid/python", expected);
+
+    expect(saves).toEqual(["/valid/python"]);
+    expect(runs()).toBe(1);
+    expect(owner.getPythonGate().dialogOpen).toBe(false);
+  });
+
   test("cancel during override clearing skips redetection and runs nothing", async () => {
     const saving = deferred<void>();
     let resolves = 0;

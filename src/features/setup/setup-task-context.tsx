@@ -12,8 +12,8 @@ import {
   isSetupTaskActive,
   type InstallOutcome,
   type InstallStreamDeps,
+  type PendingPythonSetup,
   type PythonRequiredDeps,
-  type PythonRequiredResult,
   type PythonRequiredState,
   type RuntimeInstallRequest,
   type SetupTask,
@@ -32,7 +32,10 @@ export interface SetupTaskContextValue {
     run: () => Promise<unknown>,
   ) => boolean;
   cancelPythonGate: () => void;
-  choosePythonForSetup: (chosenPath: string) => Promise<void>;
+  choosePythonForSetup: (
+    chosenPath: string,
+    expectedPending?: PendingPythonSetup | null,
+  ) => Promise<void>;
   checkAgainPythonGate: () => Promise<void>;
   clearPythonGateOverride: () => Promise<void>;
 }
@@ -138,8 +141,8 @@ export function SetupTaskProvider({ children }: { children: React.ReactNode }) {
       requirePythonForSetup: (routeId, result, run) =>
         owner.requirePythonForSetup(routeId, result, run),
       cancelPythonGate: () => owner.cancelPythonGate(),
-      choosePythonForSetup: (chosenPath) =>
-        owner.choosePythonForSetup(realGateDeps, chosenPath),
+      choosePythonForSetup: (chosenPath, expectedPending) =>
+        owner.choosePythonForSetup(realGateDeps, chosenPath, expectedPending),
       checkAgainPythonGate: () => owner.checkAgainPythonGate(realGateDeps),
       clearPythonGateOverride: () => owner.clearPythonGateOverride(realGateDeps),
     }),

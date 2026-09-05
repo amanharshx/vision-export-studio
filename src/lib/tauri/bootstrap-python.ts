@@ -30,6 +30,11 @@ export function resolveBootstrapPython(
 
 export function isPythonRequiredResult(
   result: BootstrapPythonResult,
-): result is Extract<BootstrapPythonResult, { status: "missing" | "invalid_override" }> {
+): result is PythonRequiredResult {
   return result.status === "missing" || result.status === "invalid_override";
 }
+
+export type PythonRequiredResult = Extract<
+  BootstrapPythonResult,
+  { status: "missing" | "invalid_override" }
+>;

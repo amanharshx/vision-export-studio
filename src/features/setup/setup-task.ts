@@ -16,7 +16,7 @@ import type {
   ProviderId,
 } from "@/lib/types";
 import { createListenerGroup, type ListenerGroup } from "@/lib/tauri/listener-group";
-import type { BootstrapPythonResult } from "@/lib/tauri/bootstrap-python";
+import type { BootstrapPythonResult, PythonRequiredResult } from "@/lib/tauri/bootstrap-python";
 import { isPythonRequiredResult } from "@/lib/tauri/bootstrap-python";
 
 export type SetupTaskPhase =
@@ -287,7 +287,11 @@ export interface SetupTaskOwner {
   /** Cancel without creating an environment or changing package state. */
   cancelPythonGate: () => void;
   /** Validate a chosen executable, save it, then retry the pending setup once. */
-  choosePythonForSetup: (gateDeps: PythonRequiredDeps, chosenPath: string) => Promise<void>;
+  choosePythonForSetup: (
+    gateDeps: PythonRequiredDeps,
+    chosenPath: string,
+    expectedPending?: PendingPythonSetup | null,
+  ) => Promise<void>;
   /** Re-detect with the saved override, then retry once when available. */
   checkAgainPythonGate: (gateDeps: PythonRequiredDeps) => Promise<void>;
   /** Clear a saved invalid override, then re-detect and retry once when available. */
@@ -344,6 +348,26 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
 
   const isGateCurrent = (generation: number, pending: PendingPythonSetup) =>
     generation === pythonGeneration && pythonGate.pending === pending;
+
+  // Single entry sequence shared by every gate action: guard, capture the
+  // generation plus pending identity, then mark busy. Callers snapshot the
+  // returned triple and re-check it after each await so a canceled or
+  // replaced pending can never be resumed, saved for, or retried.
+  const beginGateAction = (): {
+    generation: number;
+    pending: PendingPythonSetup;
+    previous: PythonRequiredResult;
+  } | null => {
+    const started = pythonGate;
+    if (!started.dialogOpen || !started.pending || !started.result || started.busy) return null;
+    const action = {
+      generation: pythonGeneration,
+      pending: started.pending,
+      previous: started.result,
+    };
+    setPythonGate({ ...started, busy: true, choiceError: null });
+    return action;
+  };
 
   const failPythonGate = (
     generation: number,
@@ -527,12 +551,15 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
       closePythonGate();
     },
 
-    choosePythonForSetup: async (gateDeps, chosenPath) => {
-      const started = pythonGate;
-      if (!started.dialogOpen || !started.pending || !started.result || started.busy) return;
-      const generation = pythonGeneration;
-      const pending = started.pending;
-      setPythonGate({ ...started, busy: true, choiceError: null });
+    choosePythonForSetup: async (gateDeps, chosenPath, expectedPending) => {
+      // A native picker resolves outside the race-safe boundary: the pending
+      // action may have been canceled or replaced while it was open. The
+      // caller captures the pending it chose for and passes it back; a
+      // mismatch means this choice belongs to a dead dialog.
+      if (expectedPending !== undefined && pythonGate.pending !== expectedPending) return;
+      const started = beginGateAction();
+      if (!started) return;
+      const { generation, pending } = started;
       let validated: BootstrapPythonResult;
       try {
         validated = await gateDeps.resolveBootstrap(pending.routeId, chosenPath);
@@ -560,12 +587,9 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
     },
 
     checkAgainPythonGate: async (gateDeps) => {
-      const started = pythonGate;
-      if (!started.dialogOpen || !started.pending || !started.result || started.busy) return;
-      const generation = pythonGeneration;
-      const pending = started.pending;
-      const previous = started.result;
-      setPythonGate({ ...started, busy: true, choiceError: null });
+      const started = beginGateAction();
+      if (!started) return;
+      const { generation, pending, previous } = started;
       let redetected: BootstrapPythonResult;
       try {
         redetected = await gateDeps.resolveBootstrap(pending.routeId);
@@ -577,12 +601,9 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
     },
 
     clearPythonGateOverride: async (gateDeps) => {
-      const started = pythonGate;
-      if (!started.dialogOpen || !started.pending || !started.result || started.busy) return;
-      const generation = pythonGeneration;
-      const pending = started.pending;
-      const previous = started.result;
-      setPythonGate({ ...started, busy: true, choiceError: null });
+      const started = beginGateAction();
+      if (!started) return;
+      const { generation, pending, previous } = started;
       try {
         await gateDeps.saveOverride(null);
       } catch (error) {
@@ -609,11 +630,6 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
 // valid choice or successful redetection retries the stored action exactly
 // once; cancel and replacement never run the old action.
 // ---------------------------------------------------------------------------
-
-export type PythonRequiredResult = Extract<
-  BootstrapPythonResult,
-  { status: "missing" | "invalid_override" }
->;
 
 export interface PendingPythonSetup {
   routeId: string;

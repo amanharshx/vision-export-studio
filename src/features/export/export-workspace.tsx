@@ -2132,7 +2132,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   const handleSaveAndRedetect = useCallback(async () => {
     if (cleanupBusy) return;
     const val = pythonOverride.trim();
-    await savePythonOverride(val || null);
+    try {
+      await savePythonOverride(val || null);
+    } catch (error) {
+      setEnvironmentPanelError(String(error));
+      return;
+    }
     handleRedetect(val);
   }, [cleanupBusy, pythonOverride, handleRedetect]);
 

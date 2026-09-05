@@ -374,8 +374,12 @@ export function SetupScreen({
           showClearOverride={pythonRequiredState.result.status === "invalid_override"}
           onCancel={() => cancelPythonRequired()}
           onChoosePython={async () => {
+            // Capture the choosing pending before the native picker opens:
+            // it resolves outside the race-safe boundary, so a replacement
+            // that lands while it is open must not receive this choice.
+            const expected = pythonRequiredState.pending;
             const picked = await openPythonExecutablePicker();
-            if (picked) await choosePythonRequired(picked);
+            if (picked) await choosePythonRequired(picked, expected);
           }}
           onCheckAgain={() => void checkAgainPythonRequired()}
           onClearOverride={() => void clearPythonOverrideRequired()}
