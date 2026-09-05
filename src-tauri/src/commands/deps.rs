@@ -46,7 +46,7 @@ fn minimum_python_version(route_id: &str) -> Option<&'static str> {
     None
 }
 
-fn route_python_version_supported(route_id: &str, installed: &str) -> bool {
+pub(crate) fn route_python_version_supported(route_id: &str, installed: &str) -> bool {
     if stack_for_route(route_id)
         .and_then(|stack| stack.python_requirement)
         .is_some()
