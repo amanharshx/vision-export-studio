@@ -1,13 +1,16 @@
 // @ts-expect-error Bun provides this module at test runtime.
 import { describe, expect, test } from "bun:test";
-import { providers, routesForProvider } from "@/lib/providers";
+import { routesForProvider } from "@/lib/providers";
 import type { DepCheckResult } from "@/lib/types";
+import {
+  getUltralyticsRouteSetupPrimaryAction,
+  getUltralyticsRouteSetupStatus,
+} from "./ultralytics-route-setup";
 
 import {
   getRfDetrRouteSetupCopy,
   getRfDetrRouteSetupFallbackPackages,
-  getRfDetrRouteSetupPrimaryAction,
-  getRfDetrRouteSetupStatus,
+  getRfDetrSetupHostRefusal,
   getRfDetrSetupInstallPackages,
   shouldHideRfDetrExportControls,
 } from "./rfdetr-route-setup";
@@ -18,7 +21,7 @@ function readyOnnxResults(): DepCheckResult[] {
   ];
 }
 
-function baseInput(overrides: Partial<Parameters<typeof getRfDetrRouteSetupStatus>[0]> = {}) {
+function baseInput(overrides: Partial<Parameters<typeof getUltralyticsRouteSetupStatus>[0]> = {}) {
   return {
     hostStatus: "supported" as const,
     depResults: readyOnnxResults(),
@@ -30,24 +33,28 @@ function baseInput(overrides: Partial<Parameters<typeof getRfDetrRouteSetupStatu
   };
 }
 
-describe("getRfDetrRouteSetupStatus", () => {
+// The per-route readiness policy is intentionally shared with the
+// Ultralytics flow (ready only from the selected route's own check); the
+// RF-DETR-specific parts are the stack-scoped fallback, install selection,
+// copy, and host refusal below.
+describe("shared route readiness policy with RF-DETR inputs", () => {
   test("reports ready only when every dependency is ready", () => {
-    expect(getRfDetrRouteSetupStatus(baseInput())).toBe("ready");
+    expect(getUltralyticsRouteSetupStatus(baseInput())).toBe("ready");
   });
 
   test("reports checking while the dependency check is running", () => {
     expect(
-      getRfDetrRouteSetupStatus(baseInput({ depCheckLoading: true, depResults: null })),
+      getUltralyticsRouteSetupStatus(baseInput({ depCheckLoading: true, depResults: null })),
     ).toBe("checking");
   });
 
   test("reports not set up when no healthy stack check has run", () => {
-    expect(getRfDetrRouteSetupStatus(baseInput({ depResults: null }))).toBe("not-set-up");
+    expect(getUltralyticsRouteSetupStatus(baseInput({ depResults: null }))).toBe("not-set-up");
   });
 
   test("reports not set up for missing selected stack packages", () => {
     expect(
-      getRfDetrRouteSetupStatus(
+      getUltralyticsRouteSetupStatus(
         baseInput({
           depResults: [
             {
@@ -65,7 +72,7 @@ describe("getRfDetrRouteSetupStatus", () => {
 
   test("reports setting up while the selected stack install is active", () => {
     expect(
-      getRfDetrRouteSetupStatus(
+      getUltralyticsRouteSetupStatus(
         baseInput({
           depResults: [
             {
@@ -84,7 +91,7 @@ describe("getRfDetrRouteSetupStatus", () => {
 
   test("reports setup incomplete after a failed setup preserves the partial stack", () => {
     expect(
-      getRfDetrRouteSetupStatus(
+      getUltralyticsRouteSetupStatus(
         baseInput({
           depResults: [
             {
@@ -102,8 +109,8 @@ describe("getRfDetrRouteSetupStatus", () => {
   });
 
   test("keeps shared-stack readiness per route: ONNX ready while ExecuTorch missing", () => {
-    const onnxReady = getRfDetrRouteSetupStatus(baseInput({ depResults: readyOnnxResults() }));
-    const executorchMissing = getRfDetrRouteSetupStatus(
+    const onnxReady = getUltralyticsRouteSetupStatus(baseInput({ depResults: readyOnnxResults() }));
+    const executorchMissing = getUltralyticsRouteSetupStatus(
       baseInput({
         depResults: [
           {
@@ -128,14 +135,14 @@ describe("getRfDetrRouteSetupStatus", () => {
   });
 
   test("reports unavailable for hard platform restrictions before installation", () => {
-    expect(getRfDetrRouteSetupStatus(baseInput({ hostStatus: "unsupported" }))).toBe(
+    expect(getUltralyticsRouteSetupStatus(baseInput({ hostStatus: "unsupported" }))).toBe(
       "unavailable",
     );
   });
 
   test("reports unavailable when the backend preflight short-circuits on platform", () => {
     expect(
-      getRfDetrRouteSetupStatus(
+      getUltralyticsRouteSetupStatus(
         baseInput({
           depResults: [
             {
@@ -152,7 +159,7 @@ describe("getRfDetrRouteSetupStatus", () => {
 
   test("reports manual step required for TFLite Python floor without an install remedy", () => {
     expect(
-      getRfDetrRouteSetupStatus(
+      getUltralyticsRouteSetupStatus(
         baseInput({
           depResults: [
             {
@@ -170,40 +177,59 @@ describe("getRfDetrRouteSetupStatus", () => {
 
   test("reports check failed when dependency probing errors", () => {
     expect(
-      getRfDetrRouteSetupStatus(baseInput({ depResults: null, depCheckError: "probe crashed" })),
+      getUltralyticsRouteSetupStatus(baseInput({ depResults: null, depCheckError: "probe crashed" })),
     ).toBe("check-failed");
   });
 
   test("a ready route stays ready after another route's setup failure", () => {
-    expect(getRfDetrRouteSetupStatus(baseInput({ setupFailed: true }))).toBe("ready");
+    expect(getUltralyticsRouteSetupStatus(baseInput({ setupFailed: true }))).toBe("ready");
+  });
+});
+
+describe("shared setup primary action with RF-DETR labels", () => {
+  test("offers setup for a new route and retry after failure", () => {
+    expect(getUltralyticsRouteSetupPrimaryAction("not-set-up", "Set up ONNX")).toEqual({
+      label: "Set up ONNX",
+      enabled: true,
+    });
+    expect(getUltralyticsRouteSetupPrimaryAction("setup-incomplete", "Set up ONNX")).toEqual({
+      label: "Retry setup",
+      enabled: true,
+    });
+  });
+
+  test("disables while checking, setting up, unavailable, or manual", () => {
+    for (const status of ["checking", "setting-up", "unavailable", "manual-step-required"] as const) {
+      expect(getUltralyticsRouteSetupPrimaryAction(status, "Set up ONNX").enabled).toBe(false);
+    }
   });
 });
 
 describe("getRfDetrRouteSetupFallbackPackages", () => {
   test("ONNX setup installs only the selected route extra", () => {
     const route = routesForProvider("rfdetr").find((item) => item.id === "rfdetr.pth.onnx")!;
-    expect(getRfDetrRouteSetupFallbackPackages(providers.rfdetr, route)).toEqual([
+    expect(getRfDetrRouteSetupFallbackPackages(route)).toEqual([
       { package: "rfdetr[onnx]", prerelease: false },
     ]);
   });
 
   test("TensorRT setup installs only its extra", () => {
     const route = routesForProvider("rfdetr").find((item) => item.id === "rfdetr.pth.engine")!;
-    expect(getRfDetrRouteSetupFallbackPackages(providers.rfdetr, route)).toEqual([
+    expect(getRfDetrRouteSetupFallbackPackages(route)).toEqual([
       { package: "rfdetr[tensorrt]", prerelease: false },
     ]);
   });
 
   test("CoreML setup installs only its extra", () => {
     const route = routesForProvider("rfdetr").find((item) => item.id === "rfdetr.pth.coreml")!;
-    expect(getRfDetrRouteSetupFallbackPackages(providers.rfdetr, route)).toEqual([
+    expect(getRfDetrRouteSetupFallbackPackages(route)).toEqual([
       { package: "rfdetr[coreml]", prerelease: false },
     ]);
   });
 
   test("TFLite setup installs the pinned extra", () => {
     const route = routesForProvider("rfdetr").find((item) => item.id === "rfdetr.pth.tflite")!;
-    expect(getRfDetrRouteSetupFallbackPackages(providers.rfdetr, route)).toEqual([
+    expect(getRfDetrRouteSetupFallbackPackages(route)).toEqual([
       { package: "rfdetr[tflite]>=1.9.4", prerelease: false },
     ]);
   });
@@ -212,7 +238,7 @@ describe("getRfDetrRouteSetupFallbackPackages", () => {
     const route = routesForProvider("rfdetr").find(
       (item) => item.id === "rfdetr.pth.executorch",
     )!;
-    const packages = getRfDetrRouteSetupFallbackPackages(providers.rfdetr, route);
+    const packages = getRfDetrRouteSetupFallbackPackages(route);
     expect(packages.map((item) => item.package)).toEqual([
       "rfdetr[executorch]>=1.9.0",
       "torch>=2.13",
@@ -225,7 +251,7 @@ describe("getRfDetrSetupInstallPackages", () => {
   test("missing stack always installs the full route fallback", () => {
     const route = routesForProvider("rfdetr").find((item) => item.id === "rfdetr.pth.onnx")!;
     expect(
-      getRfDetrSetupInstallPackages(route, { results: null, routeId: null, error: null, pythonPath: null }, { needsWork: true, pythonPath: "/stack/python", stackKey: "rfdetr-default" }),
+      getRfDetrSetupInstallPackages(route, { results: null, routeId: null, error: null, pythonPath: null }, { needsWork: true }),
     ).toEqual([{ package: "rfdetr[onnx]", prerelease: false }]);
   });
 
@@ -246,31 +272,86 @@ describe("getRfDetrSetupInstallPackages", () => {
           error: null,
           pythonPath: "/other/python",
         },
-        { needsWork: false, pythonPath: "/stack/python", stackKey: "rfdetr-default" },
+        { needsWork: false },
       ),
     ).toEqual([
       { package: "torch>=2.13", prerelease: false },
       { package: "flatc", prerelease: true },
     ]);
   });
+
+  test("a stale check from another route falls back to the full route packages", () => {
+    const route = routesForProvider("rfdetr").find((item) => item.id === "rfdetr.pth.onnx")!;
+    expect(
+      getRfDetrSetupInstallPackages(
+        route,
+        {
+          results: [
+            { item: "rfdetr[tensorrt]", status: "missing_package", reason: "missing", install_hint: 'pip install "rfdetr[tensorrt]"', install_package: "rfdetr[tensorrt]" },
+          ],
+          routeId: "rfdetr.pth.engine",
+          error: null,
+          pythonPath: "/other/python",
+        },
+        { needsWork: false },
+      ),
+    ).toEqual([{ package: "rfdetr[onnx]", prerelease: false }]);
+  });
 });
 
-describe("getRfDetrRouteSetupPrimaryAction", () => {
-  test("offers setup for a new route and retry after failure", () => {
-    expect(getRfDetrRouteSetupPrimaryAction("not-set-up", "Set up ONNX")).toEqual({
-      label: "Set up ONNX",
-      enabled: true,
-    });
-    expect(getRfDetrRouteSetupPrimaryAction("setup-incomplete", "Set up ONNX")).toEqual({
-      label: "Retry setup",
-      enabled: true,
-    });
+describe("getRfDetrSetupHostRefusal", () => {
+  test("refuses with the exact host reason when the route is unsupported", () => {
+    expect(
+      getRfDetrSetupHostRefusal(
+        "rfdetr.pth.engine",
+        [{ route_id: "rfdetr.pth.engine", status: "unsupported", reason: "TensorRT requires an NVIDIA GPU." }],
+        { results: null, routeId: null, error: null, pythonPath: null },
+      ),
+    ).toBe("TensorRT requires an NVIDIA GPU.");
   });
 
-  test("disables while checking, setting up, unavailable, or manual", () => {
-    for (const status of ["checking", "setting-up", "unavailable", "manual-step-required"] as const) {
-      expect(getRfDetrRouteSetupPrimaryAction(status, "Set up ONNX").enabled).toBe(false);
-    }
+  test("refuses when host support errored for the route", () => {
+    expect(
+      getRfDetrSetupHostRefusal(
+        "rfdetr.pth.coreml",
+        [{ route_id: "rfdetr.pth.coreml", status: "error", reason: "Host compatibility check failed: boom" }],
+        { results: null, routeId: null, error: null, pythonPath: null },
+      ),
+    ).toBe("Host compatibility check failed: boom");
+  });
+
+  test("refuses with the platform row when the backend preflight short-circuited", () => {
+    expect(
+      getRfDetrSetupHostRefusal(
+        "rfdetr.pth.engine",
+        [{ route_id: "rfdetr.pth.engine", status: "supported" }],
+        {
+          results: [
+            { item: "platform", status: "platform_unsupported", reason: "TensorRT requires Linux.", install_hint: "TensorRT requires Linux." },
+          ],
+          routeId: "rfdetr.pth.engine",
+          error: null,
+          pythonPath: "/tmp/python",
+        },
+      ),
+    ).toBe("TensorRT requires Linux.");
+  });
+
+  test("ignores other routes and allows supported routes", () => {
+    expect(
+      getRfDetrSetupHostRefusal(
+        "rfdetr.pth.onnx",
+        [{ route_id: "rfdetr.pth.engine", status: "unsupported", reason: "TensorRT requires Linux." }],
+        { results: null, routeId: null, error: null, pythonPath: null },
+      ),
+    ).toBeNull();
+    expect(
+      getRfDetrSetupHostRefusal(
+        "rfdetr.pth.onnx",
+        [{ route_id: "rfdetr.pth.onnx", status: "supported" }],
+        { results: readyOnnxResults(), routeId: "rfdetr.pth.onnx", error: null, pythonPath: "/tmp/python" },
+      ),
+    ).toBeNull();
   });
 });
 
@@ -291,6 +372,14 @@ describe("getRfDetrRouteSetupCopy", () => {
   test("names the selected stack without percentages", () => {
     const copy = getRfDetrRouteSetupCopy("not-set-up", "ONNX", "rfdetr-default");
     expect(copy.body).toContain("ONNX");
+    expect(copy.body).not.toContain("%");
+  });
+
+  test("falls back to the route environment when the stack mapping is unresolved", () => {
+    const copy = getRfDetrRouteSetupCopy("not-set-up", "ONNX", null);
+    expect(copy.title).toContain("Not set up");
+    expect(copy.body).toContain("ONNX");
+    expect(copy.body).not.toContain("rfdetr.pth.onnx");
     expect(copy.body).not.toContain("%");
   });
 

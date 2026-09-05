@@ -34,7 +34,6 @@ import {
 } from "./ultralytics-route-setup";
 import {
   getRfDetrRouteSetupCopy,
-  getRfDetrRouteSetupPrimaryAction,
   shouldHideRfDetrExportControls,
   type RfDetrRouteSetupStatus,
 } from "./rfdetr-route-setup";
@@ -204,14 +203,10 @@ export interface UltralyticsSetupModalState {
   error: string | null;
 }
 
-export interface RfDetrSetupModalState {
+export interface RfDetrSetupModalState extends UltralyticsSetupModalState {
   status: RfDetrRouteSetupStatus;
-  actionLabel: string;
-  busy: boolean;
-  canSetup: boolean;
-  showRecovery: boolean;
-  error: string | null;
-  stackKey: string;
+  /** Backend-owned stack key when resolved; null before inventory/task resolve it. */
+  stackKey: string | null;
 }
 
 function ultralyticsSetupTones(status: UltralyticsRouteSetupStatus): { container: string; text: string } {
@@ -222,27 +217,27 @@ function ultralyticsSetupTones(status: UltralyticsRouteSetupStatus): { container
   return { container: "border-blue-200 bg-blue-50", text: "text-blue-800" };
 }
 
-export function UltralyticsSetupPanel({
-  status,
-  routeTitle,
+function SetupPanelBase({
+  title,
+  body,
+  tones,
   error,
   showRecovery,
   onRemoveEnvironment,
   onRecreateEnvironment,
 }: {
-  status: UltralyticsRouteSetupStatus;
-  routeTitle: string;
+  title: string;
+  body: string;
+  tones: { container: string; text: string };
   error: string | null;
   showRecovery: boolean;
   onRemoveEnvironment?: () => void;
   onRecreateEnvironment?: () => void;
 }) {
-  const copy = getUltralyticsRouteSetupCopy(status, routeTitle);
-  const tones = ultralyticsSetupTones(status);
   return (
     <div className={`rounded-md border p-3 ${tones.container}`}>
-      <p className={`text-sm font-medium ${tones.text}`}>{copy.title}</p>
-      <p className={`mt-1 text-xs ${tones.text}`}>{copy.body}</p>
+      <p className={`text-sm font-medium ${tones.text}`}>{title}</p>
+      <p className={`mt-1 text-xs ${tones.text}`}>{body}</p>
       {error && <p className="mt-2 text-xs text-red-700">{error}</p>}
       {showRecovery && (
         <div className="mt-2 flex flex-wrap gap-2">
@@ -262,6 +257,35 @@ export function UltralyticsSetupPanel({
   );
 }
 
+export function UltralyticsSetupPanel({
+  status,
+  routeTitle,
+  error,
+  showRecovery,
+  onRemoveEnvironment,
+  onRecreateEnvironment,
+}: {
+  status: UltralyticsRouteSetupStatus;
+  routeTitle: string;
+  error: string | null;
+  showRecovery: boolean;
+  onRemoveEnvironment?: () => void;
+  onRecreateEnvironment?: () => void;
+}) {
+  const copy = getUltralyticsRouteSetupCopy(status, routeTitle);
+  return (
+    <SetupPanelBase
+      title={copy.title}
+      body={copy.body}
+      tones={ultralyticsSetupTones(status)}
+      error={error}
+      showRecovery={showRecovery}
+      onRemoveEnvironment={onRemoveEnvironment}
+      onRecreateEnvironment={onRecreateEnvironment}
+    />
+  );
+}
+
 export function RfDetrSetupPanel({
   status,
   routeTitle,
@@ -273,34 +297,23 @@ export function RfDetrSetupPanel({
 }: {
   status: RfDetrRouteSetupStatus;
   routeTitle: string;
-  stackKey: string;
+  stackKey: string | null;
   error: string | null;
   showRecovery: boolean;
   onRemoveEnvironment?: () => void;
   onRecreateEnvironment?: () => void;
 }) {
   const copy = getRfDetrRouteSetupCopy(status, routeTitle, stackKey);
-  const tones = ultralyticsSetupTones(status);
   return (
-    <div className={`rounded-md border p-3 ${tones.container}`}>
-      <p className={`text-sm font-medium ${tones.text}`}>{copy.title}</p>
-      <p className={`mt-1 text-xs ${tones.text}`}>{copy.body}</p>
-      {error && <p className="mt-2 text-xs text-red-700">{error}</p>}
-      {showRecovery && (
-        <div className="mt-2 flex flex-wrap gap-2">
-          {onRemoveEnvironment && (
-            <Button size="sm" variant="outline" onClick={onRemoveEnvironment}>
-              Remove…
-            </Button>
-          )}
-          {onRecreateEnvironment && (
-            <Button size="sm" variant="outline" onClick={onRecreateEnvironment}>
-              Recreate environment…
-            </Button>
-          )}
-        </div>
-      )}
-    </div>
+    <SetupPanelBase
+      title={copy.title}
+      body={copy.body}
+      tones={ultralyticsSetupTones(status)}
+      error={error}
+      showRecovery={showRecovery}
+      onRemoveEnvironment={onRemoveEnvironment}
+      onRecreateEnvironment={onRecreateEnvironment}
+    />
   );
 }
 
@@ -360,29 +373,23 @@ export function ExportModal({
   const rfdetrHides = rfdetrSetup != null
     && shouldHideRfDetrExportControls(provider.id, rfdetrSetup.status);
   const setupMode = ultralyticsHides || rfdetrHides;
-  const setupPrimary = (() => {
-    if (ultralyticsHides && ultralyticsSetup) {
-      return getUltralyticsRouteSetupPrimaryAction(ultralyticsSetup.status, ultralyticsSetup.actionLabel);
-    }
-    if (rfdetrHides && rfdetrSetup) {
-      return getRfDetrRouteSetupPrimaryAction(rfdetrSetup.status, rfdetrSetup.actionLabel);
-    }
-    return null;
-  })();
-  const setupPrimaryEnabled = (() => {
-    if (ultralyticsHides && ultralyticsSetup) {
-      return setupPrimary != null && setupPrimary.enabled && ultralyticsSetup.canSetup && !ultralyticsSetup.busy;
-    }
-    if (rfdetrHides && rfdetrSetup) {
-      return setupPrimary != null && setupPrimary.enabled && rfdetrSetup.canSetup && !rfdetrSetup.busy;
-    }
-    return false;
-  })();
-  const setupStatusForSpinner = ultralyticsHides && ultralyticsSetup
-    ? ultralyticsSetup.status
+  // One setup owns the footer at a time; both states share the same shape
+  // (RfDetrSetupModalState extends UltralyticsSetupModalState), so the
+  // primary action resolves once instead of per provider.
+  const activeSetup = ultralyticsHides && ultralyticsSetup
+    ? ultralyticsSetup
     : rfdetrHides && rfdetrSetup
-      ? rfdetrSetup.status
+      ? rfdetrSetup
       : null;
+  const setupPrimary = activeSetup
+    ? getUltralyticsRouteSetupPrimaryAction(activeSetup.status, activeSetup.actionLabel)
+    : null;
+  const setupPrimaryEnabled = activeSetup != null
+    && setupPrimary != null
+    && setupPrimary.enabled
+    && activeSetup.canSetup
+    && !activeSetup.busy;
+  const setupStatusForSpinner = activeSetup?.status ?? null;
   const rfdetrImgszError =
     provider.id === "rfdetr" && rfdetrSummary
       ? validateRfDetrImgsz(options.imgsz, rfdetrSummary.requiredMultiple ?? null)

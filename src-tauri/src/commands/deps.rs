@@ -1459,6 +1459,37 @@ pub async fn rfdetr_setup_readiness(
     })
 }
 
+/// Declared install packages for one RF-DETR route: every package the
+/// setup flow may install into the selected stack, derived from the same
+/// missing-stack rows the dependency check reports (never a second list).
+/// A bypass that smuggles another route's or provider's packages into the
+/// selected stack is rejected before any environment work.
+fn validate_rfdetr_install_packages(
+    route_id: &str,
+    packages: &[InstallableDependency],
+) -> Result<(), String> {
+    if stack_for_route(route_id).is_none() {
+        return Err(format!("unknown route_id: {}", route_id));
+    }
+    let declared = missing_stack_results(route_id)
+        .map(|results| {
+            results
+                .into_iter()
+                .filter_map(|result| result.install_package)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for dependency in packages {
+        if !declared.iter().any(|name| name == &dependency.package) {
+            return Err(format!(
+                "package {} is not declared for route {}",
+                dependency.package, route_id
+            ));
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Per-dep check helpers
 // ---------------------------------------------------------------------------
@@ -1652,6 +1683,14 @@ pub async fn install_dependencies(
     }
     for dependency in &packages {
         validate_package_name(&dependency.package)?;
+    }
+    // Bypassable safety outside the UI: an RF-DETR install may only carry
+    // the selected route's declared packages, so a bypass cannot smuggle
+    // another route's or provider's packages into the selected stack.
+    if let Some(route_id) = route_id.as_deref() {
+        if stack_for_route(route_id).is_some() {
+            validate_rfdetr_install_packages(route_id, &packages)?;
+        }
     }
     let settings = load_settings(app_handle.clone())?;
     let runtime_root = settings.runtime_dir.clone();
@@ -3617,6 +3656,122 @@ possible problem with your settings or a recent ultralytics package update.\n8.4
             "rfdetr-unknown"
         )
         .is_none());
+    }
+
+    #[test]
+    fn rfdetr_stack_key_shaped_ids_are_rejected_as_unknown_routes() {
+        // Stack keys (`rfdetr-default`) are environment names, never route
+        // ids: every entry point that resolves routes must reject them
+        // before any environment work, so a bypass can never address a
+        // stack without going through its declared route mapping.
+        for unknown in ["rfdetr-default", "rfdetr-tflite", "rfdetr.pth.fake"] {
+            let error = match check_dependencies_for_runtime(unknown, "/tmp/python", None) {
+                Err(error) => error,
+                Ok(_) => panic!("stack keys must not resolve as routes: {unknown}"),
+            };
+            assert_eq!(error, format!("unknown route_id: {}", unknown));
+        }
+    }
+
+    #[test]
+    fn rfdetr_python_requirements_cover_every_known_stack_mapping() {
+        // Only the TFLite stack constrains its interpreter (3.12); every
+        // other stack accepts the managed range. The setup-time bootstrap
+        // and the install gate both enforce this predicate.
+        for route_id in [
+            "rfdetr.pth.onnx",
+            "rfdetr.pth.executorch",
+            "rfdetr.pth.engine",
+            "rfdetr.pth.coreml",
+        ] {
+            assert!(
+                stack_for_route(route_id)
+                    .expect("mapped route")
+                    .python_requirement
+                    .is_none(),
+                "{route_id} must not constrain Python"
+            );
+            for version in ["3.10.0", "3.11.9", "3.12.12", "3.13.1"] {
+                assert!(
+                    route_python_version_supported(route_id, version),
+                    "{route_id} must accept Python {version}"
+                );
+            }
+        }
+        let tflite = stack_for_route("rfdetr.pth.tflite").expect("tflite maps");
+        assert_eq!(tflite.key, "rfdetr-tflite");
+        assert!(tflite.python_requirement.is_some());
+        assert!(route_python_version_supported(
+            "rfdetr.pth.tflite",
+            "3.12.12"
+        ));
+        for version in ["3.10.0", "3.11.9", "3.13.12"] {
+            assert!(
+                !route_python_version_supported("rfdetr.pth.tflite", version),
+                "TFLite must reject Python {version}"
+            );
+        }
+    }
+
+    fn rfdetr_install_package(name: &str) -> InstallableDependency {
+        InstallableDependency {
+            package: name.to_string(),
+            prerelease: name == "flatc",
+        }
+    }
+
+    #[test]
+    fn rfdetr_install_accepts_declared_route_packages_and_subsets() {
+        // Full fallbacks (fresh stack) and missing-only subsets
+        // (incremental setup on an existing stack) both pass.
+        validate_rfdetr_install_packages(
+            "rfdetr.pth.onnx",
+            &[rfdetr_install_package("rfdetr[onnx]")],
+        )
+        .expect("onnx extra is declared");
+        validate_rfdetr_install_packages(
+            "rfdetr.pth.executorch",
+            &[
+                rfdetr_install_package("rfdetr[executorch]>=1.9.0"),
+                rfdetr_install_package("torch>=2.13"),
+                rfdetr_install_package("flatc"),
+            ],
+        )
+        .expect("executorch rows are declared");
+        validate_rfdetr_install_packages(
+            "rfdetr.pth.executorch",
+            &[
+                rfdetr_install_package("torch>=2.13"),
+                rfdetr_install_package("flatc"),
+            ],
+        )
+        .expect("missing-only subsets are declared");
+        validate_rfdetr_install_packages(
+            "rfdetr.pth.tflite",
+            &[rfdetr_install_package("rfdetr[tflite]>=1.9.4")],
+        )
+        .expect("tflite pin is declared");
+    }
+
+    #[test]
+    fn rfdetr_install_rejects_undeclared_packages_and_unknown_routes() {
+        // A bypass that smuggles another route's (or provider's) packages
+        // into the selected stack is rejected before any environment work.
+        for package in ["torch>=2.13", "ultralytics", "onnx", "rfdetr[tensorrt]"] {
+            let error = validate_rfdetr_install_packages(
+                "rfdetr.pth.onnx",
+                &[rfdetr_install_package(package)],
+            )
+            .expect_err("undeclared package must be rejected");
+            assert!(
+                error.contains(package) && error.contains("rfdetr.pth.onnx"),
+                "unexpected error: {error}"
+            );
+        }
+        let error =
+            validate_rfdetr_install_packages("rfdetr.pth.fake", &[rfdetr_install_package("onnx")])
+                .expect_err("unknown route must be rejected");
+        assert_eq!(error, "unknown route_id: rfdetr.pth.fake");
     }
 
     #[cfg(unix)]

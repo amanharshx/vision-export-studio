@@ -7,70 +7,27 @@
 // transforms into the export configuration. Only the selected stack is ever
 // created; `rfdetr-default` is never created for inspection or as an implicit
 // prerequisite for another stack.
+//
+// The per-route readiness policy and footer action are intentionally shared
+// with the Ultralytics flow (import them from there): ready comes only from
+// the selected route's own dependency results. This module owns only what
+// differs for RF-DETR: the stack-scoped fallback, install selection, host
+// refusal, hiding, and stack-aware copy.
 
 import type {
-  DepCheckResult,
   InstallableDependency,
   ProviderId,
-  ProviderSpec,
   RouteSpec,
 } from "@/lib/types";
+import type { HostSupportResult } from "@/lib/tauri/app";
 import {
-  getUltralyticsRouteSetupPrimaryAction,
-  getUltralyticsRouteSetupStatus,
   installSpecFromHint,
   type RouteDepCheck,
   type UltralyticsRouteSetupStatus,
-  type UltralyticsSetupPrimaryAction,
 } from "./ultralytics-route-setup";
-
-/**
- * Installable packages missing for the selected route. Mirrors
- * `getInstallableMissingPackages` in export-workspace without importing it
- * (that module imports this one for setup status, so an import would be a
- * cycle): backend-reported `install_package` remedies win, `missing_binary`
- * rows fall back to their pip spec, and duplicates collapse.
- */
-function getRfDetrMissingPackages(results: DepCheckResult[] | null): InstallableDependency[] {
-  if (!results) return [];
-  const packages = results.flatMap((result): InstallableDependency[] => {
-    if (result.install_package) {
-      return [{ package: result.install_package, prerelease: result.prerelease === true }];
-    }
-    if (result.status === "missing_binary") {
-      const spec = installSpecFromHint(result.install_hint);
-      return spec ? [{ package: spec, prerelease: false }] : [];
-    }
-    return [];
-  });
-  return packages.filter((dependency, index) =>
-    packages.findIndex((candidate) => candidate.package === dependency.package) === index,
-  );
-}
+import { getInstallableMissingPackages } from "./install-packages";
 
 export type RfDetrRouteSetupStatus = UltralyticsRouteSetupStatus;
-
-export interface RfDetrRouteSetupStateInput {
-  hostStatus: "supported" | "unsupported" | "checking" | "error";
-  depResults: DepCheckResult[] | null;
-  depCheckLoading: boolean;
-  depCheckError: string | null;
-  setupActive: boolean;
-  setupFailed: boolean;
-}
-
-/**
- * Single per-route readiness decision for RF-DETR routes. The shared
- * stack never marks a route ready: readiness comes only from the selected
- * route's own dependency results, so ONNX and ExecuTorch keep independent
- * readiness while using `rfdetr-default`. `setupFailed` must be scoped by
- * the caller to the route the failed task was setting up.
- */
-export function getRfDetrRouteSetupStatus(
-  input: RfDetrRouteSetupStateInput,
-): RfDetrRouteSetupStatus {
-  return getUltralyticsRouteSetupStatus(input);
-}
 
 /** Hide options, Advanced settings, command preview, and Start export while setup is incomplete. */
 export function shouldHideRfDetrExportControls(
@@ -81,14 +38,6 @@ export function shouldHideRfDetrExportControls(
   return status !== "ready";
 }
 
-/** Footer action for the setup-only modal; the export path owns the footer once ready. */
-export function getRfDetrRouteSetupPrimaryAction(
-  status: RfDetrRouteSetupStatus,
-  actionLabel: string,
-): UltralyticsSetupPrimaryAction {
-  return getUltralyticsRouteSetupPrimaryAction(status, actionLabel);
-}
-
 /**
  * Fallback install list when the selected stack is absent and no dependency
  * check could run: only the selected route's required (non-optional)
@@ -97,10 +46,7 @@ export function getRfDetrRouteSetupPrimaryAction(
  * `rfdetr[tflite]>=1.9.4`, `rfdetr[executorch]>=1.9.0` plus torch and
  * pre-release flatc). Other provider environments remain untouched.
  */
-export function getRfDetrRouteSetupFallbackPackages(
-  _provider: ProviderSpec,
-  route: RouteSpec,
-): InstallableDependency[] {
+export function getRfDetrRouteSetupFallbackPackages(route: RouteSpec): InstallableDependency[] {
   const packages = route.pipDeps
     .filter((dep) => !(dep.optional ?? false))
     .map((dep) => installSpecFromHint(dep.installHint) ?? dep.packageName);
@@ -113,10 +59,6 @@ export function getRfDetrRouteSetupFallbackPackages(
 export interface RfDetrSetupInstallTarget {
   /** True when the selected stack still needs creating or repair. */
   needsWork: boolean;
-  /** Stack interpreter the install lands in. */
-  pythonPath: string;
-  /** Backend-resolved stack key for the selected route. */
-  stackKey: string;
 }
 
 /**
@@ -132,12 +74,35 @@ export function getRfDetrSetupInstallPackages(
   target: RfDetrSetupInstallTarget,
 ): InstallableDependency[] {
   if (target.needsWork) {
-    return getRfDetrRouteSetupFallbackPackages({} as ProviderSpec, route);
+    return getRfDetrRouteSetupFallbackPackages(route);
   }
   if (check.results && check.routeId === route.id) {
-    return getRfDetrMissingPackages(check.results);
+    return getInstallableMissingPackages(check.results);
   }
-  return getRfDetrRouteSetupFallbackPackages({} as ProviderSpec, route);
+  return getRfDetrRouteSetupFallbackPackages(route);
+}
+
+/**
+ * Authoritative host refusal for one RF-DETR route's setup, checked before
+ * any environment work starts. Returns the exact reason when the host is
+ * already known to be incompatible (authoritative host support or the
+ * backend dependency preflight), so a doomed large installation never
+ * starts; null when setup may proceed.
+ */
+export function getRfDetrSetupHostRefusal(
+  routeId: string,
+  hostResults: HostSupportResult[] | null,
+  check: RouteDepCheck,
+): string | null {
+  const host = hostResults?.find((result) => result.route_id === routeId) ?? null;
+  if (host && (host.status === "unsupported" || host.status === "error")) {
+    return host.reason ?? `This format is not supported on this machine.`;
+  }
+  if (check.routeId === routeId && check.results) {
+    const blocked = check.results.find((result) => result.status === "platform_unsupported");
+    if (blocked) return blocked.reason;
+  }
+  return null;
 }
 
 export interface RfDetrRouteSetupCopy {
@@ -145,27 +110,33 @@ export interface RfDetrRouteSetupCopy {
   body: string;
 }
 
-/** Honest, percentage-free copy for every RF-DETR setup-only modal state. */
+/**
+ * Honest, percentage-free copy for every RF-DETR setup-only modal state. A
+ * null stack key means the backend-owned mapping has not resolved yet (no
+ * inventory and no setup task); the copy then names the route's environment
+ * without inventing a key — a route id is never an environment name.
+ */
 export function getRfDetrRouteSetupCopy(
   status: RfDetrRouteSetupStatus,
   routeTitle: string,
-  stackKey: string,
+  stackKey: string | null,
 ): RfDetrRouteSetupCopy {
+  const env = stackKey ?? `this route's required environment`;
   switch (status) {
     case "checking":
       return {
         title: "Checking…",
-        body: `Checking the ${stackKey} environment and dependencies for ${routeTitle}.`,
+        body: `Checking the ${env} and dependencies for ${routeTitle}.`,
       };
     case "not-set-up":
       return {
         title: "Not set up",
-        body: `Set up ${routeTitle} to create only the ${stackKey} environment and install only this route's required packages. Other environments stay untouched.`,
+        body: `Set up ${routeTitle} to create only the ${env} and install only this route's required packages. Other environments stay untouched.`,
       };
     case "setting-up":
       return {
         title: "Setting up…",
-        body: `Creating the ${stackKey} environment and installing ${routeTitle} dependencies. You can keep browsing; setup continues in the background.`,
+        body: `Creating the ${env} and installing ${routeTitle} dependencies. You can keep browsing; setup continues in the background.`,
       };
     case "setup-incomplete":
       return {

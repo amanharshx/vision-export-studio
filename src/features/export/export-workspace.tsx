@@ -90,14 +90,13 @@ import {
   getUltralyticsRouteSetupFallbackPackages,
   getUltralyticsRouteSetupStatus,
   hasBlockingDependencies,
-  installSpecFromHint,
   selectRouteDepCheck,
   shouldHideUltralyticsExportControls,
   type RouteDepCheck,
   type SetupInstallTarget,
 } from "./ultralytics-route-setup";
 import {
-  getRfDetrRouteSetupStatus,
+  getRfDetrSetupHostRefusal,
   getRfDetrSetupInstallPackages,
   shouldHideRfDetrExportControls,
 } from "./rfdetr-route-setup";
@@ -487,23 +486,10 @@ export function getRouteOptionsForOpen(
   };
 }
 
-export function getInstallableMissingPackages(results: DepCheckResult[] | null): InstallableDependency[] {
-  if (!results) return [];
-
-  const packages = results.flatMap((result): InstallableDependency[] => {
-    if (result.install_package) {
-      return [{ package: result.install_package, prerelease: result.prerelease === true }];
-    }
-    if (result.status === "missing_binary") {
-      const spec = installSpecFromHint(result.install_hint);
-      return spec ? [{ package: spec, prerelease: false }] : [];
-    }
-    return [];
-  });
-  return packages.filter((dependency, index) =>
-    packages.findIndex((candidate) => candidate.package === dependency.package) === index,
-  );
-}
+import { getInstallableMissingPackages } from "./install-packages";
+// Re-exported so existing importers (route-setup tests) keep working;
+// the implementation lives in the leaf module to avoid a workspace cycle.
+export { getInstallableMissingPackages };
 
 /**
  * Authoritative install list for one route's setup. A missing managed
@@ -1418,8 +1404,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     : null;
   const rfdetrTaskAppliesToSelectedRoute = (rfdetrSetupTask?.routeId ?? selectedRouteId) === selectedRouteId;
   const rfdetrSetupActiveForSelectedRoute = rfdetrSetupTask?.status === "active" && rfdetrTaskAppliesToSelectedRoute;
+  // The readiness policy is shared with the Ultralytics flow on purpose:
+  // ready comes only from the selected route's own check, so the shared
+  // `rfdetr-default` stack never marks both ONNX and ExecuTorch ready.
   const rfdetrRouteSetupStatus = selectedProviderId === "rfdetr"
-    ? getRfDetrRouteSetupStatus({
+    ? getUltralyticsRouteSetupStatus({
       hostStatus: selectedRouteHostStatus,
       depResults: selectedCheck.results,
       depCheckLoading,
@@ -1442,9 +1431,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       error: selectedCheck.error,
     };
   // The stack key for the selected RF-DETR route comes from the live stack
-  // inventory when present; otherwise the readiness query (backend-owned
-  // mapping) supplies it at setup time. The modal falls back to the route id
-  // only before either source resolves, never for environment creation.
+  // inventory when present, otherwise from the setup task running for it.
+  // Null means the backend-owned mapping has not resolved yet: the modal
+  // copy falls back to naming the route's environment, and Remove/Recreate
+  // stay guarded until a real stack key exists (a route id is never a key).
   const rfdetrSelectedStackKey = stackEnvironments.find((stack) =>
     stack.route_ids.includes(selectedRouteId),
   )?.key ?? null;
@@ -1457,7 +1447,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       canSetup: !cleanupBusy && !setupConflictMessage,
       showRecovery: rfdetrRouteSetupStatus === "setup-incomplete",
       error: selectedCheck.error,
-      stackKey: rfdetrSetupTask?.environmentKey ?? rfdetrSelectedStackKey ?? selectedRouteId,
+      stackKey: rfdetrSetupTask?.environmentKey ?? rfdetrSelectedStackKey,
     };
   // Export chrome (runtime-upgrade nudge, artifact banners, export errors,
   // and — inside the modal — options, preview, and Start export) stays
@@ -1973,6 +1963,18 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // readiness. Modal setup, Retry, and Recreate call this same core.
   const runRfDetrRouteSetup = useCallback(async (routeId: string): Promise<boolean> => {
     if (blockOnSetupConflict((message) => setRouteDepCheckError(routeId, message))) return false;
+    // Refuse before any environment work when the host is already known to
+    // be incompatible: backend platform state (authoritative batch plus the
+    // dependency preflight) wins over starting a doomed large installation.
+    const hostRefusal = getRfDetrSetupHostRefusal(
+      routeId,
+      effectiveHostSupportResults,
+      selectRouteDepCheck(routeDepCheck, routeId),
+    );
+    if (hostRefusal) {
+      setRouteDepCheckError(routeId, hostRefusal);
+      return false;
+    }
     // This flow never touches sourcePath (loaded model), export options,
     // output-dir/Python overrides, or other provider environments. The saved
     // override value is preserved; installs never go into it or into the
@@ -2001,7 +2003,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       const packages = getRfDetrSetupInstallPackages(
         route,
         selectRouteDepCheck(routeDepCheck, routeId),
-        { needsWork: readiness.needs_work, pythonPath: readiness.stack_python, stackKey: readiness.stack_key },
+        { needsWork: readiness.needs_work },
       );
       if (packages.length === 0) {
         setRouteDepCheckError(routeId, "No installable packages were reported for this route. Re-run the dependency check before setup.");
@@ -2062,7 +2064,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     } catch (error) {
       return failInstall(String(error));
     }
-  }, [blockOnSetupConflict, dismissTask, refreshStackEnvironmentCards, requirePython, rfdetrSetupTask, routeDepCheck, scanProviderEnvironments, setRouteDepCheckError, startRuntimeInstall]);
+  }, [blockOnSetupConflict, dismissTask, effectiveHostSupportResults, refreshStackEnvironmentCards, requirePython, rfdetrSetupTask, routeDepCheck, scanProviderEnvironments, setRouteDepCheckError, startRuntimeInstall]);
   const handleRfDetrRouteSetup = useCallback(async (routeId: string): Promise<void> => {
     if (cleanupBusy) return;
     await runRfDetrRouteSetup(routeId);
@@ -2074,8 +2076,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // the selected stack through the existing cleanup command, then sets the
   // same route up again. Output settings, the saved Python override, other
   // stacks, the Ultralytics environment, the loaded model, and unrelated
-  // runtime files are untouched.
-  const handleRecreateRfDetr = useCallback(async (routeId: string, stackKey: string) => {
+  // runtime files are untouched. A null stack key means the backend-owned
+  // mapping never resolved, so there is nothing to remove.
+  const handleRecreateRfDetr = useCallback(async (routeId: string, stackKey: string | null) => {
+    if (!stackKey) return;
     if (blockOnSetupConflict((message) => setRouteDepCheckError(routeId, message))) return;
     if (cleanupBusy) return;
     let confirmed = false;
@@ -3286,8 +3290,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           else void handleRouteSetup(selectedRoute.id);
         }}
         onRemoveEnvironment={() => {
-          if (selectedProviderId === "rfdetr" && rfdetrSetupModalState) {
-            void prepareCleanup("rfdetr", rfdetrSetupModalState.stackKey as ManagedEnvironmentKey);
+          if (selectedProviderId === "rfdetr") {
+            const stackKey = rfdetrSetupModalState?.stackKey ?? null;
+            if (!stackKey) return;
+            void prepareCleanup("rfdetr", stackKey as ManagedEnvironmentKey);
           } else {
             void prepareCleanup("ultralytics");
           }
