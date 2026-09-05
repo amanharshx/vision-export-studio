@@ -95,6 +95,26 @@ import {
 type WorkspaceView = "drop" | "formats";
 type RuntimeInstallPhase = "idle" | "installing" | "ready" | "failed";
 
+interface InstallUltralyticsOptions {
+  /** Skip the cleanup-busy guard. Only Recreate sets this: it sequences its
+   * own cleanup before installing, so the flag it holds is stale by design. */
+  ignoreCleanupBusy?: boolean;
+  /** Runs after a successful install; a throw fails the install result.
+   * Recreate marks setup complete here so the completion survives a
+   * Python-required dialog round-trip (the pending retry keeps these opts). */
+  onInstalled?: () => Promise<unknown>;
+}
+
+interface InstallUltralyticsOptions {
+  /** Skip the cleanup-busy guard. Only Recreate sets this: it sequences its
+   * own cleanup before installing, so the flag it holds is stale by design. */
+  ignoreCleanupBusy?: boolean;
+  /** Runs after a successful install; a throw fails the install result.
+   * Recreate marks setup complete here so the completion survives a
+   * Python-required dialog round-trip (the pending retry keeps these opts). */
+  onInstalled?: () => Promise<unknown>;
+}
+
 export function getManagedRuntimeUpgradeNudge(
   eligibility: ManagedRuntimeRebuildEligibility | null,
   mayStart = true,
@@ -1556,9 +1576,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     }
   }, []);
 
-  const handleInstallUltralyticsRuntime = useCallback(async (): Promise<boolean> => {
+  const handleInstallUltralyticsRuntime = useCallback(async (opts?: InstallUltralyticsOptions): Promise<boolean> => {
     if (blockOnSetupConflict(setDepCheckError)) return false;
-    if (cleanupBusy) return false;
+    if (cleanupBusy && !opts?.ignoreCleanupBusy) return false;
 
     // This flow only starts the app-wide setup task and publishes the fresh
     // environment on terminal. It never touches sourcePath (loaded model),
@@ -1627,7 +1647,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           return false;
         }
         if (isPythonRequiredResult(bootstrap)) {
-          requirePython(setupRouteId, bootstrap, () => handleInstallUltralyticsRuntimeRef.current());
+          // The pending retry keeps the caller's opts, so a Recreate that
+          // detours through the dialog still marks setup complete after.
+          const pendingOpts = opts;
+          requirePython(setupRouteId, bootstrap, () => handleInstallUltralyticsRuntimeRef.current(pendingOpts));
           // No mutation happened, so no inventory refresh: the dialog owns
           // the next step (choose, check again, clear, or cancel).
           setDepCheckError(
@@ -1659,6 +1682,13 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       const result = await startRuntimeInstall(request);
       if (!result.ok) {
         return failInstall(result.error);
+      }
+      if (opts?.onInstalled) {
+        try {
+          await opts.onInstalled();
+        } catch (error) {
+          return failInstall(String(error));
+        }
       }
       return true;
     } catch (error) {
@@ -1707,14 +1737,17 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         managedEnvironmentCacheKeysForCleanup(keys, stackEnvironments.map((stack) => stack.key)),
       );
       setEnvInfo(null);
-      const installed = await handleInstallUltralyticsRuntimeRef.current();
-      if (!installed) return;
-      try {
-        const settings = await loadSettings();
-        await markSetupComplete(settings.runtime_dir);
-      } catch (error) {
-        setDepCheckError(String(error));
-      }
+      // The install runs with an explicit continuation: it skips the
+      // cleanup-busy guard this flow holds itself, and marks setup complete
+      // on success — including after a dialog round-trip, whose pending
+      // retry keeps these same opts.
+      await handleInstallUltralyticsRuntimeRef.current({
+        ignoreCleanupBusy: true,
+        onInstalled: async () => {
+          const settings = await loadSettings();
+          await markSetupComplete(settings.runtime_dir);
+        },
+      });
     } catch (error) {
       setDepCheckError(String(error));
     } finally {
@@ -2818,7 +2851,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
                     Recreate environment…
                   </Button>
                 )}
-                <Button size="sm" onClick={handleInstallUltralyticsRuntime} disabled={cleanupBusy}>
+                <Button size="sm" onClick={() => void handleInstallUltralyticsRuntime()} disabled={cleanupBusy}>
                   {runtimeInstallPhase === "failed" ? "Retry setup" : "Install Runtime"}
                 </Button>
               </div>
