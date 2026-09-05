@@ -74,13 +74,17 @@ pub(crate) fn verify_trusted_identity(
     current: &RfDetrCheckpointIdentity,
     trusted: Option<&RfDetrCheckpointIdentity>,
 ) -> Result<(), String> {
-    if let Some(trusted) = trusted {
-        if trusted != current {
-            return Err(
-                "checkpoint changed since trust was confirmed; confirm trust again before inspection."
-                    .to_string(),
-            );
-        }
+    let Some(trusted) = trusted else {
+        return Err(
+            "checkpoint trust is not bound to the selected file; confirm trust again before inspection."
+                .to_string(),
+        );
+    };
+    if trusted != current {
+        return Err(
+            "checkpoint changed since trust was confirmed; confirm trust again before inspection."
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -92,6 +96,10 @@ fn stack_can_inspect(python: &str) -> bool {
     probe(python, "import rfdetr").is_ok()
 }
 
+fn unknown_stack_error(key: &str) -> String {
+    format!("unknown RF-DETR stack: {}", key)
+}
+
 pub(crate) fn resolve_inspection_stack(
     runtime_dir: &Path,
     requested: Option<&str>,
@@ -101,9 +109,9 @@ pub(crate) fn resolve_inspection_stack(
         let stack = known_stacks()
             .iter()
             .find(|stack| stack.key == key)
-            .ok_or_else(|| format!("unknown RF-DETR stack: {}", key))?;
+            .ok_or_else(|| unknown_stack_error(key))?;
         let venv = stack_venv_dir_for_key(runtime_dir, stack.key)
-            .ok_or_else(|| format!("unknown RF-DETR stack: {}", key))?;
+            .ok_or_else(|| unknown_stack_error(key))?;
         let python = venv_python_at(&venv);
         if !Path::new(&python).exists() || !can_inspect(&python) {
             return Err(format!(
@@ -313,8 +321,9 @@ mod tests {
     fn trusted_identity_mismatch_is_rejected() {
         let path = temp_checkpoint("d.pth", b"v1");
         let current = checkpoint_identity_for_path(path.to_str().unwrap()).unwrap();
-        // No trusted fingerprint is allowed (fresh trust still gates on the flag).
-        assert!(verify_trusted_identity(&current, None).is_ok());
+        // Trust must be bound to the file identity: confirming without the
+        // fingerprint cannot satisfy the binding.
+        assert!(verify_trusted_identity(&current, None).is_err());
         assert!(verify_trusted_identity(&current, Some(&current)).is_ok());
 
         let stale = RfDetrCheckpointIdentity {

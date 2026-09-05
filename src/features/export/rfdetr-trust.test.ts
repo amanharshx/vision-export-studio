@@ -2,9 +2,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   createRfDetrTrust,
-  isRfDetrNoHealthyStackError,
+  getRfDetrMissingRuntimeMessage,
+  getRfDetrPlusBlockReason,
   isRfDetrTrustValid,
-  RFDETR_NO_HEALTHY_STACK_MESSAGE,
 } from "./rfdetr-trust";
 
 const identity = {
@@ -57,18 +57,53 @@ describe("rfdetr trust binding (ticket 09)", () => {
     expect(isRfDetrTrustValid(trusted, "/tmp/model.pth", null)).toBe(false);
   });
 
-  test("no healthy stack keeps trust guidance", () => {
-    expect(RFDETR_NO_HEALTHY_STACK_MESSAGE).toContain("Set up a route environment before inspection.");
+  test("restart drops session trust (null initial state is invalid)", () => {
+    expect(isRfDetrTrustValid(null, "/tmp/model.pth", identity)).toBe(false);
+  });
+
+  test("missing runtime explains route setup for rfdetr only", () => {
+    expect(getRfDetrMissingRuntimeMessage("rfdetr", null)).toBe(
+      "Set up a route environment before export.",
+    );
+    expect(getRfDetrMissingRuntimeMessage("rfdetr", "/tmp/python")).toBeNull();
+    expect(getRfDetrMissingRuntimeMessage("ultralytics", null)).toBeNull();
+  });
+
+  test("plus-only checkpoints stay blocked with the exact reason", () => {
+    expect(getRfDetrPlusBlockReason(null)).toBeNull();
     expect(
-      isRfDetrNoHealthyStackError(
-        "No healthy RF-DETR environment found. Set up a route environment before inspection.",
-      ),
-    ).toBe(true);
+      getRfDetrPlusBlockReason({
+        success: false,
+        class_symbol: "RFDETRXLarge",
+        family: "detection",
+        size: "xlarge",
+        requires_plus: true,
+        is_legacy: false,
+        recommended_imgsz: null,
+        patch_size: null,
+        num_windows: null,
+        required_multiple: null,
+        token_grid: null,
+        resolution_source: null,
+        error: "RFDETRXLarge requires rfdetr_plus support and is not supported in v1.",
+      }),
+    ).toBe("RFDETRXLarge requires rfdetr_plus support and is not supported in v1.");
     expect(
-      isRfDetrNoHealthyStackError(
-        "RF-DETR stack 'rfdetr-default' is not ready for inspection. Set up the route environment before inspection.",
-      ),
-    ).toBe(true);
-    expect(isRfDetrNoHealthyStackError("probe failed")).toBe(false);
+      getRfDetrPlusBlockReason({
+        success: true,
+        class_symbol: "RFDETRSmall",
+        family: "detection",
+        size: "small",
+        requires_plus: false,
+        is_legacy: false,
+        recommended_imgsz: 512,
+        patch_size: 16,
+        num_windows: 2,
+        required_multiple: 32,
+        token_grid: 32,
+        resolution_source: "saved_model_config",
+        error: null,
+      }),
+    ).toBeNull();
   });
 });

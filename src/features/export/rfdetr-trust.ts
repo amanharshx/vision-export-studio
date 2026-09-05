@@ -1,3 +1,5 @@
+import type { RfDetrInspectResult } from "@/lib/types";
+
 export interface RfDetrCheckpointIdentity {
   canonical_path: string;
   len: number;
@@ -35,10 +37,24 @@ export function isRfDetrTrustValid(
     && trusted.identity.modified_ms === current.modified_ms;
 }
 
-export const RFDETR_NO_HEALTHY_STACK_MESSAGE =
-  "No healthy RF-DETR environment found. Set up a route environment before inspection.";
+/** Missing-runtime explanation for RF-DETR export without its stack. */
+export function getRfDetrMissingRuntimeMessage(
+  providerId: string,
+  pythonPath: string | null | undefined,
+): string | null {
+  if (providerId !== "rfdetr" || pythonPath) return null;
+  return "Set up a route environment before export.";
+}
 
-/** True for backend errors that preserve trust and require route setup. */
-export function isRfDetrNoHealthyStackError(error: string): boolean {
-  return error.includes("before inspection.");
+/**
+ * Exact blocking reason for unsupported Plus-only checkpoints. Returns null
+ * when export may proceed; callers must check this before manual-variant
+ * readiness so manual selection cannot bypass the Plus block.
+ */
+export function getRfDetrPlusBlockReason(
+  inspect: RfDetrInspectResult | null,
+): string | null {
+  if (!inspect || !inspect.requires_plus) return null;
+  return inspect.error
+    ?? `${inspect.class_symbol ?? "Checkpoint"} requires rfdetr_plus support and is not supported in v1.`;
 }
