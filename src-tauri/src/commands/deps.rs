@@ -1267,8 +1267,10 @@ fn ensure_ultralytics_managed_environment(
 /// Reinstall just the Ultralytics CLI scripts when the package is importable
 /// but its `yolo` binary is missing. pip trusts dist-info metadata, so a
 /// plain reinstall is a no-op that would loop pip-success into verify-fail
-/// forever. `--no-deps` bounds the repair to megabytes: dependencies are
-/// never re-downloaded here. Returns true when a repair install ran.
+/// forever. `--ignore-installed` only lays files down without uninstalling
+/// first, so a failed repair cannot destroy metadata the way
+/// `--force-reinstall` can; `--no-deps` bounds it to megabytes.
+/// Returns true when a repair install ran.
 fn repair_ultralytics_cli_if_needed(
     managed_python: &str,
     runtime_root: &str,
@@ -1285,21 +1287,29 @@ fn repair_ultralytics_cli_if_needed(
     if !importable {
         return Ok(false);
     }
-    let status = Command::new(managed_python)
+    let output = Command::new(managed_python)
         .args([
             "-m",
             "pip",
             "install",
-            "--force-reinstall",
+            "--ignore-installed",
             "--no-deps",
             "ultralytics",
         ])
-        .status()
+        .output()
         .map_err(|error| format!("failed to reinstall Ultralytics CLI: {error}"))?;
-    if !status.success() {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let tail: Vec<&str> = stderr
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
+        let tail = tail.iter().rev().take(5).rev().cloned().collect::<Vec<_>>();
         return Err(format!(
-            "failed to reinstall Ultralytics CLI: exit code {:?}",
-            status.code()
+            "failed to reinstall Ultralytics CLI: exit code {:?}: {}",
+            output.status.code(),
+            tail.join(" | ")
         ));
     }
     Ok(true)
@@ -2712,10 +2722,10 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         // Fake managed interpreter with controllable importability: `-c`
         // probes answer find_spec from `importable`, every `-m pip`
-        // invocation appends its args to `<stub>.pip.log` and exits from
-        // `pip_ok`, everything else exits 0.
+        // invocation appends its args to `<stub>.pip.log`, failures also
+        // print a stderr marker, everything else exits 0.
         let script = format!(
-            "#!/bin/sh\nif [ \"$1\" = \"-c\" ]; then case \"$2\" in *find_spec*) if [ \"{}\" = \"1\" ]; then echo \"True\"; else echo \"False\"; fi; exit 0;; *) echo \"3.12.12\"; exit 0;; esac; fi\nif [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pip\" ]; then echo \"$@\" >> \"$0.pip.log\"; exit {}; fi\nexit 0\n",
+            "#!/bin/sh\nif [ \"$1\" = \"-c\" ]; then case \"$2\" in *find_spec*) if [ \"{}\" = \"1\" ]; then echo \"True\"; else echo \"False\"; fi; exit 0;; *) echo \"3.12.12\"; exit 0;; esac; fi\nif [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pip\" ]; then echo \"$@\" >> \"$0.pip.log\"; if [ \"{}\" = \"0\" ]; then exit 0; else echo \"fake pip exploded\" >&2; exit 1; fi; fi\nexit 0\n",
             if importable { "1" } else { "0" },
             u8::from(!pip_ok)
         );
@@ -2735,7 +2745,8 @@ mod tests {
     fn ultralytics_scriptless_but_importable_repairs_cli() {
         // pip trusts dist-info metadata, so a deleted `yolo` binary with an
         // intact install would otherwise loop pip-noop into verify-fail
-        // forever. The repair reinstalls just ultralytics, never dependencies.
+        // forever. The repair overlays just ultralytics without uninstalling
+        // first, so it cannot destroy metadata on failure.
         let root = std::env::temp_dir().join(format!("ultralytics-heal-{}", Uuid::new_v4()));
         let runtime = root.join("runtime").to_string_lossy().into_owned();
         std::fs::create_dir_all(&root).expect("create temp root");
@@ -2743,6 +2754,8 @@ mod tests {
         let managed_path = Path::new(&managed_string);
         std::fs::create_dir_all(managed_path.parent().unwrap()).expect("create managed parent");
         write_managed_stub(managed_path, true, true);
+        let sentinel = managed_path.parent().unwrap().join("keep.txt");
+        std::fs::write(&sentinel, b"keep").expect("write sentinel");
 
         let repaired = repair_ultralytics_cli_if_needed(
             managed_path.to_str().expect("managed path"),
@@ -2752,8 +2765,16 @@ mod tests {
         assert!(repaired);
         let logged = std::fs::read_to_string(managed_pip_log(managed_path)).expect("read pip log");
         assert!(
-            logged.contains("-m pip install --force-reinstall --no-deps ultralytics"),
+            logged.contains("-m pip install --ignore-installed --no-deps ultralytics"),
             "unexpected pip args: {logged}"
+        );
+        assert!(
+            !logged.contains("--force-reinstall"),
+            "repair must never uninstall first: {logged}"
+        );
+        assert!(
+            sentinel.exists(),
+            "repair overlays files without removing anything"
         );
         std::fs::remove_dir_all(root).expect("remove temp root");
     }
@@ -2831,6 +2852,10 @@ mod tests {
         assert!(
             error.contains("failed to reinstall Ultralytics CLI"),
             "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("fake pip exploded"),
+            "pip output must reach the error: {error}"
         );
         std::fs::remove_dir_all(root).expect("remove temp root");
     }
