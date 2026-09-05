@@ -1,14 +1,14 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::commands::deps::{bootstrap_candidate_supported, bootstrap_requirement_label};
+use crate::commands::deps::route_python_version_supported;
 use crate::commands::environment::{
     collect_managed_runtime_candidates_with, managed_runtime_windows_location_candidates,
     probe_python_candidate, run, select_managed_runtime_python, PythonCandidate,
 };
 use crate::commands::provider_registry::{RFDETR_ROUTES, ULTRALYTICS_ROUTES};
 use crate::commands::setup::{load_settings, venv_python_at};
-use crate::commands::stack_environments::{known_stacks, stack_venv_dir_for_key};
+use crate::commands::stack_environments::{known_stacks, stack_for_route, stack_venv_dir_for_key};
 
 pub(crate) const BOOTSTRAP_SOURCE_EXPLICIT: &str = "explicit-override";
 pub(crate) const BOOTSTRAP_SOURCE_ULTRALYTICS: &str = "ultralytics-managed";
@@ -68,9 +68,10 @@ fn invalid_override(
     }
 }
 
-/// One cohesive check: version policy (single owner in deps) plus real venv
-/// capability. Returns the version on success so callers can build results
-/// without re-probing.
+/// One cohesive check: the managed-range owner plus the route owner, plus
+/// real venv capability. A singleton through the existing managed selector
+/// is how a single candidate is tested against the managed range, so the
+/// 3.10 through 3.13 policy lives in exactly one place.
 enum Usability {
     Ready {
         executable: String,
@@ -93,7 +94,8 @@ fn check_usable(
     ensure_venv: &impl Fn(&str) -> Result<(), String>,
 ) -> Usability {
     let version = version_string(candidate);
-    if !bootstrap_candidate_supported(route_id, candidate.major, candidate.minor) {
+    let in_managed_range = select_managed_runtime_python(vec![candidate.clone()]).is_some();
+    if !in_managed_range || !route_python_version_supported(route_id, &version) {
         return Usability::WrongVersion {
             executable: candidate.executable.clone(),
             version,
@@ -178,7 +180,15 @@ where
             reason: "managed runtime root must not be empty".to_string(),
         };
     }
-    let requirement = bootstrap_requirement_label(route_id).to_string();
+    let requirement = if stack_for_route(route_id)
+        .and_then(|stack| stack.python_requirement)
+        .is_some()
+    {
+        "Python 3.12"
+    } else {
+        "Python 3.10 through 3.13"
+    }
+    .to_string();
     let mut incompatible: Vec<BootstrapIncompatible> = Vec::new();
     let mut record = |source: &str, executable: String, version: String| {
         let entry = BootstrapIncompatible {

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSettings, BootstrapPythonResult } from "@/lib/types";
+import type { AppSettings } from "@/lib/types";
 
 export interface ManagedRuntimeRebuildEligibility {
   eligible: boolean;
@@ -33,14 +33,4 @@ export function savePythonOverride(pythonPathOverride: string | null): Promise<v
 
 export function saveOutputDirOverride(outputDirOverride: string | null): Promise<void> {
   return invoke<void>("save_output_dir_override", { outputDirOverride });
-}
-
-export function resolveBootstrapPython(
-  routeId: string,
-  pythonPathOverride?: string | null,
-): Promise<BootstrapPythonResult> {
-  return invoke<BootstrapPythonResult>("resolve_bootstrap_python", {
-    routeId,
-    pythonPathOverride: pythonPathOverride ?? null,
-  });
 }

@@ -46,7 +46,7 @@ fn minimum_python_version(route_id: &str) -> Option<&'static str> {
     None
 }
 
-fn route_python_version_supported(route_id: &str, installed: &str) -> bool {
+pub(crate) fn route_python_version_supported(route_id: &str, installed: &str) -> bool {
     if stack_for_route(route_id)
         .and_then(|stack| stack.python_requirement)
         .is_some()
@@ -61,32 +61,6 @@ fn route_python_version_supported(route_id: &str, installed: &str) -> bool {
     match minimum_python_version(route_id) {
         Some(required) => !version_below(installed, required),
         None => true,
-    }
-}
-
-/// Single owner for bootstrap compatibility: the managed-runtime range
-/// (3.10 through 3.13) plus the selected route's Python requirement.
-/// Reuses the existing route policy at major.minor granularity so there is
-/// exactly one place that decides whether an interpreter can create a
-/// route's environment.
-pub(crate) fn bootstrap_candidate_supported(route_id: &str, major: u8, minor: u8) -> bool {
-    if major != 3 || !(10..=13).contains(&minor) {
-        return false;
-    }
-    route_python_version_supported(route_id, &format!("{major}.{minor}.0"))
-}
-
-/// Short user-facing requirement label for the Python-required dialog.
-/// Derives the restricted case from stack metadata so only one place names
-/// which routes narrow the range.
-pub(crate) fn bootstrap_requirement_label(route_id: &str) -> &'static str {
-    if stack_for_route(route_id)
-        .and_then(|stack| stack.python_requirement)
-        .is_some()
-    {
-        "Python 3.12"
-    } else {
-        "Python 3.10 through 3.13"
     }
 }
 
