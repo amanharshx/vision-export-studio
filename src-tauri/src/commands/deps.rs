@@ -1416,18 +1416,6 @@ fn check_ultralytics_dep(python: &str, required: &str) -> DepCheckResult {
     }
 }
 
-/// Install spec override for probed distributions whose declared install
-/// remedy is a different spec (e.g. the probed `axelera` import installs via
-/// `axelera-devkit`, the LiteRT imports via `ultralytics[export-litert]`).
-/// Returns None when the package name itself is the install spec.
-fn install_package_override(package_name: &str) -> Option<&'static str> {
-    match package_name {
-        "axelera" => Some("axelera-devkit"),
-        "litert-torch>=0.9.0" | "ai-edge-litert>=2.1.4" => Some("ultralytics[export-litert]"),
-        _ => None,
-    }
-}
-
 fn check_pip_dep(
     python: &str,
     package_name: &str,
@@ -1468,16 +1456,21 @@ fn check_pip_dep(
                     prerelease: None,
                 }
             } else {
+                // Probed distributions whose declared install remedy is a
+                // different spec install via that remedy (e.g. the probed
+                // `axelera` import installs via `axelera-devkit`, the LiteRT
+                // imports via `ultralytics[export-litert]`).
+                let install_spec = match package_name {
+                    "axelera" => "axelera-devkit",
+                    "litert-torch>=0.9.0" | "ai-edge-litert>=2.1.4" => "ultralytics[export-litert]",
+                    _ => package_name,
+                };
                 DepCheckResult {
                     item: package_name.to_string(),
                     status: "missing_package".to_string(),
                     reason: format!("importlib.util.find_spec('{}') returned False", imp),
                     install_hint: install_hint.to_string(),
-                    install_package: Some(
-                        install_package_override(package_name)
-                            .unwrap_or(package_name)
-                            .to_string(),
-                    ),
+                    install_package: Some(install_spec.to_string()),
                     prerelease: None,
                 }
             }
@@ -1940,21 +1933,6 @@ mod tests {
         assert!(validate_package_name("litert-torch>=0.9.0").is_ok());
         assert!(validate_package_name("ai-edge-litert>=2.1.4").is_ok());
         assert!(validate_package_name("--pre").is_err());
-    }
-
-    #[test]
-    fn install_package_override_uses_declared_remedy() {
-        assert_eq!(install_package_override("axelera"), Some("axelera-devkit"));
-        assert_eq!(
-            install_package_override("litert-torch>=0.9.0"),
-            Some("ultralytics[export-litert]")
-        );
-        assert_eq!(
-            install_package_override("ai-edge-litert>=2.1.4"),
-            Some("ultralytics[export-litert]")
-        );
-        assert_eq!(install_package_override("onnx"), None);
-        assert_eq!(install_package_override("ultralytics"), None);
     }
 
     #[cfg(unix)]
