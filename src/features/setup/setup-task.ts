@@ -611,21 +611,28 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
         phase: "checking-environment",
         summary: setupTaskSummaryForPhase("checking-environment", current.provider),
       });
-      let verified: { yoloPath: string | null };
-      try {
-        verified = await deps.verifyEnvironment(request.verifyPythonPath ?? request.pythonPath);
-      } catch (error) {
-        const message = String(error);
-        failActiveTask(message);
-        return { ok: false, error: message };
-      }
-      const afterVerify = task;
-      if (!afterVerify || afterVerify.status !== "active") return outcome;
-      if (!verified.yoloPath) {
-        const message =
-          "Ultralytics runtime install finished, but YOLO CLI was still not detected.";
-        failActiveTask(message);
-        return { ok: false, error: message };
+      // RF-DETR stacks have no YOLO CLI: the backend-owned ensure already
+      // guarantees a usable stack interpreter before pip runs, and the
+      // route's own dependency check (refreshed by the workspace terminal
+      // effect) owns per-route readiness. Verifying yolo here would always
+      // fail for RF-DETR stacks.
+      if (request.provider !== "rfdetr") {
+        let verified: { yoloPath: string | null };
+        try {
+          verified = await deps.verifyEnvironment(request.verifyPythonPath ?? request.pythonPath);
+        } catch (error) {
+          const message = String(error);
+          failActiveTask(message);
+          return { ok: false, error: message };
+        }
+        const afterVerify = task;
+        if (!afterVerify || afterVerify.status !== "active") return outcome;
+        if (!verified.yoloPath) {
+          const message =
+            "Ultralytics runtime install finished, but YOLO CLI was still not detected.";
+          failActiveTask(message);
+          return { ok: false, error: message };
+        }
       }
       if (request.finalize) {
         try {
@@ -638,6 +645,8 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
         const afterFinalize = task;
         if (!afterFinalize || afterFinalize.status !== "active") return outcome;
       }
+      const afterVerify = task;
+      if (!afterVerify || afterVerify.status !== "active") return outcome;
       setTask({
         ...afterVerify,
         phase: "ready",

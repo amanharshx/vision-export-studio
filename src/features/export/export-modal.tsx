@@ -32,6 +32,12 @@ import {
   shouldHideUltralyticsExportControls,
   type UltralyticsRouteSetupStatus,
 } from "./ultralytics-route-setup";
+import {
+  getRfDetrRouteSetupCopy,
+  getRfDetrRouteSetupPrimaryAction,
+  shouldHideRfDetrExportControls,
+  type RfDetrRouteSetupStatus,
+} from "./rfdetr-route-setup";
 import { formatIconMap } from "@/components/format-icons";
 import { categoryBg, categoryIcon } from "./route-card";
 
@@ -66,6 +72,7 @@ interface ExportModalProps {
   onManagedRuntimeUpgrade: () => void;
   setupConflictMessage?: string | null;
   ultralyticsSetup?: UltralyticsSetupModalState | null;
+  rfdetrSetup?: RfDetrSetupModalState | null;
   onSetupRoute?: () => void;
   onRemoveEnvironment?: () => void;
   onRecreateEnvironment?: () => void;
@@ -197,6 +204,16 @@ export interface UltralyticsSetupModalState {
   error: string | null;
 }
 
+export interface RfDetrSetupModalState {
+  status: RfDetrRouteSetupStatus;
+  actionLabel: string;
+  busy: boolean;
+  canSetup: boolean;
+  showRecovery: boolean;
+  error: string | null;
+  stackKey: string;
+}
+
 function ultralyticsSetupTones(status: UltralyticsRouteSetupStatus): { container: string; text: string } {
   if (status === "check-failed") return { container: "border-red-200 bg-red-50", text: "text-red-800" };
   if (status === "setup-incomplete" || status === "unavailable" || status === "manual-step-required") {
@@ -221,6 +238,48 @@ export function UltralyticsSetupPanel({
   onRecreateEnvironment?: () => void;
 }) {
   const copy = getUltralyticsRouteSetupCopy(status, routeTitle);
+  const tones = ultralyticsSetupTones(status);
+  return (
+    <div className={`rounded-md border p-3 ${tones.container}`}>
+      <p className={`text-sm font-medium ${tones.text}`}>{copy.title}</p>
+      <p className={`mt-1 text-xs ${tones.text}`}>{copy.body}</p>
+      {error && <p className="mt-2 text-xs text-red-700">{error}</p>}
+      {showRecovery && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {onRemoveEnvironment && (
+            <Button size="sm" variant="outline" onClick={onRemoveEnvironment}>
+              Remove…
+            </Button>
+          )}
+          {onRecreateEnvironment && (
+            <Button size="sm" variant="outline" onClick={onRecreateEnvironment}>
+              Recreate environment…
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function RfDetrSetupPanel({
+  status,
+  routeTitle,
+  stackKey,
+  error,
+  showRecovery,
+  onRemoveEnvironment,
+  onRecreateEnvironment,
+}: {
+  status: RfDetrRouteSetupStatus;
+  routeTitle: string;
+  stackKey: string;
+  error: string | null;
+  showRecovery: boolean;
+  onRemoveEnvironment?: () => void;
+  onRecreateEnvironment?: () => void;
+}) {
+  const copy = getRfDetrRouteSetupCopy(status, routeTitle, stackKey);
   const tones = ultralyticsSetupTones(status);
   return (
     <div className={`rounded-md border p-3 ${tones.container}`}>
@@ -276,6 +335,7 @@ export function ExportModal({
   onManagedRuntimeUpgrade,
   setupConflictMessage,
   ultralyticsSetup,
+  rfdetrSetup,
   onSetupRoute,
   onRemoveEnvironment,
   onRecreateEnvironment,
@@ -291,19 +351,38 @@ export function ExportModal({
   const isStarting = exportStatus === "starting";
   const isRunning = exportStatus === "running";
   const setupBlocked = Boolean(setupConflictMessage);
-  // Route-owned Ultralytics setup (ticket 08): the same modal opens in a
+  // Route-owned setup (tickets 08 and 10): the same modal opens in a
   // setup-only mode until the exact route is ready, then transforms into the
-  // export configuration below.
-  const setupMode = ultralyticsSetup != null
+  // export configuration below. Ultralytics owns the shared environment;
+  // each RF-DETR route owns its isolated stack.
+  const ultralyticsHides = ultralyticsSetup != null
     && shouldHideUltralyticsExportControls(provider.id, ultralyticsSetup.status);
-  const setupPrimary = setupMode
-    ? getUltralyticsRouteSetupPrimaryAction(ultralyticsSetup.status, ultralyticsSetup.actionLabel)
-    : null;
-  const setupPrimaryEnabled = setupMode
-    && setupPrimary != null
-    && setupPrimary.enabled
-    && ultralyticsSetup.canSetup
-    && !ultralyticsSetup.busy;
+  const rfdetrHides = rfdetrSetup != null
+    && shouldHideRfDetrExportControls(provider.id, rfdetrSetup.status);
+  const setupMode = ultralyticsHides || rfdetrHides;
+  const setupPrimary = (() => {
+    if (ultralyticsHides && ultralyticsSetup) {
+      return getUltralyticsRouteSetupPrimaryAction(ultralyticsSetup.status, ultralyticsSetup.actionLabel);
+    }
+    if (rfdetrHides && rfdetrSetup) {
+      return getRfDetrRouteSetupPrimaryAction(rfdetrSetup.status, rfdetrSetup.actionLabel);
+    }
+    return null;
+  })();
+  const setupPrimaryEnabled = (() => {
+    if (ultralyticsHides && ultralyticsSetup) {
+      return setupPrimary != null && setupPrimary.enabled && ultralyticsSetup.canSetup && !ultralyticsSetup.busy;
+    }
+    if (rfdetrHides && rfdetrSetup) {
+      return setupPrimary != null && setupPrimary.enabled && rfdetrSetup.canSetup && !rfdetrSetup.busy;
+    }
+    return false;
+  })();
+  const setupStatusForSpinner = ultralyticsHides && ultralyticsSetup
+    ? ultralyticsSetup.status
+    : rfdetrHides && rfdetrSetup
+      ? rfdetrSetup.status
+      : null;
   const rfdetrImgszError =
     provider.id === "rfdetr" && rfdetrSummary
       ? validateRfDetrImgsz(options.imgsz, rfdetrSummary.requiredMultiple ?? null)
@@ -400,7 +479,7 @@ export function ExportModal({
                 short-circuits those to a single platform row repeating the
                 header reason, and nothing there is actionable while setup
                 stays disabled. Manual requirements stay visible. */}
-            {!(setupMode && ultralyticsSetup && ultralyticsSetup.status === "unavailable") && (
+            {!((setupMode && ultralyticsSetup && ultralyticsSetup.status === "unavailable") || (setupMode && rfdetrSetup && rfdetrSetup.status === "unavailable")) && (
             <div>
               <p className="mb-2 text-sm font-medium text-zinc-700">
                 Dependencies
@@ -419,12 +498,23 @@ export function ExportModal({
             )}
 
             {/* Route-owned setup status (setup-only mode hides export controls) */}
-            {setupMode && ultralyticsSetup && (
+            {setupMode && ultralyticsSetup && ultralyticsHides && (
               <UltralyticsSetupPanel
                 status={ultralyticsSetup.status}
                 routeTitle={route.title}
                 error={ultralyticsSetup.error}
                 showRecovery={ultralyticsSetup.showRecovery}
+                onRemoveEnvironment={onRemoveEnvironment}
+                onRecreateEnvironment={onRecreateEnvironment}
+              />
+            )}
+            {setupMode && rfdetrSetup && rfdetrHides && (
+              <RfDetrSetupPanel
+                status={rfdetrSetup.status}
+                routeTitle={route.title}
+                stackKey={rfdetrSetup.stackKey}
+                error={rfdetrSetup.error}
+                showRecovery={rfdetrSetup.showRecovery}
                 onRemoveEnvironment={onRemoveEnvironment}
                 onRecreateEnvironment={onRecreateEnvironment}
               />
@@ -524,7 +614,7 @@ export function ExportModal({
                 title={setupBlocked && setupConflictMessage ? setupConflictMessage : undefined}
                 className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
-                {(ultralyticsSetup?.status === "setting-up" || ultralyticsSetup?.status === "checking") && (
+                {(setupStatusForSpinner === "setting-up" || setupStatusForSpinner === "checking") && (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 )}
                 {setupPrimary.label}

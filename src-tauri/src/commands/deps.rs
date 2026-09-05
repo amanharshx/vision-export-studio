@@ -1125,15 +1125,6 @@ fn check_dependencies_for_runtime(
     Ok(DepCheckResponse { results })
 }
 
-fn stack_paths_from_settings(
-    app_handle: &tauri::AppHandle,
-    route_id: &str,
-) -> Result<Option<(std::path::PathBuf, String)>, String> {
-    let settings = load_settings(app_handle.clone())?;
-    Ok(stack_venv_dir(&settings.runtime_dir, route_id)
-        .zip(stack_python(&settings.runtime_dir, route_id)))
-}
-
 fn missing_stack_results(route_id: &str) -> Option<Vec<DepCheckResult>> {
     match route_id {
         "rfdetr.pth.onnx" => Some(vec![DepCheckResult {
@@ -1383,6 +1374,91 @@ pub async fn ultralytics_setup_readiness(
     })
 }
 
+#[derive(serde::Serialize)]
+pub struct RfDetrSetupReadiness {
+    pub stack_key: String,
+    pub stack_python: String,
+    pub needs_work: bool,
+}
+
+/// Ensure the selected RF-DETR stack environment is usable, creating or
+/// repairing it from the given bootstrap interpreter when it is not.
+///
+/// Only the selected stack is ever touched; other stacks and the
+/// Ultralytics environment remain untouched. The bootstrap interpreter only
+/// runs `python -m venv`; packages are never installed into it. A partially
+/// created stack is preserved on failure so Retry can continue in the same
+/// directory and the UI can label it `Setup incomplete`. Unknown routes
+/// (no known stack mapping) are rejected before any filesystem work.
+fn ensure_rfdetr_stack_environment(
+    bootstrap_python: &str,
+    runtime_root: &str,
+    route_id: &str,
+) -> Result<String, String> {
+    let stack =
+        stack_for_route(route_id).ok_or_else(|| format!("unknown route_id: {}", route_id))?;
+    let stack_python_path =
+        stack_python(runtime_root, route_id).expect("mapped route has Python path");
+    if managed_python_usable(&stack_python_path) {
+        return Ok(stack_python_path);
+    }
+    // Backend safety outside the UI: refuse to run venv creation from a
+    // non-Python or unusable bootstrap instead of spawning it blindly.
+    probe_python_version(bootstrap_python)?;
+    let stack_venv = stack_venv_dir(runtime_root, route_id).expect("mapped route has venv dir");
+    if let Some(parent) = stack_venv.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create runtime dir: {}", e))?;
+    }
+    let status = build_venv_command(bootstrap_python, &stack_venv)
+        .status()
+        .map_err(|e| {
+            format!(
+                "failed to create RF-DETR environment '{}': {}",
+                stack.key, e
+            )
+        })?;
+    if !status.success() {
+        return Err(format!(
+            "failed to create RF-DETR environment '{}': exit code {:?}",
+            stack.key,
+            status.code()
+        ));
+    }
+    if !managed_python_usable(&stack_python_path) {
+        return Err(format!(
+            "failed to create RF-DETR environment '{}': managed interpreter still unusable after creation",
+            stack.key
+        ));
+    }
+    Ok(stack_python_path)
+}
+
+/// Backend-owned RF-DETR readiness for route-owned setup: resolves the
+/// selected route to its existing known stack mapping and reports the same
+/// predicate the install command enforces, so the UI picks the honest
+/// initial phase (creating vs installing) without maintaining a parallel
+/// readiness policy. Unknown routes are rejected; no stack is created here.
+#[tauri::command]
+pub async fn rfdetr_setup_readiness(
+    app_handle: tauri::AppHandle,
+    route_id: String,
+) -> Result<RfDetrSetupReadiness, String> {
+    if route_id.trim().is_empty() {
+        return Err("route_id must not be empty".to_string());
+    }
+    let stack =
+        stack_for_route(&route_id).ok_or_else(|| format!("unknown route_id: {}", route_id))?;
+    let runtime_root = load_settings(app_handle)?.runtime_dir;
+    let stack_python_path =
+        stack_python(&runtime_root, &route_id).expect("mapped route has Python path");
+    Ok(RfDetrSetupReadiness {
+        stack_key: stack.key.to_string(),
+        needs_work: !managed_python_usable(&stack_python_path),
+        stack_python: stack_python_path,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Per-dep check helpers
 // ---------------------------------------------------------------------------
@@ -1588,22 +1664,24 @@ pub async fn install_dependencies(
     let operation_guard = runtime_operations.acquire(RuntimeOperation::Install)?;
 
     let install_python = if let Some(route_id) = route_id.as_deref() {
-        if let Some((stack_venv, stack_python)) = stack_paths_from_settings(&app_handle, route_id)?
-        {
-            if !Path::new(&stack_python).exists() {
-                let status = build_venv_command(&python_path, &stack_venv).status();
-                managed_environments
-                    .invalidate(Path::new(&runtime_root), [invalidation_key.as_str()]);
-                let status =
-                    status.map_err(|e| format!("failed to create RF-DETR environment: {}", e))?;
-                if !status.success() {
-                    return Err(format!(
-                        "failed to create RF-DETR environment: exit code {:?}",
-                        status.code()
-                    ));
-                }
-            }
-            stack_python
+        // Bypassable safety outside the UI: an RF-DETR route without a known
+        // stack mapping is rejected before any environment work, even though
+        // the platform gate above already rejects unknown routes.
+        if route_id.starts_with("rfdetr.") && stack_for_route(route_id).is_none() {
+            return Err(format!("unknown route_id: {}", route_id));
+        }
+        if stack_for_route(route_id).is_some() {
+            // Route-owned RF-DETR setup (ticket 10): create or repair only
+            // the selected stack from the compatible bootstrap interpreter,
+            // then install only the selected route's packages into it. Other
+            // stacks and the Ultralytics environment remain untouched. A
+            // present-but-broken stack is repaired in place so Retry
+            // continues in the same directory and the partial stack stays
+            // visible as `Setup incomplete`.
+            let install_python =
+                ensure_rfdetr_stack_environment(&python_path, &runtime_root, route_id);
+            managed_environments.invalidate(Path::new(&runtime_root), [invalidation_key.as_str()]);
+            install_python?
         } else if is_ultralytics_route(route_id) {
             // Route-scoped Ultralytics setup (ticket 08): the shared
             // environment may not exist yet, so resolve through the same
@@ -3465,5 +3543,228 @@ possible problem with your settings or a recent ultralytics package update.\n8.4
         assert!(code.contains("version(\"rfdetr\")"));
         assert!(!code.contains("import rfdetr"));
         assert!(!code.contains("torch"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Ticket 10: selected RF-DETR stack creation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn rfdetr_stack_mapping_covers_every_known_route() {
+        assert_eq!(
+            stack_for_route("rfdetr.pth.onnx").expect("onnx maps").key,
+            "rfdetr-default"
+        );
+        assert_eq!(
+            stack_for_route("rfdetr.pth.executorch")
+                .expect("executorch maps")
+                .key,
+            "rfdetr-default"
+        );
+        assert_eq!(
+            stack_for_route("rfdetr.pth.engine")
+                .expect("engine maps")
+                .key,
+            "rfdetr-tensorrt"
+        );
+        assert_eq!(
+            stack_for_route("rfdetr.pth.coreml")
+                .expect("coreml maps")
+                .key,
+            "rfdetr-coreml"
+        );
+        assert_eq!(
+            stack_for_route("rfdetr.pth.tflite")
+                .expect("tflite maps")
+                .key,
+            "rfdetr-tflite"
+        );
+        assert!(stack_for_route("rfdetr.pth.unknown").is_none());
+        assert!(stack_for_route("ultralytics.pt.onnx").is_none());
+    }
+
+    #[test]
+    fn rfdetr_shared_stack_reports_independent_route_readiness() {
+        // ONNX and ExecuTorch share `rfdetr-default` yet declare different
+        // install rows: the stack alone never marks a route ready.
+        let onnx = missing_stack_results("rfdetr.pth.onnx").expect("onnx rows");
+        let executorch = missing_stack_results("rfdetr.pth.executorch").expect("executorch rows");
+        assert_eq!(
+            stack_for_route("rfdetr.pth.onnx").expect("onnx stack").key,
+            stack_for_route("rfdetr.pth.executorch")
+                .expect("executorch stack")
+                .key
+        );
+        assert_eq!(onnx.len(), 1);
+        assert_eq!(onnx[0].install_package.as_deref(), Some("rfdetr[onnx]"));
+        assert_eq!(executorch.len(), 3);
+        assert_eq!(
+            executorch[0].install_package.as_deref(),
+            Some("rfdetr[executorch]>=1.9.0")
+        );
+        assert_eq!(
+            executorch[1].install_package.as_deref(),
+            Some("torch>=2.13")
+        );
+        assert_eq!(executorch[2].install_package.as_deref(), Some("flatc"));
+    }
+
+    #[test]
+    fn rfdetr_unknown_route_has_no_stack_mapping() {
+        assert!(stack_for_route("rfdetr.pth.fake").is_none());
+        assert!(crate::commands::stack_environments::stack_venv_dir_for_key(
+            Path::new("/tmp/runtime"),
+            "rfdetr-unknown"
+        )
+        .is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rfdetr_ensure_rejects_unknown_route_before_filesystem_work() {
+        let root = std::env::temp_dir().join(format!("rfdetr-unknown-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let bootstrap = root.join("bootstrap-python");
+        write_python_stub(&bootstrap, true);
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        let error = ensure_rfdetr_stack_environment(
+            bootstrap.to_str().expect("bootstrap path"),
+            &runtime,
+            "rfdetr.pth.fake",
+        )
+        .expect_err("unknown route must be rejected");
+        assert_eq!(error, "unknown route_id: rfdetr.pth.fake");
+        assert!(
+            !Path::new(&runtime).exists(),
+            "no stack directory may be created for an unknown route"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rfdetr_ensure_creates_only_selected_stack_from_bootstrap() {
+        let root = std::env::temp_dir().join(format!("rfdetr-create-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        let bootstrap = root.join("bootstrap-python");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let template = root.join("working-template");
+        write_python_stub(&template, true);
+        write_venv_bootstrap(&bootstrap, Some(&template));
+        let bootstrap_str = bootstrap.to_string_lossy().into_owned();
+        // Sibling state the setup must not touch: another stack and the
+        // shared Ultralytics environment live under the same runtime root.
+        let sibling_python = Path::new(&runtime)
+            .join("envs")
+            .join("rfdetr-tensorrt")
+            .join(".venv")
+            .join("bin")
+            .join("python");
+        std::fs::create_dir_all(sibling_python.parent().unwrap()).expect("create sibling");
+        std::fs::write(&sibling_python, b"sibling").expect("write sibling");
+        let ultralytics_python = Path::new(&runtime).join(".venv").join("bin").join("python");
+        std::fs::create_dir_all(ultralytics_python.parent().unwrap()).expect("create ultra");
+        std::fs::write(&ultralytics_python, b"ultralytics").expect("write ultra");
+
+        let created =
+            ensure_rfdetr_stack_environment(&bootstrap_str, &runtime, "rfdetr.pth.tflite")
+                .expect("creation succeeds");
+        assert_eq!(
+            created,
+            stack_python(&runtime, "rfdetr.pth.tflite").expect("stack python")
+        );
+        assert_ne!(created, bootstrap_str);
+        assert!(Path::new(&created).exists(), "selected stack created");
+        assert_eq!(
+            std::fs::read(&sibling_python).expect("read sibling"),
+            b"sibling",
+            "other stacks untouched"
+        );
+        assert_eq!(
+            std::fs::read(&ultralytics_python).expect("read ultra"),
+            b"ultralytics",
+            "Ultralytics environment untouched"
+        );
+        // Bootstrap itself is untouched: still the fake script.
+        assert!(Path::new(&bootstrap_str).exists());
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rfdetr_ensure_reuses_healthy_stack_without_touching_bootstrap() {
+        let root = std::env::temp_dir().join(format!("rfdetr-reuse-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let stack_python_path = stack_python(&runtime, "rfdetr.pth.onnx").expect("stack python");
+        std::fs::create_dir_all(Path::new(&stack_python_path).parent().unwrap())
+            .expect("create stack");
+        let template = root.join("working-template");
+        write_python_stub(&template, true);
+        std::fs::copy(&template, &stack_python_path).expect("install healthy stack python");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stack_python_path, std::fs::Permissions::from_mode(0o755))
+            .expect("make executable");
+        let missing_bootstrap = root
+            .join("missing-bootstrap")
+            .to_string_lossy()
+            .into_owned();
+
+        let reused =
+            ensure_rfdetr_stack_environment(&missing_bootstrap, &runtime, "rfdetr.pth.onnx")
+                .expect("healthy stack reuses in place");
+        assert_eq!(reused, stack_python_path);
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rfdetr_ensure_repairs_broken_stack_in_place_and_preserves_partial_on_failure() {
+        let root = std::env::temp_dir().join(format!("rfdetr-repair-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        std::fs::create_dir_all(&root).expect("create temp root");
+        // Broken stack: interpreter exists but pip fails.
+        let stack_python_path = stack_python(&runtime, "rfdetr.pth.onnx").expect("stack python");
+        std::fs::create_dir_all(Path::new(&stack_python_path).parent().unwrap())
+            .expect("create stack");
+        let broken = root.join("broken-template");
+        write_python_stub(&broken, false);
+        std::fs::copy(&broken, &stack_python_path).expect("install broken python");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stack_python_path, std::fs::Permissions::from_mode(0o755))
+            .expect("make executable");
+        // Repair bootstrap installs a working interpreter in place.
+        let working = root.join("working-template");
+        write_python_stub(&working, true);
+        let bootstrap = root.join("bootstrap-python");
+        write_venv_bootstrap(&bootstrap, Some(&working));
+        let repaired = ensure_rfdetr_stack_environment(
+            bootstrap.to_str().expect("bootstrap path"),
+            &runtime,
+            "rfdetr.pth.onnx",
+        )
+        .expect("repair succeeds");
+        assert_eq!(repaired, stack_python_path);
+        assert!(
+            managed_python_usable(&repaired),
+            "repaired stack must be usable"
+        );
+
+        // Failing bootstrap preserves the partial directory for Retry.
+        let failing_bootstrap = root.join("failing-bootstrap");
+        write_venv_bootstrap(&failing_bootstrap, None);
+        let runtime2 = root.join("runtime2").to_string_lossy().into_owned();
+        let error = ensure_rfdetr_stack_environment(
+            failing_bootstrap.to_str().expect("failing path"),
+            &runtime2,
+            "rfdetr.pth.coreml",
+        )
+        .expect_err("failing venv must error");
+        assert!(error.contains("rfdetr-coreml"));
+        assert!(
+            Path::new(&runtime2).join("envs").exists(),
+            "partial stack directory preserved for Retry"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
     }
 }
