@@ -229,7 +229,7 @@ where
         Err(error) => {
             return Some(invalid_override(
                 trimmed,
-                format!("provided Python failed validation: {}", error),
+                format!("provided Python is not usable: {}", error),
                 None,
                 requirement,
             ));
@@ -416,6 +416,30 @@ where
     }
 }
 
+/// Shared bootstrap wiring: real discovery plus the real venv probe.
+/// Both the `resolve_bootstrap_python` command and environment-setup paths
+/// resolve through here so the candidate sources cannot drift apart.
+pub(crate) fn resolve_bootstrap_for_runtime(
+    route_id: &str,
+    explicit_override: Option<&str>,
+    runtime_dir: &Path,
+) -> BootstrapPythonResult {
+    resolve_bootstrap_python_with(
+        route_id,
+        explicit_override,
+        runtime_dir,
+        &run,
+        &ensure_venv_capability,
+        &|| {
+            collect_managed_runtime_candidates_with(
+                cfg!(windows),
+                managed_runtime_windows_location_candidates(),
+                &run,
+            )
+        },
+    )
+}
+
 #[tauri::command]
 pub async fn resolve_bootstrap_python(
     app_handle: tauri::AppHandle,
@@ -434,20 +458,7 @@ pub async fn resolve_bootstrap_python(
         .unwrap_or_default();
     let override_opt =
         (!effective_override.trim().is_empty()).then_some(effective_override.as_str());
-    resolve_bootstrap_python_with(
-        &route_id,
-        override_opt,
-        &runtime_dir,
-        &run,
-        &ensure_venv_capability,
-        &|| {
-            collect_managed_runtime_candidates_with(
-                cfg!(windows),
-                managed_runtime_windows_location_candidates(),
-                &run,
-            )
-        },
-    )
+    resolve_bootstrap_for_runtime(&route_id, override_opt, &runtime_dir)
 }
 
 #[cfg(test)]

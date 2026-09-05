@@ -1,6 +1,7 @@
+use crate::commands::bootstrap_python::{resolve_bootstrap_for_runtime, BootstrapPythonResult};
 use crate::commands::environment::{
-    discover_managed_runtime_python, discover_managed_runtime_python_candidate,
-    resolve_managed_runtime_base, resolve_python,
+    discover_managed_runtime_python_candidate, resolve_managed_runtime_base, resolve_python_with,
+    run,
 };
 use crate::commands::managed_environments::{ManagedEnvironments, ULTRALYTICS_MANAGED_KEY};
 use crate::commands::providers::rfdetr::RFDETR_STAGING_PARENT;
@@ -733,6 +734,11 @@ pub fn get_managed_runtime_rebuild_eligibility(
     })
 }
 
+/// Default route for global managed-runtime setup. Its requirement is the
+/// managed range (Python 3.10 through 3.13), so it matches the discovery
+/// policy without adding route-specific creation in this ticket.
+pub(crate) const DEFAULT_SETUP_ROUTE_ID: &str = "ultralytics.pt.onnx";
+
 #[tauri::command]
 pub async fn create_runtime_venv(
     app_handle: tauri::AppHandle,
@@ -742,6 +748,27 @@ pub async fn create_runtime_venv(
     runtime_dir: String,
 ) -> Result<String, String> {
     let managed_runtime_dir = ensure_managed_runtime_dir(&app_handle, &runtime_dir)?;
+    let runtime_path = PathBuf::from(&managed_runtime_dir);
+    let override_opt = load_settings(app_handle.clone())?
+        .python_path_override
+        .filter(|path| !path.trim().is_empty());
+
+    // Resolve before creating anything: an invalid override or a missing
+    // interpreter must not create an environment or change package state.
+    let python = match resolve_bootstrap_for_runtime(
+        DEFAULT_SETUP_ROUTE_ID,
+        override_opt.as_deref(),
+        &runtime_path,
+    ) {
+        BootstrapPythonResult::Available { python_path, .. } => python_path,
+        BootstrapPythonResult::Missing {
+            requirement,
+            reason,
+            ..
+        } => return Err(format!("Python required ({}): {}", requirement, reason)),
+        BootstrapPythonResult::InvalidOverride { reason, .. } => return Err(reason),
+        BootstrapPythonResult::Error { reason } => return Err(reason),
+    };
 
     // Create the runtime_dir if it does not exist.
     std::fs::create_dir_all(&managed_runtime_dir)
@@ -750,10 +777,6 @@ pub async fn create_runtime_venv(
     let venv_path = Path::new(&managed_runtime_dir).join(".venv");
 
     // Build argv: {python} -m venv {runtime_dir}/.venv
-    let python = match discover_managed_runtime_python() {
-        Some(python) => python,
-        None => resolve_python(None)?,
-    };
     let cmd = build_venv_command(&python, &venv_path);
 
     let sessions = Arc::clone(&state.sessions);
@@ -820,6 +843,12 @@ pub fn save_python_override(
     python_path_override: Option<String>,
 ) -> Result<(), String> {
     let normalized_override = normalize_python_override(python_path_override);
+    // Validate before saving so a direct invoke cannot persist an invalid
+    // executable. Reuses the shared explicit-path probe; route-specific
+    // compatibility stays with the bootstrap resolver at setup time.
+    if let Some(path) = normalized_override.as_deref() {
+        resolve_python_with(Some(path), cfg!(windows), run).map(|_| ())?;
+    }
     update_settings(&app_handle, &state, |settings| {
         settings.python_path_override = normalized_override;
         if settings.python_path_override.is_some() {

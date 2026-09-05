@@ -48,7 +48,7 @@ pub(crate) fn run(argv: &[&str]) -> Result<(String, String, bool), String> {
 
 const PYTHON_PROBE_MARKER: &str = "__VES_PYTHON__=";
 const PYTHON_VERSION_PROBE_MARKER: &str = "__VES_PYTHON_VERSION__=";
-const PYTHON_PROBE_SCRIPT: &str = "import os, sys; print('__VES_PYTHON__=' + os.path.abspath(sys.executable)); print('__VES_PYTHON_VERSION__={}.{}.{}'.format(*sys.version_info[:3])); raise SystemExit(0 if sys.version_info[0] == 3 else 1)";
+const PYTHON_PROBE_SCRIPT: &str = "import os, sys; print('__VES_PYTHON__=' + os.path.abspath(sys.executable)); print('__VES_PYTHON_VERSION__={}.{}.{}'.format(*sys.version_info[:3])); sys.stderr.write('found Python %s.%s.%s, but Python 3 is required\\n' % sys.version_info[:3]) if sys.version_info[0] != 3 else None; raise SystemExit(0 if sys.version_info[0] == 3 else 1)";
 
 const WINDOWS_PYTHON_CANDIDATES: &[&[&str]] = &[&["python"], &["py", "-3"], &["python3"]];
 const UNIX_PYTHON_CANDIDATES: &[&[&str]] = &[&["python3"], &["python"]];
@@ -359,7 +359,7 @@ pub(crate) fn managed_runtime_windows_location_candidates() -> Vec<PathBuf> {
 pub(crate) fn resolve_managed_runtime_base(python_path: Option<&str>) -> Result<String, String> {
     if let Some(path) = python_path {
         let candidate = probe_python_candidate(&[path], &run)
-            .map_err(|error| format!("provided Python failed validation: {}", error))?;
+            .map_err(|error| format!("provided Python is not usable: {}", error))?;
         return select_managed_runtime_python(vec![candidate])
             .map(|candidate| candidate.executable)
             .ok_or_else(|| {
@@ -373,7 +373,7 @@ pub(crate) fn resolve_managed_runtime_base(python_path: Option<&str>) -> Result<
     })
 }
 
-fn resolve_python_with<F>(
+pub(crate) fn resolve_python_with<F>(
     python_path: Option<&str>,
     is_windows: bool,
     runner: F,
@@ -387,7 +387,7 @@ where
         }
 
         return probe_python(&[path], &runner)
-            .map_err(|error| format!("provided Python failed validation: {}", error));
+            .map_err(|error| format!("provided Python is not usable: {}", error));
     }
 
     let candidates = python_candidates(is_windows);
@@ -871,7 +871,7 @@ mod tests {
         })
         .unwrap_err();
 
-        assert!(error.contains("provided Python failed validation"));
+        assert!(error.contains("provided Python is not usable"));
         assert!(error.contains("interpreter failed"));
     }
 

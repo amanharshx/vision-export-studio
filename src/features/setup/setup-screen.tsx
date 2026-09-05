@@ -16,6 +16,16 @@ import {
   createRuntimeVenv,
   markSetupComplete,
 } from "@/lib/tauri/setup";
+import {
+  isPythonRequiredResult,
+  resolveBootstrapPython,
+} from "@/lib/tauri/bootstrap-python";
+import { openPythonExecutablePicker } from "@/lib/tauri/dialog";
+import { defaultRouteForProvider } from "@/lib/providers";
+import { PythonRequiredDialog } from "./python-required-dialog";
+import { useSetupTask } from "./setup-task-context";
+
+const SETUP_ROUTE_ID = defaultRouteForProvider("ultralytics").id;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -69,6 +79,16 @@ export function SetupScreen({
   const [countdown, setCountdown] = useState<number | null>(null);
   const mountedRef = useRef(true);
   const startedRef = useRef(false);
+  const runSetupRef = useRef<() => Promise<void>>(async () => {});
+
+  const {
+    pythonGate: pythonRequiredState,
+    requirePythonForSetup: requirePython,
+    cancelPythonGate: cancelPythonRequired,
+    choosePythonForSetup: choosePythonRequired,
+    checkAgainPythonGate: checkAgainPythonRequired,
+    clearPythonGateOverride: clearPythonOverrideRequired,
+  } = useSetupTask();
 
   useEffect(() => {
     mountedRef.current = true;
@@ -96,6 +116,42 @@ export function SetupScreen({
     });
     setErrorMessage(null);
     setPhase("venv");
+
+    // Python preflight: open the Python-required dialog instead of creating
+    // anything when no compatible bootstrap interpreter exists. The dialog
+    // retries this same setup exactly once after a valid choice or redetection.
+    // Never shown on launch alone — only after this explicit setup attempt.
+    let bootstrap;
+    try {
+      bootstrap = await resolveBootstrapPython(SETUP_ROUTE_ID);
+    } catch (e: unknown) {
+      if (!mountedRef.current) return;
+      captureSetupFailed("venv", "bootstrap_check_failed");
+      setPhase("error");
+      setErrorMessage(String(e));
+      return;
+    }
+    if (isPythonRequiredResult(bootstrap)) {
+      requirePython(
+        SETUP_ROUTE_ID,
+        bootstrap,
+        () => runSetupRef.current(),
+      );
+      if (!mountedRef.current) return;
+      captureSetupFailed("venv", "python_required");
+      setPhase("error");
+      setErrorMessage(
+        "Python required to set up the managed runtime. Choose a compatible Python to continue.",
+      );
+      return;
+    }
+    if (bootstrap.status === "error") {
+      if (!mountedRef.current) return;
+      captureSetupFailed("venv", "bootstrap_check_failed");
+      setPhase("error");
+      setErrorMessage(bootstrap.reason);
+      return;
+    }
 
     // ------------------------------------------------------------------
     // Step 1: create venv
@@ -195,6 +251,7 @@ export function SetupScreen({
     setPhase("done");
     setCountdown(3);
   }
+  runSetupRef.current = runSetup;
 
   useEffect(() => {
     if (startedRef.current) return;
@@ -302,6 +359,32 @@ export function SetupScreen({
           </p>
         )}
       </div>
+      {pythonRequiredState.result && (
+        <PythonRequiredDialog
+          open={pythonRequiredState.dialogOpen}
+          onOpenChange={(open) => {
+            if (!open) cancelPythonRequired();
+          }}
+          routeId={
+            pythonRequiredState.pending?.routeId ?? SETUP_ROUTE_ID
+          }
+          result={pythonRequiredState.result}
+          choiceError={pythonRequiredState.choiceError}
+          busy={pythonRequiredState.busy}
+          showClearOverride={pythonRequiredState.result.status === "invalid_override"}
+          onCancel={() => cancelPythonRequired()}
+          onChoosePython={async () => {
+            // Capture the choosing pending before the native picker opens:
+            // it resolves outside the race-safe boundary, so a replacement
+            // that lands while it is open must not receive this choice.
+            const expected = pythonRequiredState.pending;
+            const picked = await openPythonExecutablePicker();
+            if (picked) await choosePythonRequired(picked, expected);
+          }}
+          onCheckAgain={() => void checkAgainPythonRequired()}
+          onClearOverride={() => void clearPythonOverrideRequired()}
+        />
+      )}
     </div>
   );
 }
