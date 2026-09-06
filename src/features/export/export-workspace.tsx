@@ -3007,6 +3007,22 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     handleRedetect();
   }, [cleanupBusy, handleRedetect]);
 
+  // Re-read the saved override after a setup-dialog action (choose, check
+  // again, clear) saves through the setup-task owner. The workspace no longer
+  // remounts afterward, so without this the displayed and applied override
+  // stay stale until restart. Detection refresh stays with the retried setup
+  // terminal effects; this only syncs the saved value.
+  const refreshPythonOverrideFromSettings = useCallback(async () => {
+    try {
+      const settings = await loadSettings();
+      const override = settings.python_path_override || "";
+      setPythonOverride(override);
+      setAppliedPythonOverride(override);
+    } catch {
+      // Keep the current text when settings cannot reload.
+    }
+  }, []);
+
   const prepareCleanup = useCallback(async (providerId: ProviderId, singleKey?: ManagedEnvironmentKey) => {
     if (blockOnSetupConflict(setEnvironmentPanelError)) return;
     if (cleanupActionsDisabled) return;
@@ -3670,10 +3686,13 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           onChoosePython={async () => {
             const expected = pythonRequiredState.pending;
             const picked = await openPythonExecutablePicker();
-            if (picked) await choosePythonRequired(picked, expected);
+            if (picked) {
+              await choosePythonRequired(picked, expected);
+              await refreshPythonOverrideFromSettings();
+            }
           }}
-          onCheckAgain={() => void checkAgainPythonRequired()}
-          onClearOverride={() => void clearPythonOverrideRequired()}
+          onCheckAgain={() => void checkAgainPythonRequired().then(() => refreshPythonOverrideFromSettings())}
+          onClearOverride={() => void clearPythonOverrideRequired().then(() => refreshPythonOverrideFromSettings())}
         />
       )}
     </div>
