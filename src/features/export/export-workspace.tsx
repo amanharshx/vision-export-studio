@@ -1432,13 +1432,18 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       error: selectedCheck.error,
     };
   // The stack key for the selected RF-DETR route comes from the live stack
-  // inventory when present, otherwise from the setup task running for it.
-  // Null means the backend-owned mapping has not resolved yet: the modal
-  // copy falls back to naming the route's environment, and Remove/Recreate
-  // stay guarded until a real stack key exists (a route id is never a key).
+  // inventory when present, otherwise from the setup task running for it —
+  // but only when that task belongs to the selected route. A task for
+  // another route must never name this route's environment (a route id is
+  // never a key). Null means the backend-owned mapping has not resolved
+  // yet: the modal copy falls back to naming the route's environment, and
+  // Remove/Recreate stay guarded until a real stack key exists.
   const rfdetrSelectedStackKey = stackEnvironments.find((stack) =>
     stack.route_ids.includes(selectedRouteId),
   )?.key ?? null;
+  const rfdetrTaskStackKey = rfdetrTaskAppliesToSelectedRoute
+    ? rfdetrSetupTask?.environmentKey ?? null
+    : null;
   const rfdetrSetupModalState: RfDetrSetupModalState | null = rfdetrRouteSetupStatus == null
     ? null
     : {
@@ -1448,7 +1453,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       canSetup: !cleanupBusy && !setupConflictMessage,
       showRecovery: rfdetrRouteSetupStatus === "setup-incomplete",
       error: selectedCheck.error,
-      stackKey: rfdetrSetupTask?.environmentKey ?? rfdetrSelectedStackKey,
+      stackKey: rfdetrSelectedStackKey ?? rfdetrTaskStackKey,
     };
   // Export chrome (runtime-upgrade nudge, artifact banners, export errors,
   // and — inside the modal — options, preview, and Start export) stays
@@ -1554,7 +1559,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       if (depRefreshRequestRef.current !== requestId) {
         return;
       }
-      setRouteDepCheck({ results: null, routeId, error: String(error), pythonPath });
+      // Genuine check failure: keep the "could not check" context here so
+      // setup-stamped errors shown in the same slot are never mislabeled.
+      setRouteDepCheck({ results: null, routeId, error: `Could not check dependencies: ${String(error)}`, pythonPath });
       throw error;
     } finally {
       if (depRefreshRequestRef.current === requestId) {
@@ -3145,6 +3152,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         {setupConflictMessage && (
           <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">{setupConflictMessage}</p>
         )}
+        {environmentPanelError && (
+          <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{environmentPanelError}</p>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={() => setCleanupConfirmation(null)} disabled={cleanupBusy}>Cancel</Button>
           <Button
@@ -3321,6 +3331,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           else void handleRouteSetup(selectedRoute.id);
         }}
         onRemoveEnvironment={() => {
+          // A blocked Remove must say so in the open modal: the panel error
+          // below stays hidden behind it, so silence looks like a dead button.
+          if (setupConflictMessage) {
+            setRouteDepCheckError(selectedRoute.id, setupConflictMessage);
+            return;
+          }
           if (selectedProviderId === "rfdetr") {
             const stackKey = rfdetrSetupModalState?.stackKey ?? null;
             if (!stackKey) return;
