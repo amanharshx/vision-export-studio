@@ -1,6 +1,9 @@
 // @ts-expect-error Bun provides this module at test runtime.
 import { describe, expect, test } from "bun:test";
-import { resolveRoutePython } from "@/features/export/export-workspace";
+import {
+  resolveRoutePython,
+  resolveUltralyticsRoutePython,
+} from "@/features/export/export-workspace";
 
 // Ticket 12: Open the workspace without a global runtime.
 // Check and export calls share one argument rule: Ultralytics passes its
@@ -46,5 +49,27 @@ describe("rfdetr independence without global runtime (ticket 12)", () => {
     expect(resolveRoutePython("ultralytics", MANAGED_PYTHON, "ultralytics.pt.onnx")).toBe(
       MANAGED_PYTHON,
     );
+  });
+});
+
+describe("ultralytics managed-only readiness (ticket 12)", () => {
+  const MANAGED = "/tmp/runtime/.venv/bin/python";
+  const SYSTEM = "/usr/bin/python3";
+
+  test("a missing managed environment is never ready through system python", () => {
+    // Pre-fix behavior granted readiness whenever auto-discovered system
+    // python happened to contain the packages, bypassing route setup.
+    expect(resolveUltralyticsRoutePython(SYSTEM, "", MANAGED, "linux")).toBeNull();
+    expect(resolveUltralyticsRoutePython(SYSTEM, "", null, "linux")).toBeNull();
+    expect(resolveUltralyticsRoutePython(null, "", MANAGED, "linux")).toBeNull();
+  });
+
+  test("the managed interpreter is ready without an override", () => {
+    expect(resolveUltralyticsRoutePython(MANAGED, "", MANAGED, "linux")).toBe(MANAGED);
+  });
+
+  test("an explicit override keeps current behavior until ticket 14", () => {
+    expect(resolveUltralyticsRoutePython(SYSTEM, "/custom/python", MANAGED, "linux")).toBe(SYSTEM);
+    expect(resolveUltralyticsRoutePython(MANAGED, "/custom/python", MANAGED, "linux")).toBe(MANAGED);
   });
 });

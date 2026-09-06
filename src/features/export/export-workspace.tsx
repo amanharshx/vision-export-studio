@@ -108,7 +108,7 @@ import { rfdetrSetupReadiness, type RfDetrSetupReadiness } from "@/lib/tauri/rfd
 import { getEffectiveHostSupportResult, getHostSupportResult } from "./host-support";
 import { normalizeOptionsForRoute } from "./options/normalize";
 import { validateRfDetrImgsz } from "./rfdetr-image-size";
-import { getManagedPythonPath } from "@/features/setup/managed-runtime";
+import { getManagedPythonPath, isManagedPythonEnvironment } from "@/features/setup/managed-runtime";
 import { PythonRequiredDialog } from "@/features/setup/python-required-dialog";
 import {
   isPythonRequiredResult,
@@ -403,6 +403,28 @@ export function resolveRoutePython(
 ): string | null {
   if (providerId === "rfdetr") return routeId;
   return envPython;
+}
+
+/**
+ * Ultralytics interpreter eligible for checks and exports: the managed
+ * environment, or the detected environment when the user explicitly chose it
+ * via a saved Python override (override semantics belong to ticket 14).
+ * Automatically discovered system Python never qualifies: it would mark
+ * routes Ready and export through it with no route setup and no app-owned
+ * environment, bypassing provider inventory.
+ */
+export function resolveUltralyticsRoutePython(
+  envPython: string | null,
+  appliedOverride: string,
+  managedPython: string | null,
+  os?: AppOS,
+): string | null {
+  if (!envPython) return null;
+  if (appliedOverride.trim()) return envPython;
+  if (managedPython && isManagedPythonEnvironment(envPython, managedPython, os ?? getOS())) {
+    return envPython;
+  }
+  return null;
 }
 
 /**
@@ -1173,6 +1195,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   const [envInfo, setEnvInfo] = useState<EnvironmentInfo | null>(null);
   const [envError, setEnvError] = useState<string | null>(null);
   const [pythonOverride, setPythonOverride] = useState("");
+  // Saved (applied) override and managed interpreter backing Ultralytics
+  // readiness: automatic system-Python discovery never qualifies (ticket 12).
+  const [appliedPythonOverride, setAppliedPythonOverride] = useState("");
+  const [managedPythonPath, setManagedPythonPath] = useState<string | null>(null);
   const [redetecting, setRedetecting] = useState(false);
   const [stackEnvironments, setStackEnvironments] = useState<StackEnvironment[]>([]);
   const refreshStackEnvironmentCards = useCallback(
@@ -1649,6 +1675,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       .then((settings) => {
         const override = settings.python_path_override || "";
         if (override) setPythonOverride(override);
+        setAppliedPythonOverride(override);
+        setManagedPythonPath(getManagedPythonPath(settings.runtime_dir));
         const outOverride = settings.output_dir_override || "";
         if (outOverride) {
           setOutputDirOverride(outOverride);
@@ -1720,12 +1748,16 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Check dependencies whenever the selected route or resolved environment changes.
   // Observes the environment object (not just its python path) so a fresh
   // object published by setup completion refreshes whichever route is current.
-  // RF-DETR checks resolve inside the backend to the selected stack, so a
-  // missing Ultralytics environment never blocks them (ticket 12).
+  // Ultralytics usability comes from its managed environment (or an explicit
+  // override) — never automatic system-Python discovery. RF-DETR checks
+  // resolve inside the backend to the selected stack (ticket 12).
+  const providerEnvPython = selectedProviderId === "ultralytics"
+    ? resolveUltralyticsRoutePython(envInfo?.python_path ?? null, appliedPythonOverride, managedPythonPath)
+    : envInfo?.python_path ?? null;
   useEffect(() => {
     const pythonPath = resolveRoutePython(
       selectedProviderId,
-      envInfo?.python_path ?? null,
+      providerEnvPython,
       selectedRouteId,
     );
     if (!pythonPath || !selectedRouteId) {
@@ -1736,7 +1768,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     void refreshRouteDependencies(selectedRouteId, pythonPath).catch(() => {
       // State handled in helper; avoid unhandled promise noise.
     });
-  }, [selectedRouteId, selectedProviderId, envInfo, refreshRouteDependencies]);
+  }, [selectedRouteId, selectedProviderId, providerEnvPython, refreshRouteDependencies]);
 
   // On setup terminal, publish the managed environment and let the dependency
   // effect above refresh the currently selected route. The provider-wide
@@ -2380,11 +2412,16 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Core export invocation — call only when deps are satisfied
   const doStartExport = async (missingDepCount: number, envOverride?: EnvironmentInfo) => {
     const activeEnv = envOverride ?? envInfo;
-    // Ticket 12: RF-DETR exports resolve to the selected stack inside the
-    // backend, so they must not require the Ultralytics managed environment.
+    // Ticket 12: Ultralytics exports run only from its managed environment
+    // (or an explicit override) — never from automatic system-Python
+    // discovery, which would bypass route setup. RF-DETR exports resolve to
+    // the selected stack inside the backend.
+    const activeEnvPython = selectedProviderId === "ultralytics"
+      ? resolveUltralyticsRoutePython(activeEnv?.python_path ?? null, appliedPythonOverride, managedPythonPath)
+      : activeEnv?.python_path ?? null;
     const exportPython = resolveRoutePython(
       selectedProviderId,
-      activeEnv?.python_path ?? null,
+      activeEnvPython,
       selectedRoute.id,
     );
     if (!sourcePath || !exportPython) return;
@@ -2507,7 +2544,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     if (blockOnSetupConflict(setInvokeError)) return;
     const exportPython = resolveRoutePython(
       selectedProviderId,
-      envInfo?.python_path ?? null,
+      providerEnvPython,
       selectedRoute.id,
     );
     if (cleanupBusy || !sourcePath || !exportPython || exportStatus === "running" || exportStatus === "starting") return;
@@ -2613,7 +2650,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       return;
     }
 
-    const pythonPath = envInfo?.python_path;
+    const pythonPath = providerEnvPython;
     if (!pythonPath) return;
     setInstallPhase("installing");
     setLogLines([]);
@@ -2951,6 +2988,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       setEnvironmentPanelError(String(error));
       return;
     }
+    setAppliedPythonOverride(val);
     handleRedetect(val);
   }, [cleanupBusy, pythonOverride, handleRedetect]);
 
@@ -2964,6 +3002,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   const handleClearOverride = useCallback(async () => {
     if (cleanupBusy) return;
     setPythonOverride("");
+    setAppliedPythonOverride("");
     await savePythonOverride(null);
     handleRedetect();
   }, [cleanupBusy, handleRedetect]);
