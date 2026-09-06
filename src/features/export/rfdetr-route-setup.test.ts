@@ -19,7 +19,6 @@ import {
   getRfDetrInspectionFollowUpPhase,
   getRfDetrInspectionFollowUpCopy,
   getRfDetrInspectionFailureActions,
-  getRfDetrFallbackPreset,
   canUseRfDetrVariantFallback,
   formatRfDetrInspectionSummary,
 } from "./rfdetr-route-setup";
@@ -729,12 +728,6 @@ describe("inspection failure actions (ticket 11)", () => {
 });
 
 describe("preset fallback and variant gating (ticket 11)", () => {
-  test("finds a clearly labelled standard preset for known multiples", () => {
-    expect(getRfDetrFallbackPreset(32)).toBe(384);
-    expect(getRfDetrFallbackPreset(56)).toBe(560);
-    expect(getRfDetrFallbackPreset(null)).toBeNull();
-  });
-
   test("requires a known or explicitly selected variant before variant fallback", () => {
     expect(
       canUseRfDetrVariantFallback({ result: inspectSuccess(), variantMode: "auto", manualClassSymbol: "" }),

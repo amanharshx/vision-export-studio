@@ -113,25 +113,6 @@ export interface RfDetrInspectionModalState {
 
 type FooterAction = "cancel" | "export" | "export_again" | "show_folder" | "starting" | "stop";
 
-export type ExportModalFooterMode = "setup" | "inspection" | "export";
-
-/**
- * Footer ownership for the export modal. Setup owns the footer while its
- * own incomplete state hides export controls; otherwise the inspection
- * follow-up/failure owns it while it hides export; otherwise export owns
- * it. Setup never shadows the inspection footer: a Ready environment with
- * pending or failed inspection reaches the inspection branch.
- */
-export function getExportModalFooterMode(input: {
-  setupMode: boolean;
-  hasSetupAction: boolean;
-  inspectionHidesExport: boolean;
-}): ExportModalFooterMode {
-  if (input.setupMode && input.hasSetupAction) return "setup";
-  if (input.inspectionHidesExport) return "inspection";
-  return "export";
-}
-
 export function getExportFooterActions({
   exportStatus,
   hasCompletedOutputDir,
@@ -533,11 +514,6 @@ export function ExportModal({
     && activeSetup.canSetup
     && !activeSetup.busy;
   const setupStatusForSpinner = activeSetup?.status ?? null;
-  const footerMode = getExportModalFooterMode({
-    setupMode,
-    hasSetupAction: setupPrimary != null,
-    inspectionHidesExport,
-  });
   const rfdetrImgszError =
     provider.id === "rfdetr" && rfdetrSummary
       ? validateRfDetrImgsz(options.imgsz, rfdetrSummary.requiredMultiple ?? null)
@@ -790,7 +766,7 @@ export function ExportModal({
 
         {/* Footer */}
         <div className="flex justify-end gap-2 border-t px-6 py-4">
-          {footerMode === "setup" && setupPrimary ? (
+          {setupMode && setupPrimary ? (
             <>
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
@@ -807,7 +783,7 @@ export function ExportModal({
                 {setupPrimary.label}
               </Button>
             </>
-          ) : footerMode === "inspection" ? (
+          ) : inspectionHidesExport ? (
             <>
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel

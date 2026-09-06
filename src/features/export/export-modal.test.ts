@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { getExportModalFooterMode, HostSupportBadge, HostSupportReason, PendingInstallConsent, PrimaryExportActionLabel, RfDetrInspectionFailurePanel, RfDetrInspectionFollowUpPanel, RfDetrSetupPanel, UltralyticsSetupPanel } from "./export-modal";
+import { HostSupportBadge, HostSupportReason, PendingInstallConsent, PrimaryExportActionLabel, RfDetrInspectionFailurePanel, RfDetrInspectionFollowUpPanel, RfDetrSetupPanel, UltralyticsSetupPanel } from "./export-modal";
 import type { DepCheckResult } from "@/lib/types";
 
 const outdatedUltralytics: DepCheckResult = {
@@ -241,29 +241,6 @@ describe("RfDetrSetupPanel", () => {
 
     expect(html).toContain("Unavailable");
     expect(html).toContain("TensorRT");
-  });
-});
-
-describe("getExportModalFooterMode (ticket 11)", () => {
-  test("setup owns the footer while setup is incomplete", () => {
-    expect(
-      getExportModalFooterMode({ setupMode: true, hasSetupAction: true, inspectionHidesExport: true }),
-    ).toBe("setup");
-    expect(
-      getExportModalFooterMode({ setupMode: true, hasSetupAction: true, inspectionHidesExport: false }),
-    ).toBe("setup");
-  });
-
-  test("inspection owns the footer when setup is ready but inspection hides export", () => {
-    expect(
-      getExportModalFooterMode({ setupMode: false, hasSetupAction: false, inspectionHidesExport: true }),
-    ).toBe("inspection");
-  });
-
-  test("export owns the footer only when neither setup nor inspection hides it", () => {
-    expect(
-      getExportModalFooterMode({ setupMode: false, hasSetupAction: false, inspectionHidesExport: false }),
-    ).toBe("export");
   });
 });
 

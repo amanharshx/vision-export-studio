@@ -306,18 +306,6 @@ export function getRfDetrInspectionFailureActions(input: {
   return { canRetry: true, showManualVariant: true, showFileAction: true };
 }
 
-/** Standard presets offered as an explicit fallback when native size is unknown. */
-const RFDETR_FALLBACK_PRESETS = [384, 512, 560, 576, 640, 704, 768];
-
-/**
- * First standard preset divisible by the known model block size, or null when
- * constraints are unknown. Labelled as a fallback by callers, never as native.
- */
-export function getRfDetrFallbackPreset(requiredMultiple: number | null): number | null {
-  if (requiredMultiple == null || requiredMultiple <= 0) return null;
-  return RFDETR_FALLBACK_PRESETS.find((preset) => preset % requiredMultiple === 0) ?? null;
-}
-
 /**
  * Variant-level fallback is allowed only with a known or explicitly selected
  * variant: a detected class in auto mode, or a non-empty manual selection.

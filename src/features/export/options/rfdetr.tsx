@@ -5,7 +5,9 @@ import {
   RFDETR_IMGSZ_MIN,
   validateRfDetrImgsz,
 } from "../rfdetr-image-size";
-import { getRfDetrFallbackPreset } from "../rfdetr-route-setup";
+
+/** Standard presets offered as an explicit fallback when native size is unknown. */
+const FALLBACK_PRESETS = [384, 512, 560, 576, 640, 704, 768];
 
 export function RfDetrOptions({ route, options, onOptionsChange, recommendedImgsz, requiredMultiple }: OptionsPanelProps) {
   const multiple = requiredMultiple ?? null;
@@ -13,7 +15,7 @@ export function RfDetrOptions({ route, options, onOptionsChange, recommendedImgs
   const isOverride = recommendedImgsz != null && options.imgsz !== recommendedImgsz;
   const fallback =
     recommendedImgsz == null && multiple != null
-      ? getRfDetrFallbackPreset(multiple)
+      ? (FALLBACK_PRESETS.find((preset) => preset % multiple === 0) ?? null)
       : null;
   // Align the native step base with the multiple so the browser's own
   // step validation agrees with the inline check (e.g. min 112 for 56).
