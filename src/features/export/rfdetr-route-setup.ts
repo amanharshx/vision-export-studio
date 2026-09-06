@@ -18,6 +18,9 @@ import type {
   DepCheckResult,
   InstallableDependency,
   ProviderId,
+  RfDetrInspectResult,
+  RfDetrInspectStatus,
+  RfDetrVariantMode,
   RouteSpec,
 } from "@/lib/types";
 import type { HostSupportResult } from "@/lib/tauri/app";
@@ -27,6 +30,7 @@ import {
   type UltralyticsRouteSetupStatus,
 } from "./ultralytics-route-setup";
 import { getInstallableMissingPackages } from "./install-packages";
+import { getRfDetrPlusBlockReason, type RfDetrTrustedCheckpoint } from "./rfdetr-trust";
 
 export type RfDetrRouteSetupStatus = UltralyticsRouteSetupStatus;
 
@@ -177,4 +181,102 @@ export function getRfDetrSetupVerifyError(results: DepCheckResult[] | null): str
   const unmet = getInstallableMissingPackages(results);
   if (unmet.length === 0) return null;
   return `RF-DETR dependencies still missing after install: ${unmet.map((pkg) => pkg.package).join(", ")}. Review requirements before export.`;
+}
+
+// ---------------------------------------------------------------------------
+// Ticket 11: resume RF-DETR inspection after the selected stack becomes ready.
+// ---------------------------------------------------------------------------
+
+export interface RfDetrInspectionResumeInput {
+  setupSucceeded: boolean;
+  /** Route the finished setup task ran for; null when unknown (never resumes). */
+  setupRouteId: string | null;
+  /** Currently selected route; must match the setup route. */
+  selectedRouteId: string;
+  sourcePath: string;
+  trust: RfDetrTrustedCheckpoint | null;
+  inspectStatus: RfDetrInspectStatus;
+  /** Terminal setup session being handled; null never resumes. */
+  terminalSessionId: string | null;
+  /** Session already consumed by a previous resume attempt. */
+  consumedSessionId: string | null;
+}
+
+/**
+ * Resume eligibility after successful route setup. True only when the setup
+ * that just finished ran for the still-selected route, the same trusted
+ * checkpoint remains selected, its inspection previously failed (typically
+ * for want of a healthy stack), and this terminal session has not already
+ * been consumed. A changed or cleared model, an unknown setup route, a
+ * route mismatch, or a repeat visit of the same session suppresses the
+ * resume so an old checkpoint is never inspected, another route's state is
+ * never touched, and one completed setup never retries inspection by
+ * itself.
+ */
+export function shouldResumeRfDetrInspectionAfterSetup(
+  input: RfDetrInspectionResumeInput,
+): boolean {
+  if (!input.setupSucceeded) return false;
+  if (input.setupRouteId == null || input.setupRouteId !== input.selectedRouteId) return false;
+  if (input.terminalSessionId == null || input.terminalSessionId === input.consumedSessionId) {
+    return false;
+  }
+  if (!input.sourcePath) return false;
+  if (!input.trust) return false;
+  if (input.trust.sourcePath !== input.sourcePath) return false;
+  return input.inspectStatus === "failed";
+}
+
+export interface RfDetrInspectionReadinessInput {
+  status: RfDetrInspectStatus;
+  result: RfDetrInspectResult | null;
+  variantMode: RfDetrVariantMode;
+  manualClassSymbol: string;
+}
+
+/**
+ * Inspection readiness for export configuration. Plus-only checkpoints are
+ * never ready, even with an explicit manual variant. Otherwise ready when
+ * the checkpoint was detected with a known variant (including incomplete
+ * geometry with known constraints, which the options panel presents as a
+ * labelled fallback) or when a manual variant was explicitly selected after
+ * a load failure. Unknown variants never unlock variant-level fallback.
+ */
+export function isRfDetrInspectionReadyForExport(
+  input: RfDetrInspectionReadinessInput,
+): boolean {
+  if (getRfDetrPlusBlockReason(input.result)) return false;
+  if (input.variantMode === "manual") return input.manualClassSymbol.trim().length > 0;
+  if (input.status !== "detected") return false;
+  return Boolean(input.result?.success && input.result.class_symbol);
+}
+
+export type RfDetrInspectionFollowUpPhase = "inspecting-checkpoint" | null;
+
+export interface RfDetrInspectionFailureActions {
+  canRetry: boolean;
+  showManualVariant: boolean;
+  showFileAction: boolean;
+}
+
+/**
+ * Failure recovery without guessed defaults. Load failures offer Retry
+ * inspection, an explicit manual-variant path, and a file action. Plus-only
+ * checkpoints offer only the file action: Retry cannot help and manual
+ * selection must not bypass support policy.
+ */
+export function getRfDetrInspectionFailureActions(input: {
+  status: RfDetrInspectStatus;
+  result: RfDetrInspectResult | null;
+}): RfDetrInspectionFailureActions {
+  const idle: RfDetrInspectionFailureActions = {
+    canRetry: false,
+    showManualVariant: false,
+    showFileAction: false,
+  };
+  if (input.status !== "failed" || !input.result || input.result.success) return idle;
+  if (getRfDetrPlusBlockReason(input.result)) {
+    return { canRetry: false, showManualVariant: false, showFileAction: true };
+  }
+  return { canRetry: true, showManualVariant: true, showFileAction: true };
 }

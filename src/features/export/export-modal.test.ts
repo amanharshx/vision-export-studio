@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { HostSupportBadge, HostSupportReason, PendingInstallConsent, PrimaryExportActionLabel, RfDetrSetupPanel, UltralyticsSetupPanel } from "./export-modal";
+import { HostSupportBadge, HostSupportReason, PendingInstallConsent, PrimaryExportActionLabel, RfDetrInspectionFailurePanel, RfDetrSetupPanel, UltralyticsSetupPanel } from "./export-modal";
 import type { DepCheckResult } from "@/lib/types";
 
 const outdatedUltralytics: DepCheckResult = {
@@ -241,5 +241,91 @@ describe("RfDetrSetupPanel", () => {
 
     expect(html).toContain("Unavailable");
     expect(html).toContain("TensorRT");
+  });
+});
+
+describe("RfDetrInspectionFailurePanel (ticket 11)", () => {
+  const loadFailure = { canRetry: true, showManualVariant: true, showFileAction: true };
+  const plusFailure = { canRetry: false, showManualVariant: false, showFileAction: true };
+
+  test("offers retry without guessed defaults and keeps the environment ready", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RfDetrInspectionFailurePanel, {
+        error: "torch load boom",
+        failure: loadFailure,
+        onRetry: () => {},
+      }),
+    );
+
+    expect(html).toContain("Checkpoint inspection failed");
+    expect(html).toContain("torch load boom");
+    expect(html).toContain("Retry inspection");
+    expect(html).toContain("environment is ready");
+    expect(html).not.toContain("Native image size");
+  });
+
+  test("hides retry when inspection cannot succeed by retrying (plus-only)", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RfDetrInspectionFailurePanel, {
+        error: "RFDETRXLarge requires rfdetr_plus support and is not supported in v1.",
+        failure: plusFailure,
+      }),
+    );
+
+    expect(html).toContain("Checkpoint inspection failed");
+    expect(html).not.toContain("Retry inspection");
+  });
+
+  test("offers a file action alongside retry on load failure", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RfDetrInspectionFailurePanel, {
+        error: "torch load boom",
+        failure: loadFailure,
+        onRetry: () => {},
+        onChooseDifferentFile: () => {},
+      }),
+    );
+
+    expect(html).toContain("Retry inspection");
+    expect(html).toContain("Choose different file");
+  });
+
+  test("hides the file action when it is not offered", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RfDetrInspectionFailurePanel, {
+        error: "torch load boom",
+        failure: { ...loadFailure, showFileAction: false },
+        onRetry: () => {},
+      }),
+    );
+
+    expect(html).toContain("Retry inspection");
+    expect(html).not.toContain("Choose different file");
+  });
+
+  test("offers the manual-variant path from the modal on load failure", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RfDetrInspectionFailurePanel, {
+        error: "torch load boom",
+        failure: loadFailure,
+        onRetry: () => {},
+        onRevealManualVariant: () => {},
+      }),
+    );
+
+    expect(html).toContain("Select manual variant");
+  });
+
+  test("hides the manual-variant path for plus-only checkpoints", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RfDetrInspectionFailurePanel, {
+        error: "RFDETRXLarge requires rfdetr_plus support and is not supported in v1.",
+        failure: plusFailure,
+        onChooseDifferentFile: () => {},
+      }),
+    );
+
+    expect(html).toContain("Choose different file");
+    expect(html).not.toContain("Select manual variant");
   });
 });

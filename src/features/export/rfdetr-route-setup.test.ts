@@ -14,6 +14,9 @@ import {
   getRfDetrSetupInstallPackages,
   getRfDetrSetupVerifyError,
   shouldHideRfDetrExportControls,
+  shouldResumeRfDetrInspectionAfterSetup,
+  isRfDetrInspectionReadyForExport,
+  getRfDetrInspectionFailureActions,
 } from "./rfdetr-route-setup";
 
 function readyOnnxResults(): DepCheckResult[] {
@@ -415,5 +418,291 @@ describe("getRfDetrRouteSetupCopy", () => {
     const copy = getRfDetrRouteSetupCopy("setup-incomplete", "ONNX", "rfdetr-default");
     expect(copy.body).toContain("Retry");
     expect(copy.body).toContain("Recreate");
+  });
+});
+
+function trustedCheckpoint(sourcePath = "/tmp/model.pth") {
+  return {
+    sourcePath,
+    identity: {
+      canonical_path: sourcePath,
+      len: 1234,
+      modified_ms: 1700000000000,
+    },
+  };
+}
+
+function inspectSuccess(overrides: Record<string, unknown> = {}) {
+  return {
+    success: true,
+    class_symbol: "RFDETRSmall",
+    family: "detection",
+    size: "small",
+    requires_plus: false,
+    is_legacy: false,
+    recommended_imgsz: 512,
+    patch_size: 16,
+    num_windows: 2,
+    required_multiple: 32,
+    token_grid: 32,
+    resolution_source: "saved_model_config",
+    error: null,
+    ...overrides,
+  } as never;
+}
+
+function inspectFailure(overrides: Record<string, unknown> = {}) {
+  return {
+    success: false,
+    class_symbol: null,
+    family: null,
+    size: null,
+    requires_plus: false,
+    is_legacy: false,
+    recommended_imgsz: null,
+    patch_size: null,
+    num_windows: null,
+    required_multiple: null,
+    token_grid: null,
+    resolution_source: null,
+    error: "torch load boom",
+    ...overrides,
+  } as never;
+}
+
+describe("shouldResumeRfDetrInspectionAfterSetup (ticket 11)", () => {
+  const liveSession = {
+    terminalSessionId: "terminal-1" as string | null,
+    consumedSessionId: null as string | null,
+  };
+
+  test("resumes the same trusted checkpoint after successful setup", () => {
+    expect(
+      shouldResumeRfDetrInspectionAfterSetup({
+        setupSucceeded: true,
+        setupRouteId: "rfdetr.pth.onnx",
+        selectedRouteId: "rfdetr.pth.onnx",
+        sourcePath: "/tmp/model.pth",
+        trust: trustedCheckpoint("/tmp/model.pth"),
+        inspectStatus: "failed",
+        ...liveSession,
+      }),
+    ).toBe(true);
+  });
+
+  test("suppresses resume when the model changed during background setup", () => {
+    expect(
+      shouldResumeRfDetrInspectionAfterSetup({
+        setupSucceeded: true,
+        setupRouteId: "rfdetr.pth.onnx",
+        selectedRouteId: "rfdetr.pth.onnx",
+        sourcePath: "/tmp/other.pth",
+        trust: trustedCheckpoint("/tmp/model.pth"),
+        inspectStatus: "failed",
+        ...liveSession,
+      }),
+    ).toBe(false);
+  });
+
+  test("suppresses resume when the model was cleared during background setup", () => {
+    expect(
+      shouldResumeRfDetrInspectionAfterSetup({
+        setupSucceeded: true,
+        setupRouteId: "rfdetr.pth.onnx",
+        selectedRouteId: "rfdetr.pth.onnx",
+        sourcePath: "",
+        trust: trustedCheckpoint("/tmp/model.pth"),
+        inspectStatus: "failed",
+        ...liveSession,
+      }),
+    ).toBe(false);
+  });
+
+  test("suppresses a background completion that finished for another route", () => {
+    expect(
+      shouldResumeRfDetrInspectionAfterSetup({
+        setupSucceeded: true,
+        setupRouteId: "rfdetr.pth.onnx",
+        selectedRouteId: "rfdetr.pth.executorch",
+        sourcePath: "/tmp/model.pth",
+        trust: trustedCheckpoint("/tmp/model.pth"),
+        inspectStatus: "failed",
+        ...liveSession,
+      }),
+    ).toBe(false);
+  });
+
+  test("never resumes without setup success, trust, a known setup route, or a failed inspection", () => {
+    const base = {
+      setupSucceeded: true,
+      setupRouteId: "rfdetr.pth.onnx" as string | null,
+      selectedRouteId: "rfdetr.pth.onnx",
+      sourcePath: "/tmp/model.pth",
+      trust: trustedCheckpoint("/tmp/model.pth"),
+      inspectStatus: "failed" as const,
+      terminalSessionId: "terminal-1" as string | null,
+      consumedSessionId: null as string | null,
+    };
+    expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, setupSucceeded: false })).toBe(false);
+    expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, trust: null })).toBe(false);
+    expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, setupRouteId: null })).toBe(false);
+    expect(
+      shouldResumeRfDetrInspectionAfterSetup({ ...base, setupRouteId: "rfdetr.pth.executorch" }),
+    ).toBe(false);
+    expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, inspectStatus: "detected" })).toBe(false);
+    expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, inspectStatus: "inspecting" })).toBe(false);
+  });
+
+  test("does not resume the same terminal session twice", () => {
+    expect(
+      shouldResumeRfDetrInspectionAfterSetup({
+        setupSucceeded: true,
+        setupRouteId: "rfdetr.pth.onnx",
+        selectedRouteId: "rfdetr.pth.onnx",
+        sourcePath: "/tmp/model.pth",
+        trust: trustedCheckpoint("/tmp/model.pth"),
+        inspectStatus: "failed",
+        terminalSessionId: "terminal-1",
+        consumedSessionId: "terminal-1",
+      }),
+    ).toBe(false);
+  });
+
+  test("resumes a new terminal session after consuming the previous one", () => {
+    expect(
+      shouldResumeRfDetrInspectionAfterSetup({
+        setupSucceeded: true,
+        setupRouteId: "rfdetr.pth.onnx",
+        selectedRouteId: "rfdetr.pth.onnx",
+        sourcePath: "/tmp/model.pth",
+        trust: trustedCheckpoint("/tmp/model.pth"),
+        inspectStatus: "failed",
+        terminalSessionId: "terminal-2",
+        consumedSessionId: "terminal-1",
+      }),
+    ).toBe(true);
+  });
+
+  test("never resumes when the terminal session is unknown", () => {
+    expect(
+      shouldResumeRfDetrInspectionAfterSetup({
+        setupSucceeded: true,
+        setupRouteId: "rfdetr.pth.onnx",
+        selectedRouteId: "rfdetr.pth.onnx",
+        sourcePath: "/tmp/model.pth",
+        trust: trustedCheckpoint("/tmp/model.pth"),
+        inspectStatus: "failed",
+        terminalSessionId: null,
+        consumedSessionId: null,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("isRfDetrInspectionReadyForExport (ticket 11)", () => {
+  test("is ready after successful inspection", () => {
+    expect(
+      isRfDetrInspectionReadyForExport({
+        status: "detected",
+        result: inspectSuccess(),
+        variantMode: "auto",
+        manualClassSymbol: "",
+      }),
+    ).toBe(true);
+  });
+
+  test("is ready for incomplete geometry with known constraints (preset fallback)", () => {
+    expect(
+      isRfDetrInspectionReadyForExport({
+        status: "detected",
+        result: inspectSuccess({ recommended_imgsz: null, resolution_source: null, token_grid: null }),
+        variantMode: "auto",
+        manualClassSymbol: "",
+      }),
+    ).toBe(true);
+  });
+
+  test("stays not ready on checkpoint-load failure without a manual variant", () => {
+    expect(
+      isRfDetrInspectionReadyForExport({
+        status: "failed",
+        result: inspectFailure(),
+        variantMode: "auto",
+        manualClassSymbol: "",
+      }),
+    ).toBe(false);
+  });
+
+  test("manual variant selection makes a failed inspection exportable", () => {
+    expect(
+      isRfDetrInspectionReadyForExport({
+        status: "failed",
+        result: inspectFailure(),
+        variantMode: "manual",
+        manualClassSymbol: "RFDETRSmall",
+      }),
+    ).toBe(true);
+  });
+
+  test("stays not ready when success omits the variant (no fallback without known variant)", () => {
+    expect(
+      isRfDetrInspectionReadyForExport({
+        status: "detected",
+        result: inspectSuccess({ class_symbol: null }),
+        variantMode: "auto",
+        manualClassSymbol: "",
+      }),
+    ).toBe(false);
+  });
+
+  test("plus-only checkpoints stay blocked even with a manual variant", () => {
+    const plus = inspectFailure({
+      class_symbol: "RFDETRXLarge",
+      requires_plus: true,
+      error: "RFDETRXLarge requires rfdetr_plus support and is not supported in v1.",
+    });
+    expect(
+      isRfDetrInspectionReadyForExport({
+        status: "failed",
+        result: plus,
+        variantMode: "manual",
+        manualClassSymbol: "RFDETRSmall",
+      }),
+    ).toBe(false);
+    expect(
+      isRfDetrInspectionReadyForExport({
+        status: "failed",
+        result: plus,
+        variantMode: "auto",
+        manualClassSymbol: "",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("inspection failure actions (ticket 11)", () => {
+  test("load failure offers retry, manual variant, and file action without guessed defaults", () => {
+    const actions = getRfDetrInspectionFailureActions({ status: "failed", result: inspectFailure() });
+    expect(actions.canRetry).toBe(true);
+    expect(actions.showManualVariant).toBe(true);
+    expect(actions.showFileAction).toBe(true);
+  });
+
+  test("plus-only blocks retry and manual bypass, keeps file action", () => {
+    const plus = inspectFailure({
+      class_symbol: "RFDETRXLarge",
+      requires_plus: true,
+      error: "RFDETRXLarge requires rfdetr_plus support and is not supported in v1.",
+    });
+    const actions = getRfDetrInspectionFailureActions({ status: "failed", result: plus });
+    expect(actions.canRetry).toBe(false);
+    expect(actions.showManualVariant).toBe(false);
+    expect(actions.showFileAction).toBe(true);
+  });
+
+  test("successful inspection needs no failure actions", () => {
+    const actions = getRfDetrInspectionFailureActions({ status: "detected", result: inspectSuccess() });
+    expect(actions.canRetry).toBe(false);
+    expect(actions.showManualVariant).toBe(false);
   });
 });
