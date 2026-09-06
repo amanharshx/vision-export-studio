@@ -1415,7 +1415,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       depCheckLoading,
       depCheckError: selectedCheck.error,
       setupActive: rfdetrSetupActiveForSelectedRoute,
-      setupFailed: rfdetrSetupTask?.status === "failed" && rfdetrTaskAppliesToSelectedRoute,
+      // A dismissed failure is retired: dismissing (including confirmed
+      // deletion, which dismisses the matching task) returns the route to
+      // check-driven state instead of pinning Setup incomplete forever.
+      // Set up from here installs the same packages a Retry would.
+      setupFailed: rfdetrSetupTask?.status === "failed" && !rfdetrSetupTask.dismissed && rfdetrTaskAppliesToSelectedRoute,
     })
     : null;
   const selectedMissingPackages = useMemo(() => {
