@@ -433,54 +433,6 @@ export function resolveExportPython(
   return envPython;
 }
 
-export type SourceSelection =
-  | { status: "empty" }
-  | { status: "rejected"; error: string }
-  | { status: "accepted"; path: string };
-
-/**
- * Validate a model file choice against the chosen provider. Pure: upload
- * alone never creates an environment or opens the Python-required dialog.
- */
-export function validateSourceSelection(path: string, provider: ProviderSpec): SourceSelection {
-  const trimmed = path.trim();
-  if (!trimmed) return { status: "empty" };
-  if (!hasAllowedSourceExtension(trimmed, provider)) {
-    return {
-      status: "rejected",
-      error: `${provider.displayName} accepts ${provider.sourceExtensions.join(", ")} files only.`,
-    };
-  }
-  return { status: "accepted", path: trimmed };
-}
-
-export interface InitialWorkspaceSettings {
-  pythonOverride: string;
-  outputDirOverride: string;
-  outputDirInput: string;
-  publishOverride: string | undefined;
-}
-
-/**
- * Restore persisted Python and output directory choices on workspace mount.
- * Pure projection of the mount effect below, so migration preserves both.
- * The legacy setup flag stays readable on settings objects but is ignored.
- */
-export function resolveInitialWorkspaceSettings(settings: {
-  setup_complete?: boolean;
-  python_path_override?: string | null;
-  output_dir_override?: string | null;
-} | null): InitialWorkspaceSettings {
-  const pythonOverride = settings?.python_path_override || "";
-  const outputDirOverride = settings?.output_dir_override || "";
-  return {
-    pythonOverride,
-    outputDirOverride,
-    outputDirInput: outputDirOverride,
-    publishOverride: pythonOverride.trim() || undefined,
-  };
-}
-
 /**
  * Builds the user-facing cleanup error, combining per-environment deletion
  * failures with a separate setup-state persistence failure. Returns null when
@@ -1727,13 +1679,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
 
     loadSettings()
       .then((settings) => {
-        const initial = resolveInitialWorkspaceSettings(settings);
-        if (initial.pythonOverride) setPythonOverride(initial.pythonOverride);
-        if (initial.outputDirOverride) {
-          setOutputDirOverride(initial.outputDirOverride);
-          setOutputDirInput(initial.outputDirInput);
+        const override = settings.python_path_override || "";
+        if (override) setPythonOverride(override);
+        const outOverride = settings.output_dir_override || "";
+        if (outOverride) {
+          setOutputDirOverride(outOverride);
+          setOutputDirInput(outOverride);
         }
-        return environmentPublisher.publish(initial.publishOverride);
+        return environmentPublisher.publish(override.trim() || undefined);
       })
       .catch((e: unknown) => setEnvError(String(e)));
     void getManagedRuntimeRebuildEligibility().then(setManagedRuntimeUpgrade).catch(() => setManagedRuntimeUpgrade(null));
@@ -2867,20 +2820,18 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     resetExportStateForProvider(providerId);
   };
 
-  // File select — validate extension, then advance to formats view.
-  // Pure validation only: upload alone never creates an environment or opens
-  // the Python-required dialog.
+  // File select — validate extension, then advance to formats view
   const handleFileSelect = useCallback((path: string) => {
-    const selection = validateSourceSelection(path, selectedProvider);
-    if (selection.status === "empty") return;
-    if (selection.status === "rejected") {
-      setInvokeError(selection.error);
+    const trimmed = path.trim();
+    if (!trimmed) return;
+    if (!hasAllowedSourceExtension(trimmed, selectedProvider)) {
+      setInvokeError(`${selectedProvider.displayName} accepts ${selectedProvider.sourceExtensions.join(", ")} files only.`);
       setSourcePath("");
       setView("drop");
       return;
     }
     setInvokeError(null);
-    setSourcePath(selection.path);
+    setSourcePath(trimmed);
     if (selectedProvider.id === "rfdetr") {
       resetRfDetrTrust("needs_trust");
       setRfDetrVariantMode("auto");
