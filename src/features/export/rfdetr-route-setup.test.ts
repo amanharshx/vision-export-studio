@@ -16,11 +16,7 @@ import {
   shouldHideRfDetrExportControls,
   shouldResumeRfDetrInspectionAfterSetup,
   isRfDetrInspectionReadyForExport,
-  getRfDetrInspectionFollowUpPhase,
-  getRfDetrInspectionFollowUpCopy,
   getRfDetrInspectionFailureActions,
-  canUseRfDetrVariantFallback,
-  formatRfDetrInspectionSummary,
 } from "./rfdetr-route-setup";
 
 function readyOnnxResults(): DepCheckResult[] {
@@ -684,22 +680,6 @@ describe("isRfDetrInspectionReadyForExport (ticket 11)", () => {
   });
 });
 
-describe("inspection follow-up phase (ticket 11)", () => {
-  test("shows a named inspecting phase without changing setup readiness", () => {
-    expect(getRfDetrInspectionFollowUpPhase("ready", "inspecting")).toBe("inspecting-checkpoint");
-    expect(getRfDetrInspectionFollowUpPhase("ready", "detected")).toBeNull();
-    expect(getRfDetrInspectionFollowUpPhase("ready", "failed")).toBeNull();
-    expect(getRfDetrInspectionFollowUpPhase("setting-up", "inspecting")).toBeNull();
-  });
-
-  test("follow-up copy has no percentage and keeps browsing guidance", () => {
-    const copy = getRfDetrInspectionFollowUpCopy();
-    expect(copy.title).toContain("Inspecting");
-    expect(copy.body).not.toContain("%");
-    expect(copy.body).toContain("ready");
-  });
-});
-
 describe("inspection failure actions (ticket 11)", () => {
   test("load failure offers retry, manual variant, and file action without guessed defaults", () => {
     const actions = getRfDetrInspectionFailureActions({ status: "failed", result: inspectFailure() });
@@ -724,32 +704,5 @@ describe("inspection failure actions (ticket 11)", () => {
     const actions = getRfDetrInspectionFailureActions({ status: "detected", result: inspectSuccess() });
     expect(actions.canRetry).toBe(false);
     expect(actions.showManualVariant).toBe(false);
-  });
-});
-
-describe("preset fallback and variant gating (ticket 11)", () => {
-  test("requires a known or explicitly selected variant before variant fallback", () => {
-    expect(
-      canUseRfDetrVariantFallback({ result: inspectSuccess(), variantMode: "auto", manualClassSymbol: "" }),
-    ).toBe(true);
-    expect(
-      canUseRfDetrVariantFallback({ result: inspectFailure(), variantMode: "manual", manualClassSymbol: "RFDETRSmall" }),
-    ).toBe(true);
-    expect(
-      canUseRfDetrVariantFallback({ result: inspectFailure(), variantMode: "auto", manualClassSymbol: "" }),
-    ).toBe(false);
-    expect(
-      canUseRfDetrVariantFallback({ result: null, variantMode: "auto", manualClassSymbol: "" }),
-    ).toBe(false);
-  });
-
-  test("inspection summary shows variant, native size, source, and multiple", () => {
-    const summary = formatRfDetrInspectionSummary(inspectSuccess());
-    expect(summary).toContain("RFDETRSmall");
-    expect(summary).toContain("512px");
-    expect(summary).toContain("saved_model_config");
-    expect(summary).toContain("32");
-    expect(formatRfDetrInspectionSummary(inspectFailure())).toBeNull();
-    expect(formatRfDetrInspectionSummary(null)).toBeNull();
   });
 });

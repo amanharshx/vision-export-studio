@@ -96,14 +96,13 @@ import {
   type SetupInstallTarget,
 } from "./ultralytics-route-setup";
 import {
-  formatRfDetrInspectionSummary,
   getRfDetrInspectionFailureActions,
-  getRfDetrInspectionFollowUpPhase,
   getRfDetrSetupHostRefusal,
   getRfDetrSetupInstallPackages,
   getRfDetrSetupVerifyError,
   isRfDetrInspectionReadyForExport,
   shouldResumeRfDetrInspectionAfterSetup,
+  type RfDetrInspectionFollowUpPhase,
 } from "./rfdetr-route-setup";
 import { rfdetrSetupReadiness, type RfDetrSetupReadiness } from "@/lib/tauri/rfdetr";
 import { getEffectiveHostSupportResult, getHostSupportResult } from "./host-support";
@@ -1470,9 +1469,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       manualClassSymbol: rfdetrManualClassSymbol,
     })
     : false;
-  const rfdetrInspectionFollowUp = rfdetrRouteSetupStatus != null
-    ? getRfDetrInspectionFollowUpPhase(rfdetrRouteSetupStatus, rfdetrInspectStatus)
-    : null;
+  // Named follow-up phase beside a Ready environment (never relabelled as
+  // setup readiness): only while the resumed inspection is still running.
+  const rfdetrInspectionFollowUp: RfDetrInspectionFollowUpPhase =
+    rfdetrRouteSetupStatus === "ready" && rfdetrInspectStatus === "inspecting"
+      ? "inspecting-checkpoint"
+      : null;
   const rfdetrInspectionFailure = selectedProviderId === "rfdetr"
     ? getRfDetrInspectionFailureActions({ status: rfdetrInspectStatus, result: rfdetrInspectResult })
     : getRfDetrInspectionFailureActions({ status: "idle", result: null });
@@ -1488,8 +1490,24 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       failure: rfdetrInspectionFailure,
     }
     : null;
+  // Compact detected-geometry summary for the formats view: variant, native
+  // size, geometry source, and compatible-size requirement. Null without a
+  // successful inspection, so callers show the failure path instead.
   const rfdetrInspectionSummary = selectedProviderId === "rfdetr"
-    ? formatRfDetrInspectionSummary(rfdetrInspectResult)
+    && rfdetrInspectResult?.success
+    && rfdetrInspectResult.class_symbol
+    ? [
+      rfdetrInspectResult.class_symbol,
+      ...(rfdetrInspectResult.recommended_imgsz != null
+        ? [`native ${rfdetrInspectResult.recommended_imgsz}px`]
+        : []),
+      ...(rfdetrInspectResult.resolution_source
+        ? [`source ${rfdetrInspectResult.resolution_source}`]
+        : []),
+      ...(rfdetrInspectResult.required_multiple != null
+        ? [`multiple ${rfdetrInspectResult.required_multiple}`]
+        : []),
+    ].join(" · ")
     : null;
   // Ref to current sessionId for use inside event listener closures
   const sessionIdRef = useRef<string | null>(null);

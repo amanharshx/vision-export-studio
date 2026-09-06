@@ -35,7 +35,6 @@ import {
 } from "./ultralytics-route-setup";
 import {
   getRfDetrRouteSetupCopy,
-  getRfDetrInspectionFollowUpCopy,
   shouldHideRfDetrExportControls,
   type RfDetrInspectionFailureActions,
   type RfDetrInspectionFollowUpPhase,
@@ -339,16 +338,6 @@ export function RfDetrSetupPanel({
       onRemoveEnvironment={onRemoveEnvironment}
       onRecreateEnvironment={onRecreateEnvironment}
     />
-  );
-}
-
-export function RfDetrInspectionFollowUpPanel() {
-  const copy = getRfDetrInspectionFollowUpCopy();
-  return (
-    <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
-      <p className="text-sm font-medium text-blue-800">{copy.title}</p>
-      <p className="mt-1 text-xs text-blue-800">{copy.body}</p>
-    </div>
   );
 }
 
@@ -657,7 +646,10 @@ export function ExportModal({
 
             {/* Ticket 11 follow-up: environment Ready, checkpoint inspection running */}
             {rfdetrFollowUpActive && (
-              <RfDetrInspectionFollowUpPanel />
+              <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
+                <p className="text-sm font-medium text-blue-800">Inspecting checkpoint…</p>
+                <p className="mt-1 text-xs text-blue-800">The environment is ready. Inspecting the trusted checkpoint to load model details. You can keep browsing; this continues in the background.</p>
+              </div>
             )}
 
             {/* Ticket 11 failure: environment stays Ready; Retry, file, and manual-variant recovery */}

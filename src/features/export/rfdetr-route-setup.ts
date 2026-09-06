@@ -248,35 +248,10 @@ export function isRfDetrInspectionReadyForExport(
   if (getRfDetrPlusBlockReason(input.result)) return false;
   if (input.variantMode === "manual") return input.manualClassSymbol.trim().length > 0;
   if (input.status !== "detected") return false;
-  return canUseRfDetrVariantFallback({
-    result: input.result,
-    variantMode: input.variantMode,
-    manualClassSymbol: input.manualClassSymbol,
-  });
+  return Boolean(input.result?.success && input.result.class_symbol);
 }
 
 export type RfDetrInspectionFollowUpPhase = "inspecting-checkpoint" | null;
-
-/**
- * Named follow-up phase shown after the environment reports Ready while the
- * resumed inspection is still running. Returns null otherwise so setup
- * readiness is never relabelled: the environment stays Ready while the
- * checkpoint phase runs beside it.
- */
-export function getRfDetrInspectionFollowUpPhase(
-  setupStatus: RfDetrRouteSetupStatus,
-  inspectStatus: RfDetrInspectStatus,
-): RfDetrInspectionFollowUpPhase {
-  if (setupStatus === "ready" && inspectStatus === "inspecting") return "inspecting-checkpoint";
-  return null;
-}
-
-export function getRfDetrInspectionFollowUpCopy(): RfDetrRouteSetupCopy {
-  return {
-    title: "Inspecting checkpoint…",
-    body: "The environment is ready. Inspecting the trusted checkpoint to load model details. You can keep browsing; this continues in the background.",
-  };
-}
 
 export interface RfDetrInspectionFailureActions {
   canRetry: boolean;
@@ -304,34 +279,4 @@ export function getRfDetrInspectionFailureActions(input: {
     return { canRetry: false, showManualVariant: false, showFileAction: true };
   }
   return { canRetry: true, showManualVariant: true, showFileAction: true };
-}
-
-/**
- * Variant-level fallback is allowed only with a known or explicitly selected
- * variant: a detected class in auto mode, or a non-empty manual selection.
- * Unknown variants must not invent constraints.
- */
-export function canUseRfDetrVariantFallback(input: {
-  result: RfDetrInspectResult | null;
-  variantMode: RfDetrVariantMode;
-  manualClassSymbol: string;
-}): boolean {
-  if (input.variantMode === "manual") return input.manualClassSymbol.trim().length > 0;
-  return Boolean(input.result?.success && input.result.class_symbol);
-}
-
-/**
- * Compact detected-geometry summary: variant, native size, geometry source,
- * and compatible-size requirement. Null when there is no successful
- * inspection to report, so callers show the failure path instead.
- */
-export function formatRfDetrInspectionSummary(
-  result: RfDetrInspectResult | null,
-): string | null {
-  if (!result?.success || !result.class_symbol) return null;
-  const parts = [result.class_symbol];
-  if (result.recommended_imgsz != null) parts.push(`native ${result.recommended_imgsz}px`);
-  if (result.resolution_source) parts.push(`source ${result.resolution_source}`);
-  if (result.required_multiple != null) parts.push(`multiple ${result.required_multiple}`);
-  return parts.join(" · ");
 }

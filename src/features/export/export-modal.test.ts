@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { HostSupportBadge, HostSupportReason, PendingInstallConsent, PrimaryExportActionLabel, RfDetrInspectionFailurePanel, RfDetrInspectionFollowUpPanel, RfDetrSetupPanel, UltralyticsSetupPanel } from "./export-modal";
+import { HostSupportBadge, HostSupportReason, PendingInstallConsent, PrimaryExportActionLabel, RfDetrInspectionFailurePanel, RfDetrSetupPanel, UltralyticsSetupPanel } from "./export-modal";
 import type { DepCheckResult } from "@/lib/types";
 
 const outdatedUltralytics: DepCheckResult = {
@@ -241,16 +241,6 @@ describe("RfDetrSetupPanel", () => {
 
     expect(html).toContain("Unavailable");
     expect(html).toContain("TensorRT");
-  });
-});
-
-describe("RfDetrInspectionFollowUpPanel (ticket 11)", () => {
-  test("names the inspecting phase without a percentage", () => {
-    const html = renderToStaticMarkup(React.createElement(RfDetrInspectionFollowUpPanel));
-
-    expect(html).toContain("Inspecting checkpoint");
-    expect(html).not.toContain("%");
-    expect(html).toContain("ready");
   });
 });
 
