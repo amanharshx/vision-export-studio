@@ -178,17 +178,3 @@ export function getRfDetrSetupVerifyError(results: DepCheckResult[] | null): str
   if (unmet.length === 0) return null;
   return `RF-DETR dependencies still missing after install: ${unmet.map((pkg) => pkg.package).join(", ")}. Review requirements before export.`;
 }
-
-/**
- * Whether a finished setup task may publish route-scoped dependency state.
- * Only the task that set up the currently selected route may touch the
- * single dependency slot: a background completion for another route must
- * never wipe the selection's readiness (safe navigation). Stack inventory
- * and sizes are global and refresh unconditionally.
- */
-export function rfdetrTerminalAppliesToSelection(
-  terminalRouteId: string | null,
-  selectedRouteId: string,
-): boolean {
-  return (terminalRouteId ?? selectedRouteId) === selectedRouteId;
-}

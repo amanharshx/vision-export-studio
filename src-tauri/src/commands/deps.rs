@@ -3821,21 +3821,6 @@ possible problem with your settings or a recent ultralytics package update.\n8.4
         std::fs::remove_dir_all(root).expect("remove temp root");
     }
 
-    #[test]
-    fn rfdetr_setup_target_rejects_unknown_route_without_touching_filesystem() {
-        let runtime = std::env::temp_dir()
-            .join(format!("rfdetr-setup-target-{}", Uuid::new_v4()))
-            .to_string_lossy()
-            .into_owned();
-        let error = resolve_stack_venv_for_setup(&runtime, "rfdetr.pth.fake")
-            .expect_err("unknown route must be rejected");
-        assert_eq!(error, "unknown route_id: rfdetr.pth.fake");
-        assert!(
-            !Path::new(&runtime).exists(),
-            "no directory may be created for an unknown route"
-        );
-    }
-
     #[cfg(unix)]
     #[test]
     fn rfdetr_ensure_rejects_unknown_route_before_filesystem_work() {

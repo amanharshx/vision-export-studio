@@ -13,7 +13,6 @@ import {
   getRfDetrSetupHostRefusal,
   getRfDetrSetupInstallPackages,
   getRfDetrSetupVerifyError,
-  rfdetrTerminalAppliesToSelection,
   shouldHideRfDetrExportControls,
 } from "./rfdetr-route-setup";
 
@@ -381,20 +380,6 @@ describe("getRfDetrSetupVerifyError", () => {
         { item: "platform", status: "platform_unsupported", reason: "TensorRT requires Linux.", install_hint: "TensorRT requires Linux." },
       ]),
     ).toBeNull();
-  });
-});
-
-describe("rfdetrTerminalAppliesToSelection", () => {
-  test("applies when the finished task set up the selected route", () => {
-    expect(rfdetrTerminalAppliesToSelection("rfdetr.pth.onnx", "rfdetr.pth.onnx")).toBe(true);
-  });
-
-  test("ignores route-scoped state when another route finished in the background", () => {
-    expect(rfdetrTerminalAppliesToSelection("rfdetr.pth.onnx", "rfdetr.pth.engine")).toBe(false);
-  });
-
-  test("applies legacy routeless tasks to the current selection", () => {
-    expect(rfdetrTerminalAppliesToSelection(null, "rfdetr.pth.onnx")).toBe(true);
   });
 });
 

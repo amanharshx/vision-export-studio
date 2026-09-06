@@ -99,7 +99,6 @@ import {
   getRfDetrSetupHostRefusal,
   getRfDetrSetupInstallPackages,
   getRfDetrSetupVerifyError,
-  rfdetrTerminalAppliesToSelection,
   shouldHideRfDetrExportControls,
 } from "./rfdetr-route-setup";
 import { rfdetrSetupReadiness, type RfDetrSetupReadiness } from "@/lib/tauri/rfdetr";
@@ -1462,6 +1461,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Ref to current sessionId for use inside event listener closures
   const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = sessionId;
+  // Live selection for async continuations: effects that await (stack
+  // inventory, size scans) must re-read the selection when they resume, or
+  // a background completion for route A overwrites route B's slot after
+  // the user navigates mid-refresh.
+  const selectedRouteIdRef = useRef(selectedRouteId);
+  selectedRouteIdRef.current = selectedRouteId;
   const currentExportRouteRef = useRef<{ routeId: string; exportFormat: string } | null>(null);
   const currentExportOutputDirRef = useRef<string | null>(null);
 
@@ -1628,11 +1633,13 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     invalidateManagedEnvironmentSizesForMutation(keys);
     // Route-scoped state belongs to the current selection only: a task for
     // another route finishing in the background must never wipe the
-    // selection's readiness. Inventory and sizes above are global.
-    const appliesToSelection = rfdetrTerminalAppliesToSelection(rfdetrTerminalRoute, selectedRouteId);
+    // selection's readiness. Inventory and sizes above are global. The
+    // failure stamp below is synchronous so the render-time selection is
+    // current; the async continuation re-reads the live selection ref.
+    const terminalRoute = rfdetrTerminalRoute ?? selectedRouteId;
     if (rfdetrTerminalStatus === "failed") {
-      if (appliesToSelection) {
-        setRouteDepCheckError(rfdetrTerminalRoute ?? selectedRouteId, rfdetrTerminalError ?? "Setup failed.");
+      if (terminalRoute === selectedRouteId) {
+        setRouteDepCheckError(terminalRoute, rfdetrTerminalError ?? "Setup failed.");
       }
       void refreshStackEnvironmentCards();
       void scanProviderEnvironments("rfdetr").catch(() => {});
@@ -1641,8 +1648,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     void (async () => {
       await refreshStackEnvironmentCards();
       await scanProviderEnvironments("rfdetr").catch(() => {});
-      if (!appliesToSelection) return;
-      const routeId = rfdetrTerminalRoute ?? selectedRouteId;
+      // Freshness ownership: the selection may have moved while awaiting.
+      // Only the route still selected may publish into the single slot;
+      // the selection effect owns the new route's own check.
+      const currentSelection = selectedRouteIdRef.current;
+      const routeId = rfdetrTerminalRoute ?? currentSelection;
+      if (routeId !== currentSelection) return;
       const pythonPath = envInfo?.python_path ?? rfdetrTerminalKey ?? routeId;
       try {
         await refreshRouteDependencies(routeId, pythonPath);
