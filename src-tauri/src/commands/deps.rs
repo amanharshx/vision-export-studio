@@ -1084,28 +1084,6 @@ fn check_dependencies_for_runtime(
     // and the install gate), so a foreign version must never disable setup.
     // When the stack exists, enforce the constraint against the stack's own
     // interpreter instead.
-    if stack_for_route(route_id).is_some() {
-        let runtime_dir = stack_runtime_dir.expect("mapped route has a runtime directory");
-        if let Some(results) = missing_stack_results_if_absent(runtime_dir, route_id) {
-            return Ok(DepCheckResponse { results });
-        }
-        let stack_python_path =
-            stack_python(runtime_dir, route_id).expect("mapped route has Python path");
-        if let Ok(installed_python) = probe_python_version(&stack_python_path) {
-            if let Some(result) = route_python_version_result(route_id, &installed_python) {
-                return Ok(DepCheckResponse {
-                    results: vec![result],
-                });
-            }
-        }
-    } else if let Ok(installed_python) = probe_python_version(python_path) {
-        if let Some(result) = route_python_version_result(route_id, &installed_python) {
-            return Ok(DepCheckResponse {
-                results: vec![result],
-            });
-        }
-    }
-
     let dependency_python = if stack_for_route(route_id).is_some() {
         let runtime_dir = stack_runtime_dir.expect("mapped route has a runtime directory");
         if let Some(results) = missing_stack_results_if_absent(runtime_dir, route_id) {
@@ -1115,6 +1093,14 @@ fn check_dependencies_for_runtime(
     } else {
         python_path.to_string()
     };
+
+    if let Ok(installed_python) = probe_python_version(&dependency_python) {
+        if let Some(result) = route_python_version_result(route_id, &installed_python) {
+            return Ok(DepCheckResponse {
+                results: vec![result],
+            });
+        }
+    }
 
     let mut results: Vec<DepCheckResult> = Vec::new();
 

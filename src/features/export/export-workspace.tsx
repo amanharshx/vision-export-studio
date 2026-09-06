@@ -2851,11 +2851,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       const report: ManagedEnvironmentCleanupReport = await cleanupManagedEnvironments(confirmation.keys);
       const cleanupMessage = managedEnvironmentCleanupErrorMessage(report);
       if (cleanupMessage) setEnvironmentPanelError(cleanupMessage);
-      if (report.results.some((result) => result.status === "failed")) {
-        // Deletion failed: keep the confirmation open so the in-dialog
-        // error above is visible instead of failing silent behind the modal.
-        return;
-      }
       // A confirmed deletion retires the matching failed setup task: its
       // environment is gone, so keeping Setup incomplete with Retry/Remove
       // for a ghost would lie. The refreshed check below then reports the
@@ -2866,7 +2861,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       ) {
         dismissTask();
       }
-      setCleanupConfirmation(null);
       invalidateManagedEnvironmentSizesForMutation(
         managedEnvironmentCacheKeysForCleanup(confirmation.keys, stackEnvironments.map((stack) => stack.key)),
       );
@@ -2886,6 +2880,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         await refreshStackEnvironmentCards();
         await refreshRouteDependencies(selectedRouteId, envInfo?.python_path ?? null).catch(() => {});
       }
+      if (report.results.some((result) => result.status === "failed")) {
+        // Deletion failed: keep the confirmation open so the in-dialog
+        // error above is visible instead of failing silent behind the modal.
+        // Everything above already refreshed from the report, so the
+        // successfully deleted half never goes stale.
+        return;
+      }
+      setCleanupConfirmation(null);
     } catch (error: unknown) {
       setEnvironmentPanelError((current) => current ? `${current} ${String(error)}` : String(error));
     } finally {
