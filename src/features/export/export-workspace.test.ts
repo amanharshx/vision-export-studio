@@ -223,7 +223,6 @@ describe("runtime operation UI guards", () => {  const unchanged = {
     for (const error of [
       "another runtime operation is in progress: export",
       "another runtime operation is in progress: dependency install",
-      "another runtime operation is in progress: setup",
       "another runtime operation is in progress: managed runtime rebuild",
     ]) {
       expect(getInstallStartFailureOutcome(error)).toEqual({

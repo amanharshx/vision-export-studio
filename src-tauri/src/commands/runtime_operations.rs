@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 pub enum RuntimeOperation {
     Export,
     Install,
-    Setup,
     Rebuild,
     Cleanup,
 }
@@ -14,7 +13,6 @@ impl RuntimeOperation {
         match self {
             Self::Export => "export",
             Self::Install => "dependency install",
-            Self::Setup => "setup",
             Self::Rebuild => "managed runtime rebuild",
             Self::Cleanup => "managed environment cleanup",
         }
@@ -98,7 +96,11 @@ mod tests {
                 RuntimeOperation::Export,
                 "managed runtime rebuild",
             ),
-            (RuntimeOperation::Setup, RuntimeOperation::Rebuild, "setup"),
+            (
+                RuntimeOperation::Cleanup,
+                RuntimeOperation::Rebuild,
+                "managed environment cleanup",
+            ),
         ] {
             let guard = coordinator.acquire(active).unwrap();
             assert!(coordinator.acquire(blocked).err().unwrap().contains(name));
@@ -109,7 +111,7 @@ mod tests {
     #[test]
     fn dropping_guard_allows_next_operation() {
         let coordinator = RuntimeOperationCoordinator::default();
-        let operation = coordinator.acquire(RuntimeOperation::Setup).unwrap();
+        let operation = coordinator.acquire(RuntimeOperation::Cleanup).unwrap();
         drop(operation);
 
         assert!(coordinator.acquire(RuntimeOperation::Rebuild).is_ok());
@@ -144,7 +146,6 @@ fn cleanup_blocks_and_is_blocked_by_every_runtime_operation() {
     for operation in [
         RuntimeOperation::Export,
         RuntimeOperation::Install,
-        RuntimeOperation::Setup,
         RuntimeOperation::Rebuild,
         RuntimeOperation::Cleanup,
     ] {
