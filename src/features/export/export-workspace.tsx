@@ -379,12 +379,44 @@ export function getManagedEnvironmentCleanupState({
   const removesLastManagedRuntime = providerId === "ultralytics"
     ? rfdetrCount === 0
     : ultralyticsExists === false && (isBulkCleanup ? rfdetrCount > 0 : rfdetrCount === 1);
+  // Ticket 12 retired the required full-page Setup screen: cleanup stays in
+  // the workspace, so nothing ever returns to Setup. Full copy replacement
+  // belongs to ticket 13.
   return {
     removesLastManagedRuntime,
-    willReturnToSetup: providerId === "ultralytics" && !hasPythonOverride,
+    willReturnToSetup: false,
     hasPythonOverride,
     isBulkCleanup,
   };
+}
+
+/**
+ * Resolve the interpreter to check one route's dependencies against.
+ * Ultralytics needs its own managed python; RF-DETR resolves to its isolated
+ * stack inside the backend, so a missing Ultralytics environment must not
+ * block the check. The route id placeholder keeps the call non-empty (the
+ * backend requires it) without inventing an interpreter.
+ */
+export function resolveRouteDependencyCheckPython(
+  providerId: ProviderId,
+  envPython: string | null,
+  routeId: string,
+): string | null {
+  if (providerId === "rfdetr") return envPython ?? routeId;
+  return envPython;
+}
+
+/**
+ * Resolve the interpreter to pass for an RF-DETR export. The backend
+ * replaces it with the selected route's stack interpreter; the placeholder
+ * only keeps the call non-empty when no Ultralytics or system Python exists.
+ */
+export function resolveRfDetrExportPython(
+  envPython: string | null,
+  stackPython: string | null,
+  routeId: string,
+): string | null {
+  return stackPython ?? envPython ?? routeId;
 }
 
 /**
@@ -1434,9 +1466,13 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // never a key). Null means the backend-owned mapping has not resolved
   // yet: the modal copy falls back to naming the route's environment, and
   // Remove/Recreate stay guarded until a real stack key exists.
-  const rfdetrSelectedStackKey = stackEnvironments.find((stack) =>
+  const rfdetrSelectedStack = stackEnvironments.find((stack) =>
     stack.route_ids.includes(selectedRouteId),
-  )?.key ?? null;
+  ) ?? null;
+  const rfdetrSelectedStackKey = rfdetrSelectedStack?.key ?? null;
+  // Ticket 12: the selected stack's interpreter lets RF-DETR work without the
+  // Ultralytics managed environment or system Python.
+  const rfdetrSelectedStackPython = rfdetrSelectedStack?.python_path ?? null;
   const rfdetrTaskStackKey = rfdetrTaskAppliesToSelectedRoute
     ? rfdetrSetupTask?.environmentKey ?? null
     : null;
@@ -1703,8 +1739,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Check dependencies whenever the selected route or resolved environment changes.
   // Observes the environment object (not just its python path) so a fresh
   // object published by setup completion refreshes whichever route is current.
+  // RF-DETR checks resolve inside the backend to the selected stack, so a
+  // missing Ultralytics environment never blocks them (ticket 12).
   useEffect(() => {
-    const pythonPath = envInfo?.python_path;
+    const pythonPath = resolveRouteDependencyCheckPython(
+      selectedProviderId,
+      envInfo?.python_path ?? null,
+      selectedRouteId,
+    );
     if (!pythonPath || !selectedRouteId) {
       setRouteDepCheck(emptyRouteDepCheck());
       return;
@@ -1713,7 +1755,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     void refreshRouteDependencies(selectedRouteId, pythonPath).catch(() => {
       // State handled in helper; avoid unhandled promise noise.
     });
-  }, [selectedRouteId, envInfo, refreshRouteDependencies]);
+  }, [selectedRouteId, selectedProviderId, envInfo, refreshRouteDependencies]);
 
   // On setup terminal, publish the managed environment and let the dependency
   // effect above refresh the currently selected route. The provider-wide
@@ -2357,8 +2399,13 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Core export invocation — call only when deps are satisfied
   const doStartExport = async (missingDepCount: number, envOverride?: EnvironmentInfo) => {
     const activeEnv = envOverride ?? envInfo;
-    if (!sourcePath || !activeEnv?.python_path) return;
-    if (selectedProviderId === "ultralytics" && !activeEnv.yolo_path) {
+    // Ticket 12: RF-DETR exports resolve to the selected stack inside the
+    // backend, so they must not require the Ultralytics managed environment.
+    const exportPython = selectedProviderId === "rfdetr"
+      ? resolveRfDetrExportPython(activeEnv?.python_path ?? null, rfdetrSelectedStackPython, selectedRoute.id)
+      : activeEnv?.python_path ?? null;
+    if (!sourcePath || !exportPython) return;
+    if (selectedProviderId === "ultralytics" && !activeEnv?.yolo_path) {
       setInvokeError("YOLO CLI not found. Install the Ultralytics runtime or re-detect the environment.");
       return;
     }
@@ -2424,8 +2471,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         routeId: selectedRoute.id,
         outputDir,
         providerId: selectedProviderId,
-        pythonPath: activeEnv.python_path,
-        yoloPath: activeEnv.yolo_path ?? "",
+        pythonPath: exportPython,
+        yoloPath: activeEnv?.yolo_path ?? "",
         imgsz: options.imgsz,
         batch: options.batch,
         precision: options.precision,
@@ -2475,7 +2522,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Export handler — gates on missing deps before starting
   const handleExport = async () => {
     if (blockOnSetupConflict(setInvokeError)) return;
-    if (cleanupBusy || !sourcePath || !envInfo?.python_path || exportStatus === "running" || exportStatus === "starting") return;
+    const exportPython = selectedProviderId === "rfdetr"
+      ? resolveRfDetrExportPython(envInfo?.python_path ?? null, rfdetrSelectedStackPython, selectedRoute.id)
+      : envInfo?.python_path ?? null;
+    if (cleanupBusy || !sourcePath || !exportPython || exportStatus === "running" || exportStatus === "starting") return;
     const incompatibleMessage = getIncompatibleExportMessage(
       selectedRoute,
       appPlatform.os,
@@ -2495,7 +2545,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       });
       return;
     }
-    if (selectedProviderId === "ultralytics" && !envInfo.yolo_path) {
+    if (selectedProviderId === "ultralytics" && !envInfo?.yolo_path) {
       setInvokeError("Install the Ultralytics runtime before starting a YOLO export.");
       return;
     }
@@ -2541,7 +2591,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       setInvokeError("Another runtime operation is in progress. Wait for it to finish before installing dependencies.");
       return;
     }
-    const pythonPath = envInfo?.python_path;
+    const pythonPath = selectedProviderId === "rfdetr"
+      ? resolveRfDetrExportPython(envInfo?.python_path ?? null, rfdetrSelectedStackPython, selectedRoute.id)
+      : envInfo?.python_path ?? null;
     if (!pythonPath) return;
     const incompatibleMessage = getIncompatibleExportMessage(
       selectedRoute,
@@ -3016,6 +3068,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         // Deletion succeeds independently of setup-state persistence, so refresh
         // the managed runtime card whenever the .venv was actually removed, even
         // if saving setup state failed (surfaced via cleanupMessage above).
+        // Ticket 12 stays in the workspace: the legacy setup callback only
+        // updates readable state, never navigates (see App).
         if (managedEnvironmentDeletionSucceeded(report, "ultralytics-managed")) {
           setEnvInfo(null);
           const setupAction = applyManagedEnvironmentCleanupSetup(report, onSetupCompleteChange);
@@ -3023,10 +3077,30 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
             const settings = await loadSettings();
             await handleRedetect(settings.python_path_override || undefined, true);
           }
+          // A missing Ultralytics environment never blocks RF-DETR: refresh
+          // stacks and the current route so a healthy stack stays ready.
+          await refreshStackEnvironmentCards();
+          const fallbackPython = resolveRouteDependencyCheckPython(
+            selectedProviderId,
+            null,
+            selectedRouteId,
+          );
+          if (fallbackPython) {
+            await refreshRouteDependencies(selectedRouteId, fallbackPython).catch(() => {});
+          }
         }
       } else {
         await refreshStackEnvironmentCards();
-        await refreshRouteDependencies(selectedRouteId, envInfo?.python_path ?? null).catch(() => {});
+        const checkPython = resolveRouteDependencyCheckPython(
+          selectedProviderId,
+          envInfo?.python_path ?? null,
+          selectedRouteId,
+        );
+        if (checkPython) {
+          await refreshRouteDependencies(selectedRouteId, checkPython).catch(() => {});
+        } else {
+          await refreshRouteDependencies(selectedRouteId, null).catch(() => {});
+        }
       }
       if (report.results.some((result) => result.status === "failed")) {
         // Deletion failed: keep the confirmation open so the in-dialog
@@ -3041,7 +3115,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     } finally {
       setCleanupBusy(false);
     }
-  }, [blockOnSetupConflict, cleanupBusy, cleanupConfirmation, dismissTask, envInfo?.python_path, handleRedetect, invalidateManagedEnvironmentSizesForMutation, onSetupCompleteChange, pythonOverride, refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId, setupTask, stackEnvironments]);
+  }, [blockOnSetupConflict, cleanupBusy, cleanupConfirmation, dismissTask, envInfo?.python_path, handleRedetect, invalidateManagedEnvironmentSizesForMutation, onSetupCompleteChange, pythonOverride, refreshRouteDependencies, refreshStackEnvironmentCards, selectedProviderId, selectedRouteId, setupTask, stackEnvironments]);
 
   // Save output dir override
   const handleSaveOutputDir = useCallback(async () => {

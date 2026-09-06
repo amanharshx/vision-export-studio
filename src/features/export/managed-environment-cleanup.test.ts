@@ -48,8 +48,10 @@ describe("managed environment cleanup helpers", () => {
   });
 
   test("derives last-runtime state for Ultralytics without override", () => {
+    // Ticket 12 retired the required Setup screen: cleanup stays in the
+    // workspace, so nothing ever returns to Setup.
     expect(getManagedEnvironmentCleanupState({ providerId: "ultralytics", ultralyticsExists: true, rfdetrCount: 0, hasPythonOverride: false }))
-      .toEqual({ removesLastManagedRuntime: true, willReturnToSetup: true, hasPythonOverride: false, isBulkCleanup: false });
+      .toEqual({ removesLastManagedRuntime: true, willReturnToSetup: false, hasPythonOverride: false, isBulkCleanup: false });
   });
 
   test("keeps override active when removing last managed runtime", () => {
@@ -57,8 +59,8 @@ describe("managed environment cleanup helpers", () => {
       .toEqual({ removesLastManagedRuntime: true, willReturnToSetup: false, hasPythonOverride: true, isBulkCleanup: false });
   });
 
-  test("Ultralytics returns to Setup even while RF-DETR remains", () => {
-    expect(getManagedEnvironmentCleanupState({ providerId: "ultralytics", ultralyticsExists: true, rfdetrCount: 2, hasPythonOverride: false }).willReturnToSetup).toBe(true);
+  test("Ultralytics stays in the workspace even while RF-DETR remains", () => {
+    expect(getManagedEnvironmentCleanupState({ providerId: "ultralytics", ultralyticsExists: true, rfdetrCount: 2, hasPythonOverride: false }).willReturnToSetup).toBe(false);
   });
 
   test("marks RF-DETR bulk cleanup and last-runtime state", () => {
