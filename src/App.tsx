@@ -13,7 +13,6 @@ import {
   shouldCaptureFirstRun,
 } from "@/lib/analytics";
 import { loadSettings } from "@/lib/tauri/setup";
-import { resolveWorkspaceEntryState } from "@/lib/workspace-entry";
 
 // Fills the macOS title bar zone (fullSizeContentView) with the correct dark background.
 // Uses env(safe-area-inset-top) which Tauri WKWebView sets to the title bar height.
@@ -112,7 +111,7 @@ function App() {
   const handleGetStarted = () => {
     // Ticket 12: every user reaches model upload without first preparing a
     // global runtime. Provider and route setup happens on demand.
-    setAppState(resolveWorkspaceEntryState({ setupComplete }));
+    setAppState("export");
   };
 
   const showUpdateAnnouncement =

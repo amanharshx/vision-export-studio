@@ -49,34 +49,34 @@ describe("managed environment cleanup helpers", () => {
 
   test("derives last-runtime state for Ultralytics without override", () => {
     // Ticket 12 retired the required Setup screen: cleanup stays in the
-    // workspace, so nothing ever returns to Setup.
+    // workspace, so the state no longer references Setup navigation.
     expect(getManagedEnvironmentCleanupState({ providerId: "ultralytics", ultralyticsExists: true, rfdetrCount: 0, hasPythonOverride: false }))
-      .toEqual({ removesLastManagedRuntime: true, willReturnToSetup: false, hasPythonOverride: false, isBulkCleanup: false });
+      .toEqual({ removesLastManagedRuntime: true, hasPythonOverride: false, isBulkCleanup: false });
   });
 
   test("keeps override active when removing last managed runtime", () => {
     expect(getManagedEnvironmentCleanupState({ providerId: "ultralytics", ultralyticsExists: true, rfdetrCount: 0, hasPythonOverride: true }))
-      .toEqual({ removesLastManagedRuntime: true, willReturnToSetup: false, hasPythonOverride: true, isBulkCleanup: false });
+      .toEqual({ removesLastManagedRuntime: true, hasPythonOverride: true, isBulkCleanup: false });
   });
 
   test("Ultralytics stays in the workspace even while RF-DETR remains", () => {
-    expect(getManagedEnvironmentCleanupState({ providerId: "ultralytics", ultralyticsExists: true, rfdetrCount: 2, hasPythonOverride: false }).willReturnToSetup).toBe(false);
+    expect(getManagedEnvironmentCleanupState({ providerId: "ultralytics", ultralyticsExists: true, rfdetrCount: 2, hasPythonOverride: false }))
+      .toEqual({ removesLastManagedRuntime: false, hasPythonOverride: false, isBulkCleanup: false });
   });
 
   test("marks RF-DETR bulk cleanup and last-runtime state", () => {
     expect(getManagedEnvironmentCleanupState({ providerId: "rfdetr", ultralyticsExists: false, rfdetrCount: 2, hasPythonOverride: false }))
-      .toEqual({ removesLastManagedRuntime: true, willReturnToSetup: false, hasPythonOverride: false, isBulkCleanup: true });
+      .toEqual({ removesLastManagedRuntime: true, hasPythonOverride: false, isBulkCleanup: true });
   });
 
   test("does not treat unknown Ultralytics presence as absent", () => {
-    const state = getManagedEnvironmentCleanupState({ providerId: "rfdetr", ultralyticsExists: null, rfdetrCount: 1, hasPythonOverride: false });
-    expect(state.removesLastManagedRuntime).toBe(false);
-    expect(state.willReturnToSetup).toBe(false);
+    expect(getManagedEnvironmentCleanupState({ providerId: "rfdetr", ultralyticsExists: null, rfdetrCount: 1, hasPythonOverride: false }))
+      .toEqual({ removesLastManagedRuntime: false, hasPythonOverride: false, isBulkCleanup: true });
   });
 
   test("last RF-DETR runtime with override keeps override active", () => {
     expect(getManagedEnvironmentCleanupState({ providerId: "rfdetr", singleKey: "rfdetr-coreml", ultralyticsExists: false, rfdetrCount: 1, hasPythonOverride: true }))
-      .toEqual({ removesLastManagedRuntime: true, willReturnToSetup: false, hasPythonOverride: true, isBulkCleanup: false });
+      .toEqual({ removesLastManagedRuntime: true, hasPythonOverride: true, isBulkCleanup: false });
   });
   test("formats bytes, MiB, and GiB at readable boundaries", () => {
     expect(formatManagedEnvironmentSize(512)).toBe("512 B");

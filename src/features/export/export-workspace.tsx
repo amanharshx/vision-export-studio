@@ -379,44 +379,126 @@ export function getManagedEnvironmentCleanupState({
   const removesLastManagedRuntime = providerId === "ultralytics"
     ? rfdetrCount === 0
     : ultralyticsExists === false && (isBulkCleanup ? rfdetrCount > 0 : rfdetrCount === 1);
-  // Ticket 12 retired the required full-page Setup screen: cleanup stays in
-  // the workspace, so nothing ever returns to Setup. Full copy replacement
-  // belongs to ticket 13.
+  // Ticket 12 retired the required full-page Setup screen, so cleanup stays
+  // in the workspace and reports no Setup navigation. Concise on-demand
+  // recreation copy belongs to ticket 13.
   return {
     removesLastManagedRuntime,
-    willReturnToSetup: false,
     hasPythonOverride,
     isBulkCleanup,
   };
 }
 
 /**
+ * Backend placeholder for mapped RF-DETR routes: check_dependencies and
+ * start_export resolve those routes to their isolated stack interpreter and
+ * never consult the passed value, which only has to be non-empty. Never pass
+ * this to install_dependencies, which probes the path first.
+ */
+function rfdetrBackendPlaceholder(candidate: string | null, routeId: string): string {
+  return candidate ?? routeId;
+}
+
+/**
  * Resolve the interpreter to check one route's dependencies against.
  * Ultralytics needs its own managed python; RF-DETR resolves to its isolated
  * stack inside the backend, so a missing Ultralytics environment must not
- * block the check. The route id placeholder keeps the call non-empty (the
- * backend requires it) without inventing an interpreter.
+ * block the check.
  */
 export function resolveRouteDependencyCheckPython(
   providerId: ProviderId,
   envPython: string | null,
   routeId: string,
 ): string | null {
-  if (providerId === "rfdetr") return envPython ?? routeId;
+  if (providerId === "rfdetr") return rfdetrBackendPlaceholder(envPython, routeId);
   return envPython;
 }
 
 /**
- * Resolve the interpreter to pass for an RF-DETR export. The backend
- * replaces it with the selected route's stack interpreter; the placeholder
- * only keeps the call non-empty when no Ultralytics or system Python exists.
+ * Resolve the interpreter to pass for an export. Ultralytics uses its
+ * managed python; RF-DETR resolves to the selected stack inside the backend,
+ * so an existing stack works without the Ultralytics environment or system
+ * Python. Never use this for installs (see getInstallAndExportStrategy).
  */
-export function resolveRfDetrExportPython(
+export function resolveExportPython(
+  providerId: ProviderId,
   envPython: string | null,
   stackPython: string | null,
   routeId: string,
 ): string | null {
-  return stackPython ?? envPython ?? routeId;
+  if (providerId === "rfdetr") {
+    return rfdetrBackendPlaceholder(stackPython ?? envPython, routeId);
+  }
+  return envPython;
+}
+
+export type InstallAndExportStrategy = "export-direct" | "stream-install" | "route-setup";
+
+/**
+ * Route an Install-and-Export consent action to the enforcement that owns it.
+ * Ready routes export directly. Ultralytics installs with a managed python
+ * stream into it; without one they delegate to route-owned setup, which
+ * resolves a real bootstrap and owns the Python-required dialog. RF-DETR
+ * installs always delegate to route-owned setup: install_dependencies probes
+ * its python first, so it must never receive a backend placeholder, and the
+ * stack (not the Ultralytics environment) is the only valid target.
+ */
+export function getInstallAndExportStrategy(
+  providerId: ProviderId,
+  missingCount: number,
+  hasPython: boolean,
+): InstallAndExportStrategy {
+  if (missingCount === 0) return "export-direct";
+  if (providerId === "rfdetr" || !hasPython) return "route-setup";
+  return "stream-install";
+}
+
+export type SourceSelection =
+  | { status: "empty" }
+  | { status: "rejected"; error: string }
+  | { status: "accepted"; path: string };
+
+/**
+ * Validate a model file choice against the chosen provider. Pure: upload
+ * alone never creates an environment or opens the Python-required dialog.
+ */
+export function validateSourceSelection(path: string, provider: ProviderSpec): SourceSelection {
+  const trimmed = path.trim();
+  if (!trimmed) return { status: "empty" };
+  if (!hasAllowedSourceExtension(trimmed, provider)) {
+    return {
+      status: "rejected",
+      error: `${provider.displayName} accepts ${provider.sourceExtensions.join(", ")} files only.`,
+    };
+  }
+  return { status: "accepted", path: trimmed };
+}
+
+export interface InitialWorkspaceSettings {
+  pythonOverride: string;
+  outputDirOverride: string;
+  outputDirInput: string;
+  publishOverride: string | undefined;
+}
+
+/**
+ * Restore persisted Python and output directory choices on workspace mount.
+ * Pure projection of the mount effect below, so migration preserves both.
+ * The legacy setup flag stays readable on settings objects but is ignored.
+ */
+export function resolveInitialWorkspaceSettings(settings: {
+  setup_complete?: boolean;
+  python_path_override?: string | null;
+  output_dir_override?: string | null;
+} | null): InitialWorkspaceSettings {
+  const pythonOverride = settings?.python_path_override || "";
+  const outputDirOverride = settings?.output_dir_override || "";
+  return {
+    pythonOverride,
+    outputDirOverride,
+    outputDirInput: outputDirOverride,
+    publishOverride: pythonOverride.trim() || undefined,
+  };
 }
 
 /**
@@ -1210,7 +1292,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     cleanupAllowed: boolean;
     hasPythonOverride: boolean;
     removesLastManagedRuntime: boolean;
-    willReturnToSetup: boolean;
     isBulkCleanup: boolean;
   } | null>(null);
 
@@ -1666,14 +1747,13 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
 
     loadSettings()
       .then((settings) => {
-        const override = settings.python_path_override || "";
-        if (override) setPythonOverride(override);
-        const outOverride = settings.output_dir_override || "";
-        if (outOverride) {
-          setOutputDirOverride(outOverride);
-          setOutputDirInput(outOverride);
+        const initial = resolveInitialWorkspaceSettings(settings);
+        if (initial.pythonOverride) setPythonOverride(initial.pythonOverride);
+        if (initial.outputDirOverride) {
+          setOutputDirOverride(initial.outputDirOverride);
+          setOutputDirInput(initial.outputDirInput);
         }
-        return environmentPublisher.publish(override.trim() || undefined);
+        return environmentPublisher.publish(initial.publishOverride);
       })
       .catch((e: unknown) => setEnvError(String(e)));
     void getManagedRuntimeRebuildEligibility().then(setManagedRuntimeUpgrade).catch(() => setManagedRuntimeUpgrade(null));
@@ -2401,9 +2481,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     const activeEnv = envOverride ?? envInfo;
     // Ticket 12: RF-DETR exports resolve to the selected stack inside the
     // backend, so they must not require the Ultralytics managed environment.
-    const exportPython = selectedProviderId === "rfdetr"
-      ? resolveRfDetrExportPython(activeEnv?.python_path ?? null, rfdetrSelectedStackPython, selectedRoute.id)
-      : activeEnv?.python_path ?? null;
+    const exportPython = resolveExportPython(
+      selectedProviderId,
+      activeEnv?.python_path ?? null,
+      rfdetrSelectedStackPython,
+      selectedRoute.id,
+    );
     if (!sourcePath || !exportPython) return;
     if (selectedProviderId === "ultralytics" && !activeEnv?.yolo_path) {
       setInvokeError("YOLO CLI not found. Install the Ultralytics runtime or re-detect the environment.");
@@ -2522,9 +2605,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Export handler — gates on missing deps before starting
   const handleExport = async () => {
     if (blockOnSetupConflict(setInvokeError)) return;
-    const exportPython = selectedProviderId === "rfdetr"
-      ? resolveRfDetrExportPython(envInfo?.python_path ?? null, rfdetrSelectedStackPython, selectedRoute.id)
-      : envInfo?.python_path ?? null;
+    const exportPython = resolveExportPython(
+      selectedProviderId,
+      envInfo?.python_path ?? null,
+      rfdetrSelectedStackPython,
+      selectedRoute.id,
+    );
     if (cleanupBusy || !sourcePath || !exportPython || exportStatus === "running" || exportStatus === "starting") return;
     const incompatibleMessage = getIncompatibleExportMessage(
       selectedRoute,
@@ -2591,10 +2677,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       setInvokeError("Another runtime operation is in progress. Wait for it to finish before installing dependencies.");
       return;
     }
-    const pythonPath = selectedProviderId === "rfdetr"
-      ? resolveRfDetrExportPython(envInfo?.python_path ?? null, rfdetrSelectedStackPython, selectedRoute.id)
-      : envInfo?.python_path ?? null;
-    if (!pythonPath) return;
     const incompatibleMessage = getIncompatibleExportMessage(
       selectedRoute,
       appPlatform.os,
@@ -2632,6 +2714,27 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       return;
     }
 
+    // Installs without a valid target belong to route-owned setup: it
+    // resolves a real bootstrap, owns the Python-required dialog, and
+    // enforces backend gates. install_dependencies probes its python first,
+    // so it must never receive a backend placeholder (RF-DETR), and a
+    // missing Ultralytics python delegates the same way instead of silently
+    // returning.
+    if (
+      getInstallAndExportStrategy(
+        selectedProviderId,
+        missingPkgs.length,
+        (envInfo?.python_path ?? null) !== null,
+      ) === "route-setup"
+    ) {
+      setInstallPhase("idle");
+      if (selectedProviderId === "rfdetr") await runRfDetrRouteSetup(selectedRoute.id);
+      else await runUltralyticsRouteSetup(selectedRoute.id);
+      return;
+    }
+
+    const pythonPath = envInfo?.python_path ?? null;
+    if (!pythonPath) return;
     setInstallPhase("installing");
     setLogLines([]);
 
@@ -2803,18 +2906,20 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     resetExportStateForProvider(providerId);
   };
 
-  // File select — validate extension, then advance to formats view
+  // File select — validate extension, then advance to formats view.
+  // Pure validation only: upload alone never creates an environment or opens
+  // the Python-required dialog.
   const handleFileSelect = useCallback((path: string) => {
-    const trimmed = path.trim();
-    if (!trimmed) return;
-    if (!hasAllowedSourceExtension(trimmed, selectedProvider)) {
-      setInvokeError(`${selectedProvider.displayName} accepts ${selectedProvider.sourceExtensions.join(", ")} files only.`);
+    const selection = validateSourceSelection(path, selectedProvider);
+    if (selection.status === "empty") return;
+    if (selection.status === "rejected") {
+      setInvokeError(selection.error);
       setSourcePath("");
       setView("drop");
       return;
     }
     setInvokeError(null);
-    setSourcePath(trimmed);
+    setSourcePath(selection.path);
     if (selectedProvider.id === "rfdetr") {
       resetRfDetrTrust("needs_trust");
       setRfDetrVariantMode("auto");
@@ -3383,7 +3488,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         <div className="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm">
           <div><p className="font-medium">What will be removed</p><p className="text-zinc-600">{cleanupConfirmation.environments.join(", ")}</p></div>
           <div><p className="font-medium">Approx. size</p><p className="text-zinc-600">{cleanupConfirmation.estimatedLogicalBytes === null ? "Unavailable" : formatManagedEnvironmentSize(cleanupConfirmation.estimatedLogicalBytes)}</p></div>
-          <div><p className="font-medium">What happens next</p><p className="text-zinc-600">{cleanupConfirmation.removesLastManagedRuntime && <><strong>This is your last managed runtime.</strong> </>}{cleanupConfirmation.willReturnToSetup ? "Vision Export Studio will return to Setup. You must set up an environment before exporting again." : cleanupConfirmation.removesLastManagedRuntime && cleanupConfirmation.hasPythonOverride ? "Your Python override will stay active. You can continue exporting with it." : cleanupConfirmation.provider === "Ultralytics YOLO" ? "Your Python override will stay active. You can continue exporting with it." : cleanupConfirmation.isBulkCleanup ? "These environments will be set up again when needed." : "This environment will be set up again when needed."}</p></div>
+          <div><p className="font-medium">What happens next</p><p className="text-zinc-600">{cleanupConfirmation.removesLastManagedRuntime && <><strong>This is your last managed runtime.</strong> </>}{cleanupConfirmation.removesLastManagedRuntime && cleanupConfirmation.hasPythonOverride ? "Your Python override will stay active. You can continue exporting with it." : cleanupConfirmation.provider === "Ultralytics YOLO" ? "Your Python override will stay active. You can continue exporting with it." : cleanupConfirmation.isBulkCleanup ? "These environments will be set up again when needed." : "This environment will be set up again when needed."}</p></div>
           <div><p className="font-medium">What stays safe</p><p className="text-zinc-600">Your models, exported files, and settings will not be deleted.</p></div>
           <details>
             <summary className="cursor-pointer font-medium">Affected export formats ({cleanupConfirmation.routeIds.length})</summary>
