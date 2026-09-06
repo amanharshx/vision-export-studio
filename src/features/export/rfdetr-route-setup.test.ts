@@ -516,7 +516,7 @@ describe("shouldResumeRfDetrInspectionAfterSetup (ticket 11)", () => {
     ).toBe(false);
   });
 
-  test("resumes in the background even after navigating to another route", () => {
+  test("suppresses a background completion that finished for another route", () => {
     expect(
       shouldResumeRfDetrInspectionAfterSetup({
         setupSucceeded: true,
@@ -526,13 +526,13 @@ describe("shouldResumeRfDetrInspectionAfterSetup (ticket 11)", () => {
         trust: trustedCheckpoint("/tmp/model.pth"),
         inspectStatus: "failed",
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  test("never resumes without setup success, trust, or a failed inspection", () => {
+  test("never resumes without setup success, trust, a known setup route, or a failed inspection", () => {
     const base = {
       setupSucceeded: true,
-      setupRouteId: "rfdetr.pth.onnx",
+      setupRouteId: "rfdetr.pth.onnx" as string | null,
       selectedRouteId: "rfdetr.pth.onnx",
       sourcePath: "/tmp/model.pth",
       trust: trustedCheckpoint("/tmp/model.pth"),
@@ -540,6 +540,10 @@ describe("shouldResumeRfDetrInspectionAfterSetup (ticket 11)", () => {
     };
     expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, setupSucceeded: false })).toBe(false);
     expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, trust: null })).toBe(false);
+    expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, setupRouteId: null })).toBe(false);
+    expect(
+      shouldResumeRfDetrInspectionAfterSetup({ ...base, setupRouteId: "rfdetr.pth.executorch" }),
+    ).toBe(false);
     expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, inspectStatus: "detected" })).toBe(false);
     expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, inspectStatus: "inspecting" })).toBe(false);
   });
@@ -590,6 +594,17 @@ describe("isRfDetrInspectionReadyForExport (ticket 11)", () => {
     ).toBe(true);
   });
 
+  test("stays not ready when success omits the variant (no fallback without known variant)", () => {
+    expect(
+      isRfDetrInspectionReadyForExport({
+        status: "detected",
+        result: inspectSuccess({ class_symbol: null }),
+        variantMode: "auto",
+        manualClassSymbol: "",
+      }),
+    ).toBe(false);
+  });
+
   test("plus-only checkpoints stay blocked even with a manual variant", () => {
     const plus = inspectFailure({
       class_symbol: "RFDETRXLarge",
@@ -637,7 +652,7 @@ describe("inspection follow-up phase (ticket 11)", () => {
   });
 
   test("follow-up copy has no percentage and keeps browsing guidance", () => {
-    const copy = getRfDetrInspectionFollowUpCopy("inspecting-checkpoint");
+    const copy = getRfDetrInspectionFollowUpCopy();
     expect(copy.title).toContain("Inspecting");
     expect(copy.body).not.toContain("%");
     expect(copy.body).toContain("ready");

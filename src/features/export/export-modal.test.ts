@@ -246,9 +246,7 @@ describe("RfDetrSetupPanel", () => {
 
 describe("RfDetrInspectionFollowUpPanel (ticket 11)", () => {
   test("names the inspecting phase without a percentage", () => {
-    const html = renderToStaticMarkup(
-      React.createElement(RfDetrInspectionFollowUpPanel, { phase: "inspecting-checkpoint" }),
-    );
+    const html = renderToStaticMarkup(React.createElement(RfDetrInspectionFollowUpPanel));
 
     expect(html).toContain("Inspecting checkpoint");
     expect(html).not.toContain("%");
@@ -283,5 +281,34 @@ describe("RfDetrInspectionFailurePanel (ticket 11)", () => {
 
     expect(html).toContain("Checkpoint inspection failed");
     expect(html).not.toContain("Retry inspection");
+  });
+
+  test("offers a file action alongside retry on load failure", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RfDetrInspectionFailurePanel, {
+        error: "torch load boom",
+        canRetry: true,
+        onRetry: () => {},
+        showFileAction: true,
+        onChooseDifferentFile: () => {},
+      }),
+    );
+
+    expect(html).toContain("Retry inspection");
+    expect(html).toContain("Choose different file");
+  });
+
+  test("hides the file action when it is not offered", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RfDetrInspectionFailurePanel, {
+        error: "torch load boom",
+        canRetry: true,
+        onRetry: () => {},
+        showFileAction: false,
+      }),
+    );
+
+    expect(html).toContain("Retry inspection");
+    expect(html).not.toContain("Choose different file");
   });
 });

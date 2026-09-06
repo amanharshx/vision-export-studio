@@ -189,9 +189,9 @@ export function getRfDetrSetupVerifyError(results: DepCheckResult[] | null): str
 
 export interface RfDetrInspectionResumeInput {
   setupSucceeded: boolean;
-  /** Route the finished setup task ran for; kept for background auditing. */
+  /** Route the finished setup task ran for; null when unknown (never resumes). */
   setupRouteId: string | null;
-  /** Currently selected route; a mismatch must not suppress the resume. */
+  /** Currently selected route; must match the setup route. */
   selectedRouteId: string;
   sourcePath: string;
   trust: RfDetrTrustedCheckpoint | null;
@@ -199,17 +199,18 @@ export interface RfDetrInspectionResumeInput {
 }
 
 /**
- * Resume eligibility after successful route setup. True only when the same
- * trusted checkpoint remains selected and its inspection previously failed
- * (typically for want of a healthy stack). A changed or cleared model
- * suppresses the resume so an old checkpoint is never inspected. A route
- * mismatch does not suppress: setup may finish in the background while the
- * user browses another route, and inspection is checkpoint-global.
+ * Resume eligibility after successful route setup. True only when the setup
+ * that just finished ran for the still-selected route, the same trusted
+ * checkpoint remains selected, and its inspection previously failed
+ * (typically for want of a healthy stack). A changed or cleared model, an
+ * unknown setup route, or a route mismatch suppresses the resume so an old
+ * checkpoint is never inspected and another route's state is never touched.
  */
 export function shouldResumeRfDetrInspectionAfterSetup(
   input: RfDetrInspectionResumeInput,
 ): boolean {
   if (!input.setupSucceeded) return false;
+  if (input.setupRouteId == null || input.setupRouteId !== input.selectedRouteId) return false;
   if (!input.sourcePath) return false;
   if (!input.trust) return false;
   if (input.trust.sourcePath !== input.sourcePath) return false;
@@ -226,22 +227,29 @@ export interface RfDetrInspectionReadinessInput {
 /**
  * Inspection readiness for export configuration. Plus-only checkpoints are
  * never ready, even with an explicit manual variant. Otherwise ready when
- * the checkpoint was detected (including incomplete geometry with known
- * constraints, which the options panel presents as a labelled fallback) or
- * when a manual variant was explicitly selected after a load failure.
+ * the checkpoint was detected with a known variant (including incomplete
+ * geometry with known constraints, which the options panel presents as a
+ * labelled fallback) or when a manual variant was explicitly selected after
+ * a load failure. Unknown variants never unlock variant-level fallback.
  */
 export function isRfDetrInspectionReadyForExport(
   input: RfDetrInspectionReadinessInput,
 ): boolean {
   if (getRfDetrPlusBlockReason(input.result)) return false;
   if (input.variantMode === "manual") return input.manualClassSymbol.trim().length > 0;
-  return input.status === "detected" && Boolean(input.result?.success);
+  if (input.status !== "detected") return false;
+  return canUseRfDetrVariantFallback({
+    result: input.result,
+    variantMode: input.variantMode,
+    manualClassSymbol: input.manualClassSymbol,
+  });
 }
 
 /**
  * Hide export configuration until both the route environment and the
- * checkpoint inspection are ready. Setup unreadiness hides first; a Ready
- * environment still hides while inspection has not produced usable data.
+ * checkpoint inspection are ready. Setup unreadiness hides first (shared
+ * with the setup-only primitive); a Ready environment still hides while
+ * inspection has not produced usable data.
  */
 export function shouldHideRfDetrExportControlsUntilInspected(
   providerId: ProviderId,
@@ -249,7 +257,7 @@ export function shouldHideRfDetrExportControlsUntilInspected(
   inspectionReady: boolean,
 ): boolean {
   if (providerId !== "rfdetr") return false;
-  if (setupStatus !== "ready") return true;
+  if (shouldHideRfDetrExportControls(providerId, setupStatus)) return true;
   return !inspectionReady;
 }
 
@@ -269,9 +277,7 @@ export function getRfDetrInspectionFollowUpPhase(
   return null;
 }
 
-export function getRfDetrInspectionFollowUpCopy(
-  phase: Exclude<RfDetrInspectionFollowUpPhase, null>,
-): RfDetrRouteSetupCopy {
+export function getRfDetrInspectionFollowUpCopy(): RfDetrRouteSetupCopy {
   return {
     title: "Inspecting checkpoint…",
     body: "The environment is ready. Inspecting the trusted checkpoint to load model details. You can keep browsing; this continues in the background.",

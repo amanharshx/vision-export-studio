@@ -83,7 +83,7 @@ import {
 import type { UpdaterController } from "@/features/updater/use-updater-controller";
 
 import { DropZone } from "./drop-zone";
-import { ExportModal, type RfDetrSetupModalState, type UltralyticsSetupModalState } from "./export-modal";
+import { ExportModal, type RfDetrInspectionModalState, type RfDetrSetupModalState, type UltralyticsSetupModalState } from "./export-modal";
 import { RouteGrid } from "./route-grid";
 import {
   emptyRouteDepCheck,
@@ -633,23 +633,6 @@ export function applyDetectedRouteOptionsToProviderRoutes(
     }
   }
   return next;
-}
-
-function isRfDetrExportReady(
-  inspectStatus: RfDetrInspectStatus,
-  variantMode: RfDetrVariantMode,
-  manualClassSymbol: string,
-  inspectResult: RfDetrInspectResult | null = null,
-): boolean {
-  // Single readiness policy shared by export enforcement and export-control
-  // visibility (ticket 11): Plus stays blocked, manual requires an explicit
-  // symbol, auto requires a successful detection.
-  return isRfDetrInspectionReadyForExport({
-    status: inspectStatus,
-    result: inspectResult,
-    variantMode,
-    manualClassSymbol,
-  });
 }
 
 export function getRfDetrExportImgszError(
@@ -1500,6 +1483,19 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   const rfdetrInspectionFailure = selectedProviderId === "rfdetr"
     ? getRfDetrInspectionFailureActions({ status: rfdetrInspectStatus, result: rfdetrInspectResult })
     : { canRetry: false, showManualVariant: false, showFileAction: false };
+  // Single inspection object for the export modal (mirrors the setup-state
+  // convention): the modal takes one inspection bundle plus action
+  // callbacks instead of a clump of related props.
+  const rfdetrInspectionModalState: RfDetrInspectionModalState | null = selectedProviderId === "rfdetr"
+    ? {
+      status: rfdetrInspectStatus,
+      error: rfdetrInspectResult?.error ?? null,
+      ready: rfdetrInspectionReady,
+      followUp: rfdetrInspectionFollowUp,
+      canRetry: rfdetrInspectionFailure.canRetry,
+      showFileAction: rfdetrInspectionFailure.showFileAction,
+    }
+    : null;
   const rfdetrInspectionSummary = selectedProviderId === "rfdetr"
     ? formatRfDetrInspectionSummary(rfdetrInspectResult)
     : null;
@@ -1769,10 +1765,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       await scanProviderEnvironments("rfdetr").catch(() => {});
       // Freshness ownership: the selection may have moved while awaiting.
       // Only the route still selected may publish into the single slot;
-      // the selection effect owns the new route's own check. Inspection
-      // below is file-scoped instead: a background completion still resumes
-      // while the user browses another route, as long as the same trusted
-      // checkpoint remains selected.
+      // the selection effect owns the new route's own check. The inspection
+      // resume below is likewise route-scoped: a setup that finished for
+      // another route never inspects into this selection.
       const currentSelection = selectedRouteIdRef.current;
       const routeId = rfdetrTerminalRoute ?? currentSelection;
       if (routeId === currentSelection) {
@@ -1785,9 +1780,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       }
       // Ticket 11 resume: the selected stack is ready, so inspect the same
       // previously trusted checkpoint and move the route into export
-      // configuration. A changed or cleared model suppresses the resume.
-      // The environment stays Ready when this inspection fails, and no
-      // export ever starts here.
+      // configuration. A changed or cleared model, an unknown setup route,
+      // or a route mismatch suppresses the resume. The environment stays
+      // Ready when this inspection fails, and no export ever starts here.
       const path = sourcePathRef.current;
       const trust = rfdetrTrustRef.current;
       const inspectStatus = rfdetrInspectStatusRef.current;
@@ -2346,7 +2341,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         setInvokeError(plusBlock);
         return;
       }
-      if (!isRfDetrExportReady(rfdetrInspectStatus, rfdetrVariantMode, rfdetrManualClassSymbol, rfdetrInspectResult)) {
+      if (!isRfDetrInspectionReadyForExport({
+        status: rfdetrInspectStatus,
+        result: rfdetrInspectResult,
+        variantMode: rfdetrVariantMode,
+        manualClassSymbol: rfdetrManualClassSymbol,
+      })) {
         setInvokeError("Inspect RF-DETR checkpoint successfully or select a manual variant before export.");
         return;
       }
@@ -3518,14 +3518,16 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           requiredMultiple: rfdetrInspectResult?.required_multiple ?? null,
           resolutionSource: rfdetrInspectResult?.resolution_source ?? null,
         } : null}
-        rfdetrInspectStatus={selectedProviderId === "rfdetr" ? rfdetrInspectStatus : null}
-        rfdetrInspectError={selectedProviderId === "rfdetr" ? rfdetrInspectResult?.error ?? null : null}
-        rfdetrInspectionReady={selectedProviderId === "rfdetr" ? rfdetrInspectionReady : null}
-        rfdetrInspectionFollowUp={selectedProviderId === "rfdetr" ? rfdetrInspectionFollowUp : null}
-        rfdetrInspectionFailure={selectedProviderId === "rfdetr" ? rfdetrInspectionFailure : null}
+        rfdetrInspection={rfdetrInspectionModalState}
         onRetryRfDetrInspection={selectedProviderId === "rfdetr" && rfdetrTrust && sourcePath && rfdetrTrust.sourcePath === sourcePath
           ? () => {
             void inspectWithTrustedCheckpoint(sourcePath, rfdetrSelectedStackKey, rfdetrTrust);
+          }
+          : undefined}
+        onChooseDifferentRfDetrFile={selectedProviderId === "rfdetr"
+          ? () => {
+            setDialogOpen(false);
+            handleClearFile();
           }
           : undefined}
       />
