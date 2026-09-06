@@ -390,46 +390,18 @@ export function getManagedEnvironmentCleanupState({
 }
 
 /**
- * Backend placeholder for mapped RF-DETR routes: check_dependencies and
- * start_export resolve those routes to their isolated stack interpreter and
- * never consult the passed value, which only has to be non-empty. Never pass
- * this to install_dependencies, which probes the path first.
+ * Resolve the interpreter argument for one route's check or export call.
+ * Ultralytics passes its managed python (null fails closed). Mapped RF-DETR
+ * routes pass the route id: both backend commands resolve the route's stack
+ * themselves and never consult the passed value, which only has to be
+ * non-empty — so a missing Ultralytics environment never blocks RF-DETR.
  */
-function rfdetrBackendPlaceholder(candidate: string | null, routeId: string): string {
-  return candidate ?? routeId;
-}
-
-/**
- * Resolve the interpreter to check one route's dependencies against.
- * Ultralytics needs its own managed python; RF-DETR resolves to its isolated
- * stack inside the backend, so a missing Ultralytics environment must not
- * block the check.
- */
-export function resolveRouteDependencyCheckPython(
+export function resolveRoutePython(
   providerId: ProviderId,
   envPython: string | null,
   routeId: string,
 ): string | null {
-  if (providerId === "rfdetr") return rfdetrBackendPlaceholder(envPython, routeId);
-  return envPython;
-}
-
-/**
- * Resolve the interpreter to pass for an export. Ultralytics uses its
- * managed python; RF-DETR resolves to the selected stack inside the backend,
- * so an existing stack works without the Ultralytics environment or system
- * Python. Check and export calls only: installs must resolve a real
- * interpreter through route-owned setup instead.
- */
-export function resolveExportPython(
-  providerId: ProviderId,
-  envPython: string | null,
-  stackPython: string | null,
-  routeId: string,
-): string | null {
-  if (providerId === "rfdetr") {
-    return rfdetrBackendPlaceholder(stackPython ?? envPython, routeId);
-  }
+  if (providerId === "rfdetr") return routeId;
   return envPython;
 }
 
@@ -1479,13 +1451,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // never a key). Null means the backend-owned mapping has not resolved
   // yet: the modal copy falls back to naming the route's environment, and
   // Remove/Recreate stay guarded until a real stack key exists.
-  const rfdetrSelectedStack = stackEnvironments.find((stack) =>
+  const rfdetrSelectedStackKey = stackEnvironments.find((stack) =>
     stack.route_ids.includes(selectedRouteId),
-  ) ?? null;
-  const rfdetrSelectedStackKey = rfdetrSelectedStack?.key ?? null;
-  // Ticket 12: the selected stack's interpreter lets RF-DETR work without the
-  // Ultralytics managed environment or system Python.
-  const rfdetrSelectedStackPython = rfdetrSelectedStack?.python_path ?? null;
+  )?.key ?? null;
   const rfdetrTaskStackKey = rfdetrTaskAppliesToSelectedRoute
     ? rfdetrSetupTask?.environmentKey ?? null
     : null;
@@ -1755,7 +1723,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // RF-DETR checks resolve inside the backend to the selected stack, so a
   // missing Ultralytics environment never blocks them (ticket 12).
   useEffect(() => {
-    const pythonPath = resolveRouteDependencyCheckPython(
+    const pythonPath = resolveRoutePython(
       selectedProviderId,
       envInfo?.python_path ?? null,
       selectedRouteId,
@@ -2414,10 +2382,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     const activeEnv = envOverride ?? envInfo;
     // Ticket 12: RF-DETR exports resolve to the selected stack inside the
     // backend, so they must not require the Ultralytics managed environment.
-    const exportPython = resolveExportPython(
+    const exportPython = resolveRoutePython(
       selectedProviderId,
       activeEnv?.python_path ?? null,
-      rfdetrSelectedStackPython,
       selectedRoute.id,
     );
     if (!sourcePath || !exportPython) return;
@@ -2538,10 +2505,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Export handler — gates on missing deps before starting
   const handleExport = async () => {
     if (blockOnSetupConflict(setInvokeError)) return;
-    const exportPython = resolveExportPython(
+    const exportPython = resolveRoutePython(
       selectedProviderId,
       envInfo?.python_path ?? null,
-      rfdetrSelectedStackPython,
       selectedRoute.id,
     );
     if (cleanupBusy || !sourcePath || !exportPython || exportStatus === "running" || exportStatus === "starting") return;
