@@ -16,7 +16,6 @@ import {
   shouldHideRfDetrExportControls,
   shouldResumeRfDetrInspectionAfterSetup,
   isRfDetrInspectionReadyForExport,
-  shouldHideRfDetrExportControlsUntilInspected,
   getRfDetrInspectionFollowUpPhase,
   getRfDetrInspectionFollowUpCopy,
   getRfDetrInspectionFailureActions,
@@ -477,6 +476,11 @@ function inspectFailure(overrides: Record<string, unknown> = {}) {
 }
 
 describe("shouldResumeRfDetrInspectionAfterSetup (ticket 11)", () => {
+  const liveSession = {
+    terminalSessionId: "terminal-1" as string | null,
+    consumedSessionId: null as string | null,
+  };
+
   test("resumes the same trusted checkpoint after successful setup", () => {
     expect(
       shouldResumeRfDetrInspectionAfterSetup({
@@ -486,6 +490,7 @@ describe("shouldResumeRfDetrInspectionAfterSetup (ticket 11)", () => {
         sourcePath: "/tmp/model.pth",
         trust: trustedCheckpoint("/tmp/model.pth"),
         inspectStatus: "failed",
+        ...liveSession,
       }),
     ).toBe(true);
   });
@@ -499,6 +504,7 @@ describe("shouldResumeRfDetrInspectionAfterSetup (ticket 11)", () => {
         sourcePath: "/tmp/other.pth",
         trust: trustedCheckpoint("/tmp/model.pth"),
         inspectStatus: "failed",
+        ...liveSession,
       }),
     ).toBe(false);
   });
@@ -512,6 +518,7 @@ describe("shouldResumeRfDetrInspectionAfterSetup (ticket 11)", () => {
         sourcePath: "",
         trust: trustedCheckpoint("/tmp/model.pth"),
         inspectStatus: "failed",
+        ...liveSession,
       }),
     ).toBe(false);
   });
@@ -525,6 +532,7 @@ describe("shouldResumeRfDetrInspectionAfterSetup (ticket 11)", () => {
         sourcePath: "/tmp/model.pth",
         trust: trustedCheckpoint("/tmp/model.pth"),
         inspectStatus: "failed",
+        ...liveSession,
       }),
     ).toBe(false);
   });
@@ -537,6 +545,8 @@ describe("shouldResumeRfDetrInspectionAfterSetup (ticket 11)", () => {
       sourcePath: "/tmp/model.pth",
       trust: trustedCheckpoint("/tmp/model.pth"),
       inspectStatus: "failed" as const,
+      terminalSessionId: "terminal-1" as string | null,
+      consumedSessionId: null as string | null,
     };
     expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, setupSucceeded: false })).toBe(false);
     expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, trust: null })).toBe(false);
@@ -546,6 +556,51 @@ describe("shouldResumeRfDetrInspectionAfterSetup (ticket 11)", () => {
     ).toBe(false);
     expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, inspectStatus: "detected" })).toBe(false);
     expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, inspectStatus: "inspecting" })).toBe(false);
+  });
+
+  test("does not resume the same terminal session twice", () => {
+    expect(
+      shouldResumeRfDetrInspectionAfterSetup({
+        setupSucceeded: true,
+        setupRouteId: "rfdetr.pth.onnx",
+        selectedRouteId: "rfdetr.pth.onnx",
+        sourcePath: "/tmp/model.pth",
+        trust: trustedCheckpoint("/tmp/model.pth"),
+        inspectStatus: "failed",
+        terminalSessionId: "terminal-1",
+        consumedSessionId: "terminal-1",
+      }),
+    ).toBe(false);
+  });
+
+  test("resumes a new terminal session after consuming the previous one", () => {
+    expect(
+      shouldResumeRfDetrInspectionAfterSetup({
+        setupSucceeded: true,
+        setupRouteId: "rfdetr.pth.onnx",
+        selectedRouteId: "rfdetr.pth.onnx",
+        sourcePath: "/tmp/model.pth",
+        trust: trustedCheckpoint("/tmp/model.pth"),
+        inspectStatus: "failed",
+        terminalSessionId: "terminal-2",
+        consumedSessionId: "terminal-1",
+      }),
+    ).toBe(true);
+  });
+
+  test("never resumes when the terminal session is unknown", () => {
+    expect(
+      shouldResumeRfDetrInspectionAfterSetup({
+        setupSucceeded: true,
+        setupRouteId: "rfdetr.pth.onnx",
+        selectedRouteId: "rfdetr.pth.onnx",
+        sourcePath: "/tmp/model.pth",
+        trust: trustedCheckpoint("/tmp/model.pth"),
+        inspectStatus: "failed",
+        terminalSessionId: null,
+        consumedSessionId: null,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -627,19 +682,6 @@ describe("isRfDetrInspectionReadyForExport (ticket 11)", () => {
         manualClassSymbol: "",
       }),
     ).toBe(false);
-  });
-});
-
-describe("shouldHideRfDetrExportControlsUntilInspected (ticket 11)", () => {
-  test("hides until both setup and inspection are ready", () => {
-    expect(shouldHideRfDetrExportControlsUntilInspected("rfdetr", "not-set-up", false)).toBe(true);
-    expect(shouldHideRfDetrExportControlsUntilInspected("rfdetr", "ready", false)).toBe(true);
-    expect(shouldHideRfDetrExportControlsUntilInspected("rfdetr", "ready", true)).toBe(false);
-    expect(shouldHideRfDetrExportControlsUntilInspected("rfdetr", "setting-up", true)).toBe(true);
-  });
-
-  test("leaves other providers untouched", () => {
-    expect(shouldHideRfDetrExportControlsUntilInspected("ultralytics", "ready", false)).toBe(false);
   });
 });
 

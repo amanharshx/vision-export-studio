@@ -196,21 +196,31 @@ export interface RfDetrInspectionResumeInput {
   sourcePath: string;
   trust: RfDetrTrustedCheckpoint | null;
   inspectStatus: RfDetrInspectStatus;
+  /** Terminal setup session being handled; null never resumes. */
+  terminalSessionId: string | null;
+  /** Session already consumed by a previous resume attempt. */
+  consumedSessionId: string | null;
 }
 
 /**
  * Resume eligibility after successful route setup. True only when the setup
  * that just finished ran for the still-selected route, the same trusted
- * checkpoint remains selected, and its inspection previously failed
- * (typically for want of a healthy stack). A changed or cleared model, an
- * unknown setup route, or a route mismatch suppresses the resume so an old
- * checkpoint is never inspected and another route's state is never touched.
+ * checkpoint remains selected, its inspection previously failed (typically
+ * for want of a healthy stack), and this terminal session has not already
+ * been consumed. A changed or cleared model, an unknown setup route, a
+ * route mismatch, or a repeat visit of the same session suppresses the
+ * resume so an old checkpoint is never inspected, another route's state is
+ * never touched, and one completed setup never retries inspection by
+ * itself.
  */
 export function shouldResumeRfDetrInspectionAfterSetup(
   input: RfDetrInspectionResumeInput,
 ): boolean {
   if (!input.setupSucceeded) return false;
   if (input.setupRouteId == null || input.setupRouteId !== input.selectedRouteId) return false;
+  if (input.terminalSessionId == null || input.terminalSessionId === input.consumedSessionId) {
+    return false;
+  }
   if (!input.sourcePath) return false;
   if (!input.trust) return false;
   if (input.trust.sourcePath !== input.sourcePath) return false;
@@ -243,22 +253,6 @@ export function isRfDetrInspectionReadyForExport(
     variantMode: input.variantMode,
     manualClassSymbol: input.manualClassSymbol,
   });
-}
-
-/**
- * Hide export configuration until both the route environment and the
- * checkpoint inspection are ready. Setup unreadiness hides first (shared
- * with the setup-only primitive); a Ready environment still hides while
- * inspection has not produced usable data.
- */
-export function shouldHideRfDetrExportControlsUntilInspected(
-  providerId: ProviderId,
-  setupStatus: RfDetrRouteSetupStatus,
-  inspectionReady: boolean,
-): boolean {
-  if (providerId !== "rfdetr") return false;
-  if (shouldHideRfDetrExportControls(providerId, setupStatus)) return true;
-  return !inspectionReady;
 }
 
 export type RfDetrInspectionFollowUpPhase = "inspecting-checkpoint" | null;

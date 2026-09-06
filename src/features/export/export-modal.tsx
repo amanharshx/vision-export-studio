@@ -36,7 +36,7 @@ import {
 import {
   getRfDetrRouteSetupCopy,
   getRfDetrInspectionFollowUpCopy,
-  shouldHideRfDetrExportControlsUntilInspected,
+  shouldHideRfDetrExportControls,
   type RfDetrInspectionFailureActions,
   type RfDetrInspectionFollowUpPhase,
   type RfDetrRouteSetupStatus,
@@ -112,6 +112,25 @@ export interface RfDetrInspectionModalState {
 }
 
 type FooterAction = "cancel" | "export" | "export_again" | "show_folder" | "starting" | "stop";
+
+export type ExportModalFooterMode = "setup" | "inspection" | "export";
+
+/**
+ * Footer ownership for the export modal. Setup owns the footer while its
+ * own incomplete state hides export controls; otherwise the inspection
+ * follow-up/failure owns it while it hides export; otherwise export owns
+ * it. Setup never shadows the inspection footer: a Ready environment with
+ * pending or failed inspection reaches the inspection branch.
+ */
+export function getExportModalFooterMode(input: {
+  setupMode: boolean;
+  hasSetupAction: boolean;
+  inspectionHidesExport: boolean;
+}): ExportModalFooterMode {
+  if (input.setupMode && input.hasSetupAction) return "setup";
+  if (input.inspectionHidesExport) return "inspection";
+  return "export";
+}
 
 export function getExportFooterActions({
   exportStatus,
@@ -461,15 +480,12 @@ export function ExportModal({
   // setup-only mode until the exact route is ready, then transforms into the
   // export configuration below. Ultralytics owns the shared environment;
   // each RF-DETR route owns its isolated stack. Ticket 11 adds inspection
-  // readiness on top for RF-DETR.
+  // readiness on top for RF-DETR, tracked separately so a Ready environment
+  // with pending or failed inspection never falls back into setup copy.
   const ultralyticsHides = ultralyticsSetup != null
     && shouldHideUltralyticsExportControls(provider.id, ultralyticsSetup.status);
   const rfdetrHides = rfdetrSetup != null
-    && shouldHideRfDetrExportControlsUntilInspected(
-      provider.id,
-      rfdetrSetup.status,
-      inspectionReady,
-    );
+    && shouldHideRfDetrExportControls(provider.id, rfdetrSetup.status);
   const setupMode = ultralyticsHides || rfdetrHides;
   // Inspection follow-up runs beside a Ready environment, never as setup
   // readiness: when setup is Ready but inspection is still running or has
@@ -483,7 +499,16 @@ export function ExportModal({
   const rfdetrFailureActive = isRfDetrRouteReady
     && !inspectionReady
     && rfdetrInspection?.status === "failed";
-  const inspectionHidesExport = rfdetrFollowUpActive || rfdetrFailureActive;
+  // Setup ready without usable inspection data and without a running or
+  // failed inspection (for example before the checkpoint is trusted):
+  // export stays hidden fail-closed, with a pointer back to the workspace
+  // trust step instead of guessed defaults.
+  const rfdetrInspectionRequiredActive = isRfDetrRouteReady
+    && !inspectionReady
+    && !rfdetrFollowUpActive
+    && !rfdetrFailureActive;
+  const inspectionHidesExport = rfdetrFollowUpActive || rfdetrFailureActive
+    || rfdetrInspectionRequiredActive;
   const exportConfigVisible = !setupMode && !inspectionHidesExport;
   // Single footer decision for the failure branch: the body panel owns the
   // same retry rule for its own button; this bool keeps the footer's copy
@@ -508,6 +533,11 @@ export function ExportModal({
     && activeSetup.canSetup
     && !activeSetup.busy;
   const setupStatusForSpinner = activeSetup?.status ?? null;
+  const footerMode = getExportModalFooterMode({
+    setupMode,
+    hasSetupAction: setupPrimary != null,
+    inspectionHidesExport,
+  });
   const rfdetrImgszError =
     provider.id === "rfdetr" && rfdetrSummary
       ? validateRfDetrImgsz(options.imgsz, rfdetrSummary.requiredMultiple ?? null)
@@ -654,7 +684,7 @@ export function ExportModal({
               <RfDetrInspectionFollowUpPanel />
             )}
 
-            {/* Ticket 11 failure: environment stays Ready; offer Retry, file, and manual-variant actions */}
+            {/* Ticket 11 failure: environment stays Ready; Retry, file, and manual-variant recovery */}
             {rfdetrFailureActive && rfdetrInspection && (
               <RfDetrInspectionFailurePanel
                 error={rfdetrInspection.error}
@@ -663,6 +693,18 @@ export function ExportModal({
                 onChooseDifferentFile={onChooseDifferentRfDetrFile}
                 onRevealManualVariant={onRevealRfDetrManualVariant}
               />
+            )}
+
+            {/* Ticket 11 required: environment Ready without inspection data
+                yet (for example before the checkpoint is trusted). Export
+                stays hidden; the workspace trust step owns the next action. */}
+            {rfdetrInspectionRequiredActive && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+                <p className="text-sm font-medium text-amber-900">Checkpoint inspection required</p>
+                <p className="mt-1 text-xs text-amber-900">
+                  Trust the checkpoint in the workspace to inspect it before export. No guessed defaults were applied.
+                </p>
+              </div>
             )}
 
             {/* Export configuration — hidden as one group until setup and inspection are ready */}
@@ -748,7 +790,7 @@ export function ExportModal({
 
         {/* Footer */}
         <div className="flex justify-end gap-2 border-t px-6 py-4">
-          {setupMode && setupPrimary ? (
+          {footerMode === "setup" && setupPrimary ? (
             <>
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
@@ -765,7 +807,7 @@ export function ExportModal({
                 {setupPrimary.label}
               </Button>
             </>
-          ) : inspectionHidesExport ? (
+          ) : footerMode === "inspection" ? (
             <>
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel

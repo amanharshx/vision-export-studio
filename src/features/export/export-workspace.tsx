@@ -103,7 +103,6 @@ import {
   getRfDetrSetupInstallPackages,
   getRfDetrSetupVerifyError,
   isRfDetrInspectionReadyForExport,
-  shouldHideRfDetrExportControlsUntilInspected,
   shouldResumeRfDetrInspectionAfterSetup,
 } from "./rfdetr-route-setup";
 import { rfdetrSetupReadiness, type RfDetrSetupReadiness } from "@/lib/tauri/rfdetr";
@@ -1471,12 +1470,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       manualClassSymbol: rfdetrManualClassSymbol,
     })
     : false;
-  const rfdetrSetupHidesExport = rfdetrRouteSetupStatus != null
-    && shouldHideRfDetrExportControlsUntilInspected(
-      selectedProviderId,
-      rfdetrRouteSetupStatus,
-      rfdetrInspectionReady,
-    );
   const rfdetrInspectionFollowUp = rfdetrRouteSetupStatus != null
     ? getRfDetrInspectionFollowUpPhase(rfdetrRouteSetupStatus, rfdetrInspectStatus)
     : null;
@@ -1516,6 +1509,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   rfdetrTrustRef.current = rfdetrTrust;
   const rfdetrInspectStatusRef = useRef(rfdetrInspectStatus);
   rfdetrInspectStatusRef.current = rfdetrInspectStatus;
+  // Terminal setup sessions already consumed by a resume attempt, so one
+  // completed setup can never trigger inspection repeatedly.
+  const rfdetrResumeConsumedSessionRef = useRef<string | null>(null);
   const currentExportRouteRef = useRef<{ routeId: string; exportFormat: string } | null>(null);
   const currentExportOutputDirRef = useRef<string | null>(null);
 
@@ -1788,13 +1784,17 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       }
       // Ticket 11 resume: the selected stack is ready, so inspect the same
       // previously trusted checkpoint and move the route into export
-      // configuration. A changed or cleared model, an unknown setup route,
-      // or a route mismatch suppresses the resume. The environment stays
-      // Ready when this inspection fails, and no export ever starts here.
+      // configuration. Each terminal session is consumed once: a repeat
+      // visit of the same session (for example navigating away and back
+      // after a failed inspection) never retries by itself. A changed or
+      // cleared model, an unknown setup route, or a route mismatch
+      // suppresses the resume. The environment stays Ready when this
+      // inspection fails, and no export ever starts here.
       const path = sourcePathRef.current;
       const trust = rfdetrTrustRef.current;
       const inspectStatus = rfdetrInspectStatusRef.current;
       const selectionNow = selectedRouteIdRef.current;
+      const consumedBefore = rfdetrResumeConsumedSessionRef.current;
       if (!shouldResumeRfDetrInspectionAfterSetup({
         setupSucceeded: true,
         setupRouteId: rfdetrTerminalRoute,
@@ -1802,14 +1802,35 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         sourcePath: path,
         trust,
         inspectStatus,
+        terminalSessionId: rfdetrTerminalSession,
+        consumedSessionId: consumedBefore,
       })) {
         return;
       }
       if (!trust) return;
+      rfdetrResumeConsumedSessionRef.current = rfdetrTerminalSession;
+      const generationBefore = rfdetrInspectRequestRef.current;
       let current: RfDetrCheckpointIdentity;
       try {
         current = await getRfDetrCheckpointIdentity(path);
       } catch {
+        return;
+      }
+      // Revalidate everything observed before the await: clearing or
+      // changing the file, navigating away, or any trust reset during the
+      // lookup invalidates the inspection generation, and starting now
+      // would mint a fresh generation and resurrect the stale path.
+      if (rfdetrInspectRequestRef.current !== generationBefore) return;
+      if (!shouldResumeRfDetrInspectionAfterSetup({
+        setupSucceeded: true,
+        setupRouteId: rfdetrTerminalRoute,
+        selectedRouteId: selectedRouteIdRef.current,
+        sourcePath: sourcePathRef.current,
+        trust: rfdetrTrustRef.current,
+        inspectStatus: rfdetrInspectStatusRef.current,
+        terminalSessionId: rfdetrTerminalSession,
+        consumedSessionId: consumedBefore,
+      })) {
         return;
       }
       if (!isRfDetrTrustValid(trust, path, current)) {
