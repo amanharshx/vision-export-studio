@@ -8,7 +8,9 @@ use tauri::Emitter;
 use uuid::Uuid;
 
 use crate::commands::bootstrap_python::{resolve_bootstrap_for_runtime, BootstrapPythonResult};
-use crate::commands::managed_environments::{ManagedEnvironments, ULTRALYTICS_MANAGED_KEY};
+use crate::commands::managed_environments::{
+    resolve_target_path, ManagedEnvironments, ULTRALYTICS_MANAGED_KEY,
+};
 use crate::commands::provider_registry::{
     current_host_context, validate_route_platform, HostContext,
 };
@@ -16,9 +18,10 @@ use crate::commands::runtime_operations::{
     emit_after_operation_released, RuntimeOperation, RuntimeOperationCoordinator,
 };
 use crate::commands::setup::{
-    build_venv_command, load_settings, venv_python, venv_yolo, DEFAULT_SETUP_ROUTE_ID,
+    build_venv_command, load_settings, venv_python, venv_python_at, venv_yolo,
+    DEFAULT_SETUP_ROUTE_ID,
 };
-use crate::commands::stack_environments::{stack_for_route, stack_python, stack_venv_dir};
+use crate::commands::stack_environments::{stack_for_route, stack_python};
 
 // ---------------------------------------------------------------------------
 // Runtime version floors
@@ -1381,6 +1384,26 @@ pub struct RfDetrSetupReadiness {
     pub needs_work: bool,
 }
 
+/// Resolve the selected route's stack venv for setup: the route's known
+/// stack key plus the venv directory and interpreter derived through the
+/// managed-environments target owner. That owner rejects symlinked,
+/// escaped, and outside-root targets, so setup readiness, creation, and
+/// installation can never follow a link into a user-owned environment.
+/// Unknown routes are rejected before any filesystem work.
+fn resolve_stack_venv_for_setup(
+    runtime_root: &str,
+    route_id: &str,
+) -> Result<(String, std::path::PathBuf, String), String> {
+    let stack =
+        stack_for_route(route_id).ok_or_else(|| format!("unknown route_id: {}", route_id))?;
+    let mut targets = resolve_target_path(Path::new(runtime_root), stack.key)?;
+    let venv = targets
+        .pop()
+        .expect("known stack resolves exactly one target");
+    let python = venv_python_at(&venv);
+    Ok((stack.key.to_string(), venv, python))
+}
+
 /// Ensure the selected RF-DETR stack environment is usable, creating or
 /// repairing it from the given bootstrap interpreter when it is not.
 ///
@@ -1395,17 +1418,14 @@ fn ensure_rfdetr_stack_environment(
     runtime_root: &str,
     route_id: &str,
 ) -> Result<String, String> {
-    let stack =
-        stack_for_route(route_id).ok_or_else(|| format!("unknown route_id: {}", route_id))?;
-    let stack_python_path =
-        stack_python(runtime_root, route_id).expect("mapped route has Python path");
+    let (stack_key, stack_venv, stack_python_path) =
+        resolve_stack_venv_for_setup(runtime_root, route_id)?;
     if managed_python_usable(&stack_python_path) {
         return Ok(stack_python_path);
     }
     // Backend safety outside the UI: refuse to run venv creation from a
     // non-Python or unusable bootstrap instead of spawning it blindly.
     probe_python_version(bootstrap_python)?;
-    let stack_venv = stack_venv_dir(runtime_root, route_id).expect("mapped route has venv dir");
     if let Some(parent) = stack_venv.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create runtime dir: {}", e))?;
@@ -1415,20 +1435,20 @@ fn ensure_rfdetr_stack_environment(
         .map_err(|e| {
             format!(
                 "failed to create RF-DETR environment '{}': {}",
-                stack.key, e
+                stack_key, e
             )
         })?;
     if !status.success() {
         return Err(format!(
             "failed to create RF-DETR environment '{}': exit code {:?}",
-            stack.key,
+            stack_key,
             status.code()
         ));
     }
     if !managed_python_usable(&stack_python_path) {
         return Err(format!(
             "failed to create RF-DETR environment '{}': managed interpreter still unusable after creation",
-            stack.key
+            stack_key
         ));
     }
     Ok(stack_python_path)
@@ -1447,13 +1467,11 @@ pub async fn rfdetr_setup_readiness(
     if route_id.trim().is_empty() {
         return Err("route_id must not be empty".to_string());
     }
-    let stack =
-        stack_for_route(&route_id).ok_or_else(|| format!("unknown route_id: {}", route_id))?;
     let runtime_root = load_settings(app_handle)?.runtime_dir;
-    let stack_python_path =
-        stack_python(&runtime_root, &route_id).expect("mapped route has Python path");
+    let (stack_key, _venv, stack_python_path) =
+        resolve_stack_venv_for_setup(&runtime_root, &route_id)?;
     Ok(RfDetrSetupReadiness {
-        stack_key: stack.key.to_string(),
+        stack_key,
         needs_work: !managed_python_usable(&stack_python_path),
         stack_python: stack_python_path,
     })
@@ -1972,6 +1990,7 @@ fn check_sys_dep(python: &str, binary_name: &str, install_hint: &str) -> DepChec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::stack_environments::stack_venv_dir;
 
     fn host(os: &'static str, arch: &'static str) -> HostContext<'static> {
         HostContext {
@@ -3776,6 +3795,49 @@ possible problem with your settings or a recent ultralytics package update.\n8.4
 
     #[cfg(unix)]
     #[test]
+    fn rfdetr_setup_target_rejects_symlinked_stack_venv() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!("rfdetr-symlink-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside).expect("create outside dir");
+        std::fs::write(outside.join("marker"), b"user data").expect("write marker");
+        let venv = crate::commands::stack_environments::stack_venv_dir_for_key(
+            Path::new(&runtime),
+            "rfdetr-default",
+        )
+        .expect("known stack");
+        std::fs::create_dir_all(venv.parent().expect("stack parent")).expect("create stack parent");
+        symlink(&outside, &venv).expect("link stack venv outside runtime");
+
+        let error = resolve_stack_venv_for_setup(&runtime, "rfdetr.pth.onnx")
+            .expect_err("symlinked stack must be rejected before any setup work");
+        assert!(error.contains("symlink"), "unexpected error: {error}");
+        assert_eq!(
+            std::fs::read(outside.join("marker")).expect("read marker"),
+            b"user data",
+            "external target must remain untouched"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn rfdetr_setup_target_rejects_unknown_route_without_touching_filesystem() {
+        let runtime = std::env::temp_dir()
+            .join(format!("rfdetr-setup-target-{}", Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned();
+        let error = resolve_stack_venv_for_setup(&runtime, "rfdetr.pth.fake")
+            .expect_err("unknown route must be rejected");
+        assert_eq!(error, "unknown route_id: rfdetr.pth.fake");
+        assert!(
+            !Path::new(&runtime).exists(),
+            "no directory may be created for an unknown route"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn rfdetr_ensure_rejects_unknown_route_before_filesystem_work() {
         let root = std::env::temp_dir().join(format!("rfdetr-unknown-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("create temp root");
@@ -3792,6 +3854,43 @@ possible problem with your settings or a recent ultralytics package update.\n8.4
         assert!(
             !Path::new(&runtime).exists(),
             "no stack directory may be created for an unknown route"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rfdetr_ensure_rejects_symlinked_stack_before_running_bootstrap() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!("rfdetr-ensure-symlink-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside).expect("create outside dir");
+        std::fs::write(outside.join("marker"), b"user data").expect("write marker");
+        let venv = crate::commands::stack_environments::stack_venv_dir_for_key(
+            Path::new(&runtime),
+            "rfdetr-default",
+        )
+        .expect("known stack");
+        std::fs::create_dir_all(venv.parent().expect("stack parent")).expect("create stack parent");
+        symlink(&outside, &venv).expect("link stack venv outside runtime");
+        // A bootstrap that would succeed if invoked: the rejection must
+        // happen before any venv or pip work, so no package can land
+        // outside the managed runtime.
+        let bootstrap = root.join("bootstrap-python");
+        write_python_stub(&bootstrap, true);
+
+        let error = ensure_rfdetr_stack_environment(
+            bootstrap.to_str().expect("bootstrap path"),
+            &runtime,
+            "rfdetr.pth.onnx",
+        )
+        .expect_err("symlinked stack must be rejected before running bootstrap");
+        assert!(error.contains("symlink"), "unexpected error: {error}");
+        assert_eq!(
+            std::fs::read(outside.join("marker")).expect("read marker"),
+            b"user data",
+            "external target must remain untouched"
         );
         std::fs::remove_dir_all(root).expect("remove temp root");
     }

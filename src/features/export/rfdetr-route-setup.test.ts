@@ -12,6 +12,8 @@ import {
   getRfDetrRouteSetupFallbackPackages,
   getRfDetrSetupHostRefusal,
   getRfDetrSetupInstallPackages,
+  getRfDetrSetupVerifyError,
+  rfdetrTerminalAppliesToSelection,
   shouldHideRfDetrExportControls,
 } from "./rfdetr-route-setup";
 
@@ -352,6 +354,47 @@ describe("getRfDetrSetupHostRefusal", () => {
         { results: readyOnnxResults(), routeId: "rfdetr.pth.onnx", error: null, pythonPath: "/tmp/python" },
       ),
     ).toBeNull();
+  });
+});
+
+describe("getRfDetrSetupVerifyError", () => {
+  test("fails when installable packages remain after pip success", () => {
+    expect(
+      getRfDetrSetupVerifyError([
+        { item: "rfdetr[onnx]", status: "missing_package", reason: "still missing", install_hint: 'pip install "rfdetr[onnx]"', install_package: "rfdetr[onnx]" },
+      ]),
+    ).toContain("rfdetr[onnx]");
+  });
+
+  test("passes when only manual requirements remain", () => {
+    expect(
+      getRfDetrSetupVerifyError([
+        { item: "Python 3.12", status: "version_too_old", reason: "TFLite requires Python 3.12.", install_hint: "Select Python 3.12." },
+      ]),
+    ).toBeNull();
+  });
+
+  test("passes for ready results and platform rows", () => {
+    expect(getRfDetrSetupVerifyError(readyOnnxResults())).toBeNull();
+    expect(
+      getRfDetrSetupVerifyError([
+        { item: "platform", status: "platform_unsupported", reason: "TensorRT requires Linux.", install_hint: "TensorRT requires Linux." },
+      ]),
+    ).toBeNull();
+  });
+});
+
+describe("rfdetrTerminalAppliesToSelection", () => {
+  test("applies when the finished task set up the selected route", () => {
+    expect(rfdetrTerminalAppliesToSelection("rfdetr.pth.onnx", "rfdetr.pth.onnx")).toBe(true);
+  });
+
+  test("ignores route-scoped state when another route finished in the background", () => {
+    expect(rfdetrTerminalAppliesToSelection("rfdetr.pth.onnx", "rfdetr.pth.engine")).toBe(false);
+  });
+
+  test("applies legacy routeless tasks to the current selection", () => {
+    expect(rfdetrTerminalAppliesToSelection(null, "rfdetr.pth.onnx")).toBe(true);
   });
 });
 

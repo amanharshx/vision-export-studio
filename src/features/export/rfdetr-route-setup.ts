@@ -15,6 +15,7 @@
 // refusal, hiding, and stack-aware copy.
 
 import type {
+  DepCheckResult,
   InstallableDependency,
   ProviderId,
   RouteSpec,
@@ -161,4 +162,33 @@ export function getRfDetrRouteSetupCopy(
         body: "The dependency check failed. Retry setup to try again.",
       };
   }
+}
+
+/**
+ * Post-install verification for one RF-DETR route's setup: returns an error
+ * message when installable requirements are still unmet after pip success,
+ * so the app-wide task fails instead of reporting Ready. Rows without an
+ * install remedy (manual Python floors, platform locks) are not failures:
+ * the route keeps its distinct manual/unavailable state.
+ */
+export function getRfDetrSetupVerifyError(results: DepCheckResult[] | null): string | null {
+  // Only rows with an install remedy count: manual floors and platform
+  // locks carry no install_package and stay distinct non-failure states.
+  const unmet = getInstallableMissingPackages(results);
+  if (unmet.length === 0) return null;
+  return `RF-DETR dependencies still missing after install: ${unmet.map((pkg) => pkg.package).join(", ")}. Review requirements before export.`;
+}
+
+/**
+ * Whether a finished setup task may publish route-scoped dependency state.
+ * Only the task that set up the currently selected route may touch the
+ * single dependency slot: a background completion for another route must
+ * never wipe the selection's readiness (safe navigation). Stack inventory
+ * and sizes are global and refresh unconditionally.
+ */
+export function rfdetrTerminalAppliesToSelection(
+  terminalRouteId: string | null,
+  selectedRouteId: string,
+): boolean {
+  return (terminalRouteId ?? selectedRouteId) === selectedRouteId;
 }

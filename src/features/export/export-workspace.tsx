@@ -98,9 +98,11 @@ import {
 import {
   getRfDetrSetupHostRefusal,
   getRfDetrSetupInstallPackages,
+  getRfDetrSetupVerifyError,
+  rfdetrTerminalAppliesToSelection,
   shouldHideRfDetrExportControls,
 } from "./rfdetr-route-setup";
-import { rfdetrSetupReadiness, type RfDetrSetupReadiness } from "@/lib/tauri/rfdetr-setup";
+import { rfdetrSetupReadiness, type RfDetrSetupReadiness } from "@/lib/tauri/rfdetr";
 import { getEffectiveHostSupportResult, getHostSupportResult } from "./host-support";
 import { normalizeOptionsForRoute } from "./options/normalize";
 import { validateRfDetrImgsz } from "./rfdetr-image-size";
@@ -1624,8 +1626,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     if (rfdetrTerminalDismissed) return;
     const keys = rfdetrTerminalKey ? [rfdetrTerminalKey as ManagedEnvironmentKey] : ["rfdetr-all" as ManagedEnvironmentKey];
     invalidateManagedEnvironmentSizesForMutation(keys);
+    // Route-scoped state belongs to the current selection only: a task for
+    // another route finishing in the background must never wipe the
+    // selection's readiness. Inventory and sizes above are global.
+    const appliesToSelection = rfdetrTerminalAppliesToSelection(rfdetrTerminalRoute, selectedRouteId);
     if (rfdetrTerminalStatus === "failed") {
-      setRouteDepCheckError(rfdetrTerminalRoute ?? selectedRouteId, rfdetrTerminalError ?? "Setup failed.");
+      if (appliesToSelection) {
+        setRouteDepCheckError(rfdetrTerminalRoute ?? selectedRouteId, rfdetrTerminalError ?? "Setup failed.");
+      }
       void refreshStackEnvironmentCards();
       void scanProviderEnvironments("rfdetr").catch(() => {});
       return;
@@ -1633,6 +1641,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     void (async () => {
       await refreshStackEnvironmentCards();
       await scanProviderEnvironments("rfdetr").catch(() => {});
+      if (!appliesToSelection) return;
       const routeId = rfdetrTerminalRoute ?? selectedRouteId;
       const pythonPath = envInfo?.python_path ?? rfdetrTerminalKey ?? routeId;
       try {
@@ -2010,6 +2019,15 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         return false;
       }
       let request: RuntimeInstallRequest;
+      // Verify the installed stack before terminal success: pip can exit
+      // cleanly while imports or probes still fail, and the task must not
+      // report Ready then. A throw fails the task into Setup incomplete.
+      // Manual rows carry no install remedy and stay distinct non-failures.
+      const verifyStackInstall = async (): Promise<void> => {
+        const fresh = await checkDependencies(routeId, readiness.stack_python);
+        const unmet = getRfDetrSetupVerifyError(fresh.results);
+        if (unmet) throw new Error(unmet);
+      };
       if (!readiness.needs_work) {
         request = {
           provider: "rfdetr",
@@ -2017,6 +2035,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           environmentKey: readiness.stack_key as ManagedEnvironmentKey,
           packages,
           pythonPath: readiness.stack_python,
+          finalize: verifyStackInstall,
           summary: `Setting up ${route.title}…`,
         };
       } else {
@@ -2047,6 +2066,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           pythonPath: bootstrap.python_path,
           verifyPythonPath: readiness.stack_python,
           createsEnvironment: true,
+          finalize: verifyStackInstall,
           summary: `Creating environment for ${route.title}…`,
         };
       }
