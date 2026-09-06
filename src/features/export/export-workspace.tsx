@@ -83,19 +83,25 @@ import {
 import type { UpdaterController } from "@/features/updater/use-updater-controller";
 
 import { DropZone } from "./drop-zone";
-import { ExportModal, type UltralyticsSetupModalState } from "./export-modal";
+import { ExportModal, type RfDetrSetupModalState, type UltralyticsSetupModalState } from "./export-modal";
 import { RouteGrid } from "./route-grid";
 import {
   emptyRouteDepCheck,
   getUltralyticsRouteSetupFallbackPackages,
   getUltralyticsRouteSetupStatus,
   hasBlockingDependencies,
-  installSpecFromHint,
   selectRouteDepCheck,
   shouldHideUltralyticsExportControls,
   type RouteDepCheck,
   type SetupInstallTarget,
 } from "./ultralytics-route-setup";
+import {
+  getRfDetrSetupHostRefusal,
+  getRfDetrSetupInstallPackages,
+  getRfDetrSetupVerifyError,
+  shouldHideRfDetrExportControls,
+} from "./rfdetr-route-setup";
+import { rfdetrSetupReadiness, type RfDetrSetupReadiness } from "@/lib/tauri/rfdetr";
 import { getEffectiveHostSupportResult, getHostSupportResult } from "./host-support";
 import { normalizeOptionsForRoute } from "./options/normalize";
 import { validateRfDetrImgsz } from "./rfdetr-image-size";
@@ -481,23 +487,10 @@ export function getRouteOptionsForOpen(
   };
 }
 
-export function getInstallableMissingPackages(results: DepCheckResult[] | null): InstallableDependency[] {
-  if (!results) return [];
-
-  const packages = results.flatMap((result): InstallableDependency[] => {
-    if (result.install_package) {
-      return [{ package: result.install_package, prerelease: result.prerelease === true }];
-    }
-    if (result.status === "missing_binary") {
-      const spec = installSpecFromHint(result.install_hint);
-      return spec ? [{ package: spec, prerelease: false }] : [];
-    }
-    return [];
-  });
-  return packages.filter((dependency, index) =>
-    packages.findIndex((candidate) => candidate.package === dependency.package) === index,
-  );
-}
+import { getInstallableMissingPackages } from "./install-packages";
+// Re-exported so existing importers (route-setup tests) keep working;
+// the implementation lives in the leaf module to avoid a workspace cycle.
+export { getInstallableMissingPackages };
 
 /**
  * Authoritative install list for one route's setup. A missing managed
@@ -1234,6 +1227,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Runtime-install progress, logs, and result live in the app-wide setup
   // task; the route view only derives the phase it needs for gating.
   const ultralyticsSetupTask = setupTask?.environmentKey === "ultralytics-managed" ? setupTask : null;
+  // RF-DETR tasks own isolated stack keys (`rfdetr-*`); the selected route's
+  // task is the one running for that exact route.
+  const rfdetrSetupTask = setupTask?.provider === "rfdetr" ? setupTask : null;
   const runtimeInstallPhase: RuntimeInstallPhase = !ultralyticsSetupTask
     ? "idle"
     : ultralyticsSetupTask.status === "active"
@@ -1387,12 +1383,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     managedRuntimeUpgrade,
     mayStartRuntimeUpgrade,
   );
-  // Route-owned Ultralytics setup (ticket 08): the selected route's own
-  // check drives the modal's setup-only mode, so a stale check from another
-  // route can never leak in. A task marks setting-up only the route it runs
-  // for and setup-incomplete only the route it failed for (a null task route
-  // keeps the legacy global behavior). RF-DETR keeps its existing flow until
-  // its own setup tickets land.
+  // Route-owned setup (tickets 08 and 10): the selected route's own check
+  // drives the modal's setup-only mode, so a stale check from another route
+  // can never leak in. A task marks setting-up only the route it runs for
+  // and setup-incomplete only the route it failed for (a null task route
+  // keeps the legacy global behavior). Route cards stay visible while the
+  // selected stack is missing: each route owns its setup in its modal.
   const selectedRouteHostStatus = getHostSupportResult(effectiveHostSupportResults, selectedRoute.id)?.status ?? "checking";
   const selectedCheck = selectRouteDepCheck(routeDepCheck, selectedRouteId);
   const setupTaskAppliesToSelectedRoute = (ultralyticsSetupTask?.routeId ?? selectedRouteId) === selectedRouteId;
@@ -1405,6 +1401,25 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       depCheckError: selectedCheck.error,
       setupActive: setupActiveForSelectedRoute,
       setupFailed: ultralyticsSetupTask?.status === "failed" && setupTaskAppliesToSelectedRoute,
+    })
+    : null;
+  const rfdetrTaskAppliesToSelectedRoute = (rfdetrSetupTask?.routeId ?? selectedRouteId) === selectedRouteId;
+  const rfdetrSetupActiveForSelectedRoute = rfdetrSetupTask?.status === "active" && rfdetrTaskAppliesToSelectedRoute;
+  // The readiness policy is shared with the Ultralytics flow on purpose:
+  // ready comes only from the selected route's own check, so the shared
+  // `rfdetr-default` stack never marks both ONNX and ExecuTorch ready.
+  const rfdetrRouteSetupStatus = selectedProviderId === "rfdetr"
+    ? getUltralyticsRouteSetupStatus({
+      hostStatus: selectedRouteHostStatus,
+      depResults: selectedCheck.results,
+      depCheckLoading,
+      depCheckError: selectedCheck.error,
+      setupActive: rfdetrSetupActiveForSelectedRoute,
+      // A dismissed failure is retired: dismissing (including confirmed
+      // deletion, which dismisses the matching task) returns the route to
+      // check-driven state instead of pinning Setup incomplete forever.
+      // Set up from here installs the same packages a Retry would.
+      setupFailed: rfdetrSetupTask?.status === "failed" && !rfdetrSetupTask.dismissed && rfdetrTaskAppliesToSelectedRoute,
     })
     : null;
   const selectedMissingPackages = useMemo(() => {
@@ -1420,15 +1435,47 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       showRecovery: ultralyticsRouteSetupStatus === "setup-incomplete",
       error: selectedCheck.error,
     };
+  // The stack key for the selected RF-DETR route comes from the live stack
+  // inventory when present, otherwise from the setup task running for it —
+  // but only when that task belongs to the selected route. A task for
+  // another route must never name this route's environment (a route id is
+  // never a key). Null means the backend-owned mapping has not resolved
+  // yet: the modal copy falls back to naming the route's environment, and
+  // Remove/Recreate stay guarded until a real stack key exists.
+  const rfdetrSelectedStackKey = stackEnvironments.find((stack) =>
+    stack.route_ids.includes(selectedRouteId),
+  )?.key ?? null;
+  const rfdetrTaskStackKey = rfdetrTaskAppliesToSelectedRoute
+    ? rfdetrSetupTask?.environmentKey ?? null
+    : null;
+  const rfdetrSetupModalState: RfDetrSetupModalState | null = rfdetrRouteSetupStatus == null
+    ? null
+    : {
+      status: rfdetrRouteSetupStatus,
+      actionLabel: `Set up ${selectedRoute.title}`,
+      busy: cleanupBusy || rfdetrSetupActiveForSelectedRoute,
+      canSetup: !cleanupBusy && !setupConflictMessage,
+      showRecovery: rfdetrRouteSetupStatus === "setup-incomplete",
+      error: selectedCheck.error,
+      stackKey: rfdetrSelectedStackKey ?? rfdetrTaskStackKey,
+    };
   // Export chrome (runtime-upgrade nudge, artifact banners, export errors,
   // and — inside the modal — options, preview, and Start export) stays
-  // hidden until the exact Ultralytics route is ready. The setup-conflict
-  // message is not export chrome: it also blocks the setup action itself.
+  // hidden until the exact route is ready. The setup-conflict message is not
+  // export chrome: it also blocks the setup action itself.
   const ultralyticsSetupHidesExport = ultralyticsRouteSetupStatus != null
     && shouldHideUltralyticsExportControls(selectedProviderId, ultralyticsRouteSetupStatus);
+  const rfdetrSetupHidesExport = rfdetrRouteSetupStatus != null
+    && shouldHideRfDetrExportControls(selectedProviderId, rfdetrRouteSetupStatus);
   // Ref to current sessionId for use inside event listener closures
   const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = sessionId;
+  // Live selection for async continuations: effects that await (stack
+  // inventory, size scans) must re-read the selection when they resume, or
+  // a background completion for route A overwrites route B's slot after
+  // the user navigates mid-refresh.
+  const selectedRouteIdRef = useRef(selectedRouteId);
+  selectedRouteIdRef.current = selectedRouteId;
   const currentExportRouteRef = useRef<{ routeId: string; exportFormat: string } | null>(null);
   const currentExportOutputDirRef = useRef<string | null>(null);
 
@@ -1516,7 +1563,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       if (depRefreshRequestRef.current !== requestId) {
         return;
       }
-      setRouteDepCheck({ results: null, routeId, error: String(error), pythonPath });
+      // Genuine check failure: keep the "could not check" context here so
+      // setup-stamped errors shown in the same slot are never mislabeled.
+      setRouteDepCheck({ results: null, routeId, error: `Could not check dependencies: ${String(error)}`, pythonPath });
       throw error;
     } finally {
       if (depRefreshRequestRef.current === requestId) {
@@ -1575,6 +1624,55 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       await scanProviderEnvironments("ultralytics").catch(() => {});
     })();
   }, [environmentPublisher, invalidateManagedEnvironmentSizesForMutation, scanProviderEnvironments, selectedRouteId, setRouteDepCheckError, setupTerminalDismissed, setupTerminalError, setupTerminalRoute, setupTerminalSession, setupTerminalStatus]);
+
+  // RF-DETR terminal (ticket 10): refresh the stack inventory, the selected
+  // route's dependency readiness, and size state after the app-wide task.
+  // Failed setup keeps the partial stack as `Setup incomplete`; success
+  // refreshes the same route that was set up so shared-stack readiness
+  // (ONNX vs ExecuTorch on `rfdetr-default`) stays per route.
+  const rfdetrTerminalSession = rfdetrSetupTask?.sessionId ?? null;
+  const rfdetrTerminalStatus = rfdetrSetupTask?.status ?? null;
+  const rfdetrTerminalError = rfdetrSetupTask?.error ?? null;
+  const rfdetrTerminalDismissed = rfdetrSetupTask?.dismissed ?? null;
+  const rfdetrTerminalRoute = rfdetrSetupTask?.routeId ?? null;
+  const rfdetrTerminalKey = rfdetrSetupTask?.environmentKey ?? null;
+  useEffect(() => {
+    if (!rfdetrTerminalSession) return;
+    if (rfdetrTerminalStatus !== "succeeded" && rfdetrTerminalStatus !== "failed") return;
+    if (rfdetrTerminalDismissed) return;
+    const keys = rfdetrTerminalKey ? [rfdetrTerminalKey as ManagedEnvironmentKey] : ["rfdetr-all" as ManagedEnvironmentKey];
+    invalidateManagedEnvironmentSizesForMutation(keys);
+    // Route-scoped state belongs to the current selection only: a task for
+    // another route finishing in the background must never wipe the
+    // selection's readiness. Inventory and sizes above are global. The
+    // failure stamp below is synchronous so the render-time selection is
+    // current; the async continuation re-reads the live selection ref.
+    const terminalRoute = rfdetrTerminalRoute ?? selectedRouteId;
+    if (rfdetrTerminalStatus === "failed") {
+      if (terminalRoute === selectedRouteId) {
+        setRouteDepCheckError(terminalRoute, rfdetrTerminalError ?? "Setup failed.");
+      }
+      void refreshStackEnvironmentCards();
+      void scanProviderEnvironments("rfdetr").catch(() => {});
+      return;
+    }
+    void (async () => {
+      await refreshStackEnvironmentCards();
+      await scanProviderEnvironments("rfdetr").catch(() => {});
+      // Freshness ownership: the selection may have moved while awaiting.
+      // Only the route still selected may publish into the single slot;
+      // the selection effect owns the new route's own check.
+      const currentSelection = selectedRouteIdRef.current;
+      const routeId = rfdetrTerminalRoute ?? currentSelection;
+      if (routeId !== currentSelection) return;
+      const pythonPath = envInfo?.python_path ?? rfdetrTerminalKey ?? routeId;
+      try {
+        await refreshRouteDependencies(routeId, pythonPath);
+      } catch {
+        // State handled in helper; avoid unhandled promise noise.
+      }
+    })();
+  }, [envInfo?.python_path, invalidateManagedEnvironmentSizesForMutation, refreshRouteDependencies, refreshStackEnvironmentCards, rfdetrTerminalDismissed, rfdetrTerminalError, rfdetrTerminalKey, rfdetrTerminalRoute, rfdetrTerminalSession, rfdetrTerminalStatus, scanProviderEnvironments, selectedRouteId, setRouteDepCheckError]);
 
   // Register once; handlers filter events through the current session ref.
   useEffect(() => {
@@ -1885,6 +1983,179 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       setCleanupBusy(false);
     }
   }, [blockOnSetupConflict, cleanupBusy, invalidateManagedEnvironmentSizesForMutation, runUltralyticsRouteSetup, setRouteDepCheckError, stackEnvironments]);
+
+  // Shared core installer for route-owned RF-DETR setup (ticket 10): resolve
+  // the selected route to its backend-owned stack mapping, resolve a
+  // compatible bootstrap only when the stack needs work, and run one install
+  // call for the selected stack only. Only the selected stack is ever
+  // created; other stacks and the Ultralytics environment remain untouched.
+  // Packages are the selected route's declared extras only, so shared-stack
+  // routes (ONNX vs ExecuTorch on `rfdetr-default`) keep independent
+  // readiness. Modal setup, Retry, and Recreate call this same core.
+  const runRfDetrRouteSetup = useCallback(async (routeId: string): Promise<boolean> => {
+    if (blockOnSetupConflict((message) => setRouteDepCheckError(routeId, message))) return false;
+    // Refuse before any environment work when the host is already known to
+    // be incompatible: backend platform state (authoritative batch plus the
+    // dependency preflight) wins over starting a doomed large installation.
+    const hostRefusal = getRfDetrSetupHostRefusal(
+      routeId,
+      effectiveHostSupportResults,
+      selectRouteDepCheck(routeDepCheck, routeId),
+    );
+    if (hostRefusal) {
+      setRouteDepCheckError(routeId, hostRefusal);
+      return false;
+    }
+    // This flow never touches sourcePath (loaded model), export options,
+    // output-dir/Python overrides, or other provider environments. The saved
+    // override value is preserved; installs never go into it or into the
+    // bootstrap interpreter.
+    const route = findRoute(routeId) ?? defaultRouteForProvider("rfdetr");
+    setRouteDepCheckError(routeId, null);
+
+    const failInstall = (error: string): false => {
+      setRouteDepCheckError(routeId, error);
+      void refreshStackEnvironmentCards();
+      void scanProviderEnvironments("rfdetr").catch(() => {});
+      return false;
+    };
+
+    try {
+      if (rfdetrSetupTask && rfdetrSetupTask.status !== "active" && !rfdetrSetupTask.dismissed) {
+        dismissTask();
+      }
+      let readiness: RfDetrSetupReadiness;
+      try {
+        readiness = await rfdetrSetupReadiness(routeId);
+      } catch (error) {
+        setRouteDepCheckError(routeId, String(error));
+        return false;
+      }
+      const packages = getRfDetrSetupInstallPackages(
+        route,
+        selectRouteDepCheck(routeDepCheck, routeId),
+        { needsWork: readiness.needs_work },
+      );
+      if (packages.length === 0) {
+        setRouteDepCheckError(routeId, "No installable packages were reported for this route. Re-run the dependency check before setup.");
+        return false;
+      }
+      let request: RuntimeInstallRequest;
+      // Verify the installed stack before terminal success: pip can exit
+      // cleanly while imports or probes still fail, and the task must not
+      // report Ready then. A throw fails the task into Setup incomplete.
+      // Manual rows carry no install remedy and stay distinct non-failures.
+      const verifyStackInstall = async (): Promise<void> => {
+        const fresh = await checkDependencies(routeId, readiness.stack_python);
+        const unmet = getRfDetrSetupVerifyError(fresh.results);
+        if (unmet) throw new Error(unmet);
+      };
+      if (!readiness.needs_work) {
+        request = {
+          provider: "rfdetr",
+          routeId,
+          environmentKey: readiness.stack_key as ManagedEnvironmentKey,
+          packages,
+          pythonPath: readiness.stack_python,
+          finalize: verifyStackInstall,
+          summary: `Setting up ${route.title}…`,
+        };
+      } else {
+        let bootstrap;
+        try {
+          bootstrap = await resolveBootstrapPython(routeId);
+        } catch (error) {
+          setRouteDepCheckError(routeId, String(error));
+          return false;
+        }
+        if (isPythonRequiredResult(bootstrap)) {
+          requirePython(routeId, bootstrap, () => handleRfDetrRouteSetupRef.current(routeId));
+          setRouteDepCheckError(
+            routeId,
+            "Python required to set up the RF-DETR environment. Choose a compatible Python to continue.",
+          );
+          return false;
+        }
+        if (bootstrap.status === "error") {
+          setRouteDepCheckError(routeId, bootstrap.reason);
+          return false;
+        }
+        request = {
+          provider: "rfdetr",
+          routeId,
+          environmentKey: readiness.stack_key as ManagedEnvironmentKey,
+          packages,
+          pythonPath: bootstrap.python_path,
+          verifyPythonPath: readiness.stack_python,
+          createsEnvironment: true,
+          finalize: verifyStackInstall,
+          summary: `Creating environment for ${route.title}…`,
+        };
+      }
+      // Install → terminal lives in the app-wide owner, so unmounting (e.g.
+      // Landing navigation) cannot strand completion. Stack inventory,
+      // dependency, and size refresh happens in the terminal effect. The
+      // terminal effect only runs with a session; session-less creation
+      // failure refreshes inventory here instead, keeping the partial stack
+      // visible as Setup incomplete.
+      const result = await startRuntimeInstall(request);
+      if (!result.ok) {
+        return failInstall(result.error);
+      }
+      return true;
+    } catch (error) {
+      return failInstall(String(error));
+    }
+  }, [blockOnSetupConflict, dismissTask, effectiveHostSupportResults, refreshStackEnvironmentCards, requirePython, rfdetrSetupTask, routeDepCheck, scanProviderEnvironments, setRouteDepCheckError, startRuntimeInstall]);
+  const handleRfDetrRouteSetup = useCallback(async (routeId: string): Promise<void> => {
+    if (cleanupBusy) return;
+    await runRfDetrRouteSetup(routeId);
+  }, [cleanupBusy, runRfDetrRouteSetup]);
+  const handleRfDetrRouteSetupRef = useRef(handleRfDetrRouteSetup);
+  handleRfDetrRouteSetupRef.current = handleRfDetrRouteSetup;
+
+  // Confirmed full recreation for a failed RF-DETR route setup: removes only
+  // the selected stack through the existing cleanup command, then sets the
+  // same route up again. Output settings, the saved Python override, other
+  // stacks, the Ultralytics environment, the loaded model, and unrelated
+  // runtime files are untouched. A null stack key means the backend-owned
+  // mapping never resolved, so there is nothing to remove.
+  const handleRecreateRfDetr = useCallback(async (routeId: string, stackKey: string | null) => {
+    if (!stackKey) return;
+    if (blockOnSetupConflict((message) => setRouteDepCheckError(routeId, message))) return;
+    if (cleanupBusy) return;
+    let confirmed = false;
+    try {
+      confirmed = await confirm(
+        `Remove the ${stackKey} environment and set it up again? Only ${stackKey} is removed. Models, exports, output settings, and other environments stay.`,
+        { title: "Recreate environment", kind: "warning" },
+      );
+    } catch {
+      confirmed = false;
+    }
+    if (!confirmed) return;
+    setCleanupBusy(true);
+    setRouteDepCheckError(routeId, null);
+    try {
+      const report = await cleanupManagedEnvironments([stackKey as ManagedEnvironmentKey]);
+      if (!managedEnvironmentDeletionSucceeded(report, stackKey as ManagedEnvironmentKey)) {
+        setRouteDepCheckError(
+          routeId,
+          managedEnvironmentCleanupErrorMessage(report) ?? "Recreate failed before setup could restart.",
+        );
+        return;
+      }
+      invalidateManagedEnvironmentSizesForMutation(
+        managedEnvironmentCacheKeysForCleanup([stackKey as ManagedEnvironmentKey], stackEnvironments.map((stack) => stack.key)),
+      );
+      await refreshStackEnvironmentCards();
+      await runRfDetrRouteSetup(routeId);
+    } catch (error) {
+      setRouteDepCheckError(routeId, String(error));
+    } finally {
+      setCleanupBusy(false);
+    }
+  }, [blockOnSetupConflict, cleanupBusy, invalidateManagedEnvironmentSizesForMutation, refreshStackEnvironmentCards, runRfDetrRouteSetup, setRouteDepCheckError, stackEnvironments]);
 
   const failExportStart = useCallback((message: string) => {
     setInstallPhase("idle");
@@ -2580,7 +2851,16 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       const report: ManagedEnvironmentCleanupReport = await cleanupManagedEnvironments(confirmation.keys);
       const cleanupMessage = managedEnvironmentCleanupErrorMessage(report);
       if (cleanupMessage) setEnvironmentPanelError(cleanupMessage);
-      setCleanupConfirmation(null);
+      // A confirmed deletion retires the matching failed setup task: its
+      // environment is gone, so keeping Setup incomplete with Retry/Remove
+      // for a ghost would lie. The refreshed check below then reports the
+      // honest missing state.
+      if (
+        setupTask?.status === "failed"
+        && managedEnvironmentDeletionSucceeded(report, setupTask.environmentKey)
+      ) {
+        dismissTask();
+      }
       invalidateManagedEnvironmentSizesForMutation(
         managedEnvironmentCacheKeysForCleanup(confirmation.keys, stackEnvironments.map((stack) => stack.key)),
       );
@@ -2600,12 +2880,20 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         await refreshStackEnvironmentCards();
         await refreshRouteDependencies(selectedRouteId, envInfo?.python_path ?? null).catch(() => {});
       }
+      if (report.results.some((result) => result.status === "failed")) {
+        // Deletion failed: keep the confirmation open so the in-dialog
+        // error above is visible instead of failing silent behind the modal.
+        // Everything above already refreshed from the report, so the
+        // successfully deleted half never goes stale.
+        return;
+      }
+      setCleanupConfirmation(null);
     } catch (error: unknown) {
       setEnvironmentPanelError((current) => current ? `${current} ${String(error)}` : String(error));
     } finally {
       setCleanupBusy(false);
     }
-  }, [blockOnSetupConflict, cleanupBusy, cleanupConfirmation, envInfo?.python_path, handleRedetect, invalidateManagedEnvironmentSizesForMutation, onSetupCompleteChange, pythonOverride, refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId, stackEnvironments]);
+  }, [blockOnSetupConflict, cleanupBusy, cleanupConfirmation, dismissTask, envInfo?.python_path, handleRedetect, invalidateManagedEnvironmentSizesForMutation, onSetupCompleteChange, pythonOverride, refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId, setupTask, stackEnvironments]);
 
   // Save output dir override
   const handleSaveOutputDir = useCallback(async () => {
@@ -2885,6 +3173,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         {setupConflictMessage && (
           <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">{setupConflictMessage}</p>
         )}
+        {environmentPanelError && (
+          <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{environmentPanelError}</p>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={() => setCleanupConfirmation(null)} disabled={cleanupBusy}>Cancel</Button>
           <Button
@@ -3055,9 +3346,33 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         onManagedRuntimeUpgrade={openManagedRuntimeUpgrade}
         setupConflictMessage={setupConflictMessage}
         ultralyticsSetup={ultralyticsSetupModalState}
-        onSetupRoute={() => void handleRouteSetup(selectedRoute.id)}
-        onRemoveEnvironment={() => void prepareCleanup("ultralytics")}
-        onRecreateEnvironment={() => void handleRecreateUltralytics(selectedRoute.id)}
+        rfdetrSetup={rfdetrSetupModalState}
+        onSetupRoute={() => {
+          if (selectedProviderId === "rfdetr") void handleRfDetrRouteSetup(selectedRoute.id);
+          else void handleRouteSetup(selectedRoute.id);
+        }}
+        onRemoveEnvironment={() => {
+          // A blocked Remove must say so in the open modal: the panel error
+          // below stays hidden behind it, so silence looks like a dead button.
+          if (setupConflictMessage) {
+            setRouteDepCheckError(selectedRoute.id, setupConflictMessage);
+            return;
+          }
+          if (selectedProviderId === "rfdetr") {
+            const stackKey = rfdetrSetupModalState?.stackKey ?? null;
+            if (!stackKey) return;
+            void prepareCleanup("rfdetr", stackKey as ManagedEnvironmentKey);
+          } else {
+            void prepareCleanup("ultralytics");
+          }
+        }}
+        onRecreateEnvironment={() => {
+          if (selectedProviderId === "rfdetr" && rfdetrSetupModalState) {
+            void handleRecreateRfDetr(selectedRoute.id, rfdetrSetupModalState.stackKey);
+          } else {
+            void handleRecreateUltralytics(selectedRoute.id);
+          }
+        }}
         rfdetrSummary={selectedProviderId === "rfdetr" ? {
           variantMode: rfdetrVariantMode,
           detectedClass: rfdetrInspectResult?.class_symbol ?? null,

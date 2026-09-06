@@ -565,6 +565,20 @@ mod tests {
     }
 
     #[test]
+    fn fixed_registry_rejects_unknown_stack_key_shaped_ids() {
+        // A route id is never an environment key and vice versa: cleanup
+        // and removal paths must reject both directions before touching
+        // the filesystem.
+        let root = temp_root("registry-stack-keys");
+        for unknown in ["rfdetr-unknown", "rfdetr.pth.onnx", "rfdetr.pth.fake"] {
+            assert!(
+                resolve_target_path(&root, unknown).is_err(),
+                "{unknown} must not resolve to a managed environment"
+            );
+        }
+    }
+
+    #[test]
     fn logical_size_counts_nested_regular_files_without_following_symlinks() {
         let root = temp_root("size");
         fs::create_dir_all(root.join("nested/deeper")).unwrap();

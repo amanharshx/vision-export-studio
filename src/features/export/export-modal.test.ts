@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { HostSupportBadge, HostSupportReason, PendingInstallConsent, PrimaryExportActionLabel, UltralyticsSetupPanel } from "./export-modal";
+import { HostSupportBadge, HostSupportReason, PendingInstallConsent, PrimaryExportActionLabel, RfDetrSetupPanel, UltralyticsSetupPanel } from "./export-modal";
 import type { DepCheckResult } from "@/lib/types";
 
 const outdatedUltralytics: DepCheckResult = {
@@ -179,6 +179,61 @@ describe("UltralyticsSetupPanel", () => {
       React.createElement(UltralyticsSetupPanel, {
         status: "unavailable",
         routeTitle: "TensorRT",
+        error: null,
+        showRecovery: false,
+      }),
+    );
+
+    expect(html).toContain("Unavailable");
+    expect(html).toContain("TensorRT");
+  });
+});
+
+describe("RfDetrSetupPanel", () => {
+  test("setup-incomplete offers retry guidance with remove and recreate recovery", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RfDetrSetupPanel, {
+        status: "setup-incomplete",
+        routeTitle: "ONNX",
+        stackKey: "rfdetr-default",
+        error: "pip exited with code 1",
+        showRecovery: true,
+        onRemoveEnvironment: () => {},
+        onRecreateEnvironment: () => {},
+      }),
+    );
+
+    expect(html).toContain("Setup incomplete");
+    expect(html).toContain("Retry");
+    expect(html).toContain("Recreate");
+    expect(html).toContain("Remove…");
+    expect(html).toContain("Recreate environment…");
+    expect(html).toContain("pip exited with code 1");
+  });
+
+  test("not-set-up names the selected stack without export controls", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RfDetrSetupPanel, {
+        status: "not-set-up",
+        routeTitle: "ONNX",
+        stackKey: "rfdetr-default",
+        error: null,
+        showRecovery: false,
+      }),
+    );
+
+    expect(html).toContain("Not set up");
+    expect(html).toContain("ONNX");
+    expect(html).toContain("rfdetr-default");
+    expect(html).not.toContain("Remove…");
+  });
+
+  test("unavailable names the state without setup recovery", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RfDetrSetupPanel, {
+        status: "unavailable",
+        routeTitle: "TensorRT",
+        stackKey: "rfdetr-tensorrt",
         error: null,
         showRecovery: false,
       }),

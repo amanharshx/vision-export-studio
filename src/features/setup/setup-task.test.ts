@@ -328,6 +328,35 @@ describe("setup task event pipeline", () => {
     );
   });
 
+  test("RF-DETR stack setup skips YOLO verification and succeeds after pip", async () => {
+    const { deps, handlers } = createFakeDeps({ yoloPath: null });
+    let verified = 0;
+    const countingDeps: InstallStreamDeps = {
+      ...deps,
+      verifyEnvironment: async (pythonPath) => {
+        verified += 1;
+        return deps.verifyEnvironment(pythonPath);
+      },
+    };
+    const owner = createSetupTaskOwner(countingDeps);
+    const rfdetrRequest: RuntimeInstallRequest = {
+      provider: "rfdetr",
+      routeId: "rfdetr.pth.onnx",
+      environmentKey: "rfdetr-default",
+      packages: [{ package: "rfdetr[onnx]", prerelease: false }],
+      pythonPath: "/tmp/bootstrap-python",
+      verifyPythonPath: "/tmp/runtime/envs/rfdetr-default/.venv/bin/python",
+      createsEnvironment: true,
+    };
+    const promise = owner.startRuntimeInstall(rfdetrRequest);
+
+    fire(handlers, "install:finished", { session_id: "session-1" });
+    expect(await promise).toEqual({ ok: true });
+    expect(verified).toBe(0);
+    expect(owner.getState()!.status).toBe("succeeded");
+    expect(owner.getState()!.environmentKey).toBe("rfdetr-default");
+  });
+
   test("verification throw marks failure in the owner", async () => {
     const { deps, handlers } = createFakeDeps({ verifyError: "detect crashed" });
     const owner = createSetupTaskOwner(deps);

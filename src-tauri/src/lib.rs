@@ -50,6 +50,7 @@ pub fn run() {
             commands::deps::check_dependencies,
             commands::deps::install_dependencies,
             commands::deps::ultralytics_setup_readiness,
+            commands::deps::rfdetr_setup_readiness,
             commands::environment::detect_environment,
             commands::stack_environments::list_stack_environments,
             commands::managed_environments::scan_managed_environments,

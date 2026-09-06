@@ -226,6 +226,20 @@ describe("incremental second-route setup packages", () => {
       { package: "axelera-devkit", prerelease: false },
     ]);
   });
+
+  test("missing binaries without a pip remedy install nothing, duplicates collapse", () => {
+    const depResults: DepCheckResult[] = [
+      { item: "java", status: "missing_binary", reason: "missing", install_hint: "Install Java >= 17: https://adoptium.net/" },
+      { item: "edgetpu_compiler", status: "missing_binary", reason: "missing", install_hint: "pip install edgetpu-compiler" },
+      { item: "onnx", status: "missing_package", reason: "missing", install_hint: "pip install onnx", install_package: "onnx" },
+      { item: "onnx-dup", status: "missing_package", reason: "missing", install_hint: "pip install onnx", install_package: "onnx" },
+    ];
+    expect(getInstallableMissingPackages(depResults)).toEqual([
+      { package: "edgetpu-compiler", prerelease: false },
+      { package: "onnx", prerelease: false },
+    ]);
+    expect(getInstallableMissingPackages(null)).toEqual([]);
+  });
 });
 
 describe("getUltralyticsRouteSetupFallbackPackages", () => {
