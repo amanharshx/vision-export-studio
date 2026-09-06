@@ -2847,6 +2847,21 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       const report: ManagedEnvironmentCleanupReport = await cleanupManagedEnvironments(confirmation.keys);
       const cleanupMessage = managedEnvironmentCleanupErrorMessage(report);
       if (cleanupMessage) setEnvironmentPanelError(cleanupMessage);
+      if (report.results.some((result) => result.status === "failed")) {
+        // Deletion failed: keep the confirmation open so the in-dialog
+        // error above is visible instead of failing silent behind the modal.
+        return;
+      }
+      // A confirmed deletion retires the matching failed setup task: its
+      // environment is gone, so keeping Setup incomplete with Retry/Remove
+      // for a ghost would lie. The refreshed check below then reports the
+      // honest missing state.
+      if (
+        setupTask?.status === "failed"
+        && managedEnvironmentDeletionSucceeded(report, setupTask.environmentKey)
+      ) {
+        dismissTask();
+      }
       setCleanupConfirmation(null);
       invalidateManagedEnvironmentSizesForMutation(
         managedEnvironmentCacheKeysForCleanup(confirmation.keys, stackEnvironments.map((stack) => stack.key)),
@@ -2872,7 +2887,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     } finally {
       setCleanupBusy(false);
     }
-  }, [blockOnSetupConflict, cleanupBusy, cleanupConfirmation, envInfo?.python_path, handleRedetect, invalidateManagedEnvironmentSizesForMutation, onSetupCompleteChange, pythonOverride, refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId, stackEnvironments]);
+  }, [blockOnSetupConflict, cleanupBusy, cleanupConfirmation, dismissTask, envInfo?.python_path, handleRedetect, invalidateManagedEnvironmentSizesForMutation, onSetupCompleteChange, pythonOverride, refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId, setupTask, stackEnvironments]);
 
   // Save output dir override
   const handleSaveOutputDir = useCallback(async () => {

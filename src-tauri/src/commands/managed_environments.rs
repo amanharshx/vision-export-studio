@@ -455,9 +455,6 @@ where
             // the pre-removal size from the cache afterward.
             owner.invalidate(&normalized_root, [key.as_str()]);
         }
-        if outcome.is_ok() {
-            prune_emptied_stack_parent(&normalized_root, &target);
-        }
         match outcome {
             Ok(()) => reports.push(ManagedEnvironmentCleanupResult::Succeeded {
                 key,
@@ -471,25 +468,6 @@ where
         setup_complete: None,
         setup_error: None,
     })
-}
-
-/// Remove a stack's parent directory when deletion (or a prior failed
-/// setup) left it empty, so inventory listings stop showing removed stacks.
-/// Best-effort and cosmetic: failures are ignored. Never touches the
-/// runtime root itself or a parent holding other files.
-fn prune_emptied_stack_parent(normalized_root: &Path, target: &Path) {
-    let Some(parent) = target.parent() else {
-        return;
-    };
-    if parent == normalized_root {
-        return;
-    }
-    let is_empty = fs::read_dir(parent)
-        .map(|mut entries| entries.next().is_none())
-        .unwrap_or(false);
-    if is_empty {
-        let _ = fs::remove_dir(parent);
-    }
 }
 
 pub(crate) fn cleanup_sync(
@@ -821,67 +799,6 @@ mod tests {
 
         assert!(!target.exists());
         assert!(backup.join("keep").exists());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn stack_cleanup_removes_emptied_parent_so_no_ghost_remains() {
-        let root = temp_root("cleanup-stack-parent");
-        let target = root.join("envs/rfdetr-default/.venv");
-        fs::create_dir_all(&target).unwrap();
-        fs::write(target.join("payload"), b"payload").unwrap();
-
-        cleanup_sync(
-            &ManagedEnvironments::default(),
-            &root,
-            &["rfdetr-default".to_string()],
-        )
-        .unwrap();
-
-        assert!(!target.exists());
-        assert!(
-            !target.parent().expect("stack parent").exists(),
-            "the emptied envs/<stack> parent must go too, or `ls` keeps listing a removed stack"
-        );
-        assert!(root.join("envs").exists());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn stack_cleanup_preserves_non_empty_parent_and_never_runtime_root() {
-        let root = temp_root("cleanup-parent-guard");
-        let target = root.join("envs/rfdetr-default/.venv");
-        fs::create_dir_all(&target).unwrap();
-        fs::write(target.join("payload"), b"payload").unwrap();
-        fs::write(
-            target.parent().expect("stack parent").join("user-note.txt"),
-            b"not ours",
-        )
-        .unwrap();
-        let ultra = root.join(".venv");
-        fs::create_dir_all(&ultra).unwrap();
-        fs::write(ultra.join("payload"), b"payload").unwrap();
-
-        cleanup_sync(
-            &ManagedEnvironments::default(),
-            &root,
-            &[
-                "rfdetr-default".to_string(),
-                ULTRALYTICS_MANAGED_KEY.to_string(),
-            ],
-        )
-        .unwrap();
-
-        assert!(!target.exists());
-        assert!(
-            target.parent().expect("stack parent").exists(),
-            "a parent holding other files must stay"
-        );
-        assert!(!ultra.exists());
-        assert!(
-            root.exists(),
-            "the runtime root itself must never be pruned"
-        );
         let _ = fs::remove_dir_all(root);
     }
 

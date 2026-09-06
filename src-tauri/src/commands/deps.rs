@@ -1077,7 +1077,28 @@ fn check_dependencies_for_runtime(
         });
     }
 
-    if let Ok(installed_python) = probe_python_version(python_path) {
+    // Mapped RF-DETR routes resolve to their isolated stack interpreter.
+    // When the selected stack is absent, report its missing packages without
+    // consulting the caller's unrelated interpreter: the fresh stack's
+    // Python comes from the setup-time bootstrap (enforced by the resolver
+    // and the install gate), so a foreign version must never disable setup.
+    // When the stack exists, enforce the constraint against the stack's own
+    // interpreter instead.
+    if stack_for_route(route_id).is_some() {
+        let runtime_dir = stack_runtime_dir.expect("mapped route has a runtime directory");
+        if let Some(results) = missing_stack_results_if_absent(runtime_dir, route_id) {
+            return Ok(DepCheckResponse { results });
+        }
+        let stack_python_path =
+            stack_python(runtime_dir, route_id).expect("mapped route has Python path");
+        if let Ok(installed_python) = probe_python_version(&stack_python_path) {
+            if let Some(result) = route_python_version_result(route_id, &installed_python) {
+                return Ok(DepCheckResponse {
+                    results: vec![result],
+                });
+            }
+        }
+    } else if let Ok(installed_python) = probe_python_version(python_path) {
         if let Some(result) = route_python_version_result(route_id, &installed_python) {
             return Ok(DepCheckResponse {
                 results: vec![result],
@@ -1477,11 +1498,12 @@ pub async fn rfdetr_setup_readiness(
     })
 }
 
-/// Declared install packages for one RF-DETR route: every package the
-/// setup flow may install into the selected stack, derived from the same
-/// missing-stack rows the dependency check reports (never a second list).
-/// A bypass that smuggles another route's or provider's packages into the
-/// selected stack is rejected before any environment work.
+/// Declared install packages for one RF-DETR route: every (package,
+/// prerelease) pair the setup flow may install into the selected stack,
+/// derived from the same missing-stack rows the dependency check reports
+/// (never a second list). A bypass that smuggles another route's or
+/// provider's packages — or flips the prerelease stage of a declared one —
+/// into the selected stack is rejected before any environment work.
 fn validate_rfdetr_install_packages(
     route_id: &str,
     packages: &[InstallableDependency],
@@ -1493,12 +1515,18 @@ fn validate_rfdetr_install_packages(
         .map(|results| {
             results
                 .into_iter()
-                .filter_map(|result| result.install_package)
+                .filter_map(|result| {
+                    result
+                        .install_package
+                        .map(|name| (name, result.prerelease.unwrap_or(false)))
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
     for dependency in packages {
-        if !declared.iter().any(|name| name == &dependency.package) {
+        if !declared.iter().any(|(name, prerelease)| {
+            name == &dependency.package && *prerelease == dependency.prerelease
+        }) {
             return Err(format!(
                 "package {} is not declared for route {}",
                 dependency.package, route_id
@@ -3367,9 +3395,12 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn tflite_dependency_check_blocks_3_11_and_3_13_before_creating_stack() {
+    fn tflite_missing_stack_reports_installable_rows_regardless_of_caller_python() {
         use std::os::unix::fs::PermissionsExt;
 
+        // The caller's interpreter (e.g. the Ultralytics env) must not decide
+        // a missing stack's Python state: setup resolves a compatible
+        // bootstrap later, so the check reports what to install.
         for version in ["3.11.9", "3.13.12"] {
             let root =
                 std::env::temp_dir().join(format!("rfdetr-tflite-python-{}", Uuid::new_v4()));
@@ -3389,17 +3420,48 @@ mod tests {
             .expect("dependency check response");
 
             assert_eq!(response.results.len(), 1);
-            assert_eq!(response.results[0].status, "version_too_old");
-            assert_eq!(response.results[0].install_package, None);
-            assert!(response.results[0].reason.contains(version));
-            assert!(response.results[0].reason.contains("requires Python 3.12"));
-            assert!(
-                !stack_venv_dir(runtime.to_str().unwrap(), "rfdetr.pth.tflite")
-                    .unwrap()
-                    .exists()
+            assert_eq!(response.results[0].status, "missing_package");
+            assert_eq!(
+                response.results[0].install_package.as_deref(),
+                Some("rfdetr[tflite]>=1.9.4")
             );
             std::fs::remove_dir_all(root).expect("remove temp root");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tflite_existing_stack_enforces_its_own_python_version() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Once the stack exists, its own interpreter decides the Python
+        // constraint — never the caller's unrelated environment.
+        let root = std::env::temp_dir().join(format!("rfdetr-tflite-stack-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        let stack_python = stack_python(&runtime, "rfdetr.pth.tflite").expect("stack python");
+        std::fs::create_dir_all(Path::new(&stack_python).parent().expect("stack bin"))
+            .expect("create stack");
+        std::fs::write(&stack_python, "#!/bin/sh\necho 3.13.12\n").expect("write stack python");
+        std::fs::set_permissions(&stack_python, std::fs::Permissions::from_mode(0o755))
+            .expect("make stack python executable");
+        let caller = root.join("caller-python");
+        std::fs::write(&caller, "#!/bin/sh\necho 3.12.12\n").expect("write caller python");
+        std::fs::set_permissions(&caller, std::fs::Permissions::from_mode(0o755))
+            .expect("make caller python executable");
+
+        let response = check_dependencies_for_runtime(
+            "rfdetr.pth.tflite",
+            caller.to_str().expect("caller path"),
+            Some(&runtime),
+        )
+        .expect("dependency check response");
+
+        assert_eq!(response.results.len(), 1);
+        assert_eq!(response.results[0].status, "version_too_old");
+        assert_eq!(response.results[0].install_package, None);
+        assert!(response.results[0].reason.contains("3.13.12"));
+        assert!(response.results[0].reason.contains("requires Python 3.12"));
+        std::fs::remove_dir_all(root).expect("remove temp root");
     }
 
     #[test]
@@ -3793,6 +3855,27 @@ possible problem with your settings or a recent ultralytics package update.\n8.4
         assert_eq!(error, "unknown route_id: rfdetr.pth.fake");
     }
 
+    #[test]
+    fn rfdetr_install_rejects_flipped_prerelease_stages() {
+        // The prerelease flag picks the pip stage: a bypass flipping it
+        // changes what gets installed, so (package, prerelease) validate
+        // together against the declared rows.
+        let stable_flatc = InstallableDependency {
+            package: "flatc".to_string(),
+            prerelease: false,
+        };
+        let error = validate_rfdetr_install_packages("rfdetr.pth.executorch", &[stable_flatc])
+            .expect_err("stable flatc is not the declared pre-release install");
+        assert!(error.contains("flatc"), "unexpected error: {error}");
+
+        let prerelease_onnx = InstallableDependency {
+            package: "rfdetr[onnx]".to_string(),
+            prerelease: true,
+        };
+        let error = validate_rfdetr_install_packages("rfdetr.pth.onnx", &[prerelease_onnx])
+            .expect_err("pre-release onnx is not the declared stable install");
+        assert!(error.contains("rfdetr[onnx]"), "unexpected error: {error}");
+    }
     #[cfg(unix)]
     #[test]
     fn rfdetr_setup_target_rejects_symlinked_stack_venv() {
