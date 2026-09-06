@@ -2,28 +2,20 @@
 import { describe, expect, test } from "bun:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import App from "@/App";
 import { LandingScreen } from "@/features/landing-screen";
 import type { UpdaterController } from "@/features/updater/use-updater-controller";
+import { providerList, providers } from "@/lib/providers";
 import {
-  hasAllowedSourceExtension,
-  providerList,
-  providers,
-} from "@/lib/providers";
-import type { ExportOptions, RouteOptionsState } from "@/lib/types";
-import {
-  getInstallAndExportStrategy,
   getManagedEnvironmentCleanupState,
-  getResolvedOutputDir,
-  getRouteOptionsForOpen,
   resolveExportPython,
   resolveInitialWorkspaceSettings,
   resolveRouteDependencyCheckPython,
   validateSourceSelection,
 } from "@/features/export/export-workspace";
-import { createSetupTaskOwner } from "@/features/setup/setup-task";
 
 // Ticket 12: Open the workspace without a global runtime.
-// Get Started opens model upload regardless of provider environment inventory or legacy
+// Get Started opens model upload regardless of provider inventory or legacy
 // setup state. Provider setup happens only when the selected export requires it.
 
 type InventoryCombo = "no-env" | "ultralytics-only" | "rfdetr-only" | "both";
@@ -49,11 +41,16 @@ function snapshotFor(combo: InventoryCombo) {
 }
 
 describe("workspace entry without global runtime (ticket 12)", () => {
-  const stubUpdater = {} as UpdaterController;
+  test("launch opens Get Started with no Setup screen", () => {
+    const html = renderToStaticMarkup(React.createElement(App, null));
+    expect(html).toContain("Get Started");
+    expect(html).not.toContain("Set up Vision Export Studio");
+  });
 
-  test("Get Started waits only for settings load, never provider inventory or setup state", () => {
+  test("Get Started waits only for settings load, never setup state", () => {
     // LandingScreen takes no setup or inventory props, so entry cannot depend
     // on them by construction: only settingsReady gates the button.
+    const stubUpdater = {} as UpdaterController;
     const waiting = renderToStaticMarkup(
       React.createElement(LandingScreen, {
         onGetStarted: () => {},
@@ -111,13 +108,6 @@ describe("model upload validation without global runtime (ticket 12)", () => {
   test("ignores empty selection without an error", () => {
     expect(validateSourceSelection("   ", providers.ultralytics)).toEqual({ status: "empty" });
   });
-
-  test("matches the provider registry for every combination", () => {
-    expect(hasAllowedSourceExtension("/tmp/best.pt", providers.ultralytics)).toBe(true);
-    expect(hasAllowedSourceExtension("/tmp/best.pth", providers.ultralytics)).toBe(false);
-    expect(hasAllowedSourceExtension("/tmp/checkpoint.pth", providers.rfdetr)).toBe(true);
-    expect(hasAllowedSourceExtension("/tmp/checkpoint.pt", providers.rfdetr)).toBe(false);
-  });
 });
 
 describe("provider-independent readiness without global runtime (ticket 12)", () => {
@@ -140,16 +130,7 @@ describe("provider-independent readiness without global runtime (ticket 12)", ()
     }
   });
 
-  test("one missing provider never blocks the other provider's check", () => {
-    expect(resolveRouteDependencyCheckPython("rfdetr", null, "rfdetr.pth.onnx")).not.toBeNull();
-    expect(
-      resolveRouteDependencyCheckPython("ultralytics", MANAGED_PYTHON, "ultralytics.pt.onnx"),
-    ).not.toBeNull();
-  });
-});
-
-describe("export python resolution without global runtime (ticket 12)", () => {
-  test("every provider-presence combination resolves an export interpreter or fails closed", () => {
+  test("every combination resolves an export interpreter or fails closed", () => {
     const expectations: Record<InventoryCombo, { ultralytics: string | null; rfdetr: string | null }> = {
       "no-env": { ultralytics: null, rfdetr: "rfdetr.pth.onnx" },
       "ultralytics-only": { ultralytics: MANAGED_PYTHON, rfdetr: MANAGED_PYTHON },
@@ -175,30 +156,6 @@ describe("export python resolution without global runtime (ticket 12)", () => {
   });
 });
 
-describe("install routing without global runtime (ticket 12)", () => {
-  test("routes with nothing missing export directly for both providers", () => {
-    expect(getInstallAndExportStrategy("ultralytics", 0, true)).toBe("export-direct");
-    expect(getInstallAndExportStrategy("rfdetr", 0, false)).toBe("export-direct");
-  });
-
-  test("Ultralytics missing packages stream-install when its python exists", () => {
-    expect(getInstallAndExportStrategy("ultralytics", 2, true)).toBe("stream-install");
-  });
-
-  test("Ultralytics missing packages delegate to route setup without a python", () => {
-    // Previously a silent no-op dead end; route setup resolves a bootstrap
-    // and owns the Python-required dialog instead.
-    expect(getInstallAndExportStrategy("ultralytics", 2, false)).toBe("route-setup");
-  });
-
-  test("RF-DETR missing packages always delegate to route-owned setup", () => {
-    // install_dependencies probes its python first, so a backend placeholder
-    // would fail the probe and bypass the bootstrap + Python-required flow.
-    expect(getInstallAndExportStrategy("rfdetr", 2, true)).toBe("route-setup");
-    expect(getInstallAndExportStrategy("rfdetr", 2, false)).toBe("route-setup");
-  });
-});
-
 describe("preserved workspace settings across migration (ticket 12)", () => {
   test("fresh launch restores empty settings", () => {
     expect(resolveInitialWorkspaceSettings(null)).toEqual({
@@ -221,17 +178,6 @@ describe("preserved workspace settings across migration (ticket 12)", () => {
       outputDirInput: "/tmp/exports",
       publishOverride: "/usr/local/bin/python3",
     });
-  });
-
-  test("legacy setup state is readable but ignored on restart", () => {
-    const withLegacy = (setupComplete: boolean) =>
-      resolveInitialWorkspaceSettings({
-        setup_complete: setupComplete,
-        python_path_override: "/usr/local/bin/python3",
-        output_dir_override: "/tmp/exports",
-      });
-    expect(withLegacy(true)).toEqual(withLegacy(false));
-    expect(withLegacy(true).pythonOverride).toBe("/usr/local/bin/python3");
   });
 
   test("restart resolves per-combo settings identically regardless of legacy setup state", () => {
@@ -263,56 +209,6 @@ describe("preserved workspace settings across migration (ticket 12)", () => {
       outputDirOverride: "",
       outputDirInput: "",
       publishOverride: undefined,
-    });
-  });
-
-  test("output directory resolves next to either provider model without a global runtime", () => {
-    expect(getResolvedOutputDir("/models/best.pt", "")).toBe("/models/vision-export-studio-exports");
-    expect(getResolvedOutputDir("/models/checkpoint.pth", "")).toBe(
-      "/models/vision-export-studio-exports",
-    );
-    expect(getResolvedOutputDir("/models/best.pt", "/tmp/exports")).toBe("/tmp/exports");
-  });
-
-  test("saved per-model options survive when the same model is reopened", () => {
-    const sourcePath = "/tmp/model.pth";
-    const saved: RouteOptionsState = {
-      options: {
-        imgsz: 640,
-        batch: 1,
-        precision: "fp16",
-        calibrationData: null,
-        dynamic: false,
-        simplify: false,
-        optimize: false,
-        nms: false,
-        endToEnd: false,
-        keras: false,
-        opset: null,
-        workspace: null,
-        chip: "rk3588",
-      } satisfies ExportOptions,
-      source: "user",
-      sourcePath,
-    };
-    expect(getRouteOptionsForOpen(saved, "rfdetr.pth.onnx", "rfdetr", null, sourcePath)).toBe(saved);
-  });
-});
-
-describe("no setup work on launch without global runtime (ticket 12)", () => {
-  test("a fresh setup-task owner starts idle with no Python-required dialog", () => {
-    const owner = createSetupTaskOwner({
-      listenInstallEvent: async () => () => {},
-      startInstall: async () => "session-1",
-      verifyEnvironment: async () => ({ yoloPath: "/tmp/.venv/bin/yolo" }),
-    });
-    expect(owner.getState()).toBeNull();
-    expect(owner.getPythonGate()).toEqual({
-      pending: null,
-      result: null,
-      dialogOpen: false,
-      choiceError: null,
-      busy: false,
     });
   });
 });

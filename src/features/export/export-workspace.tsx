@@ -418,7 +418,8 @@ export function resolveRouteDependencyCheckPython(
  * Resolve the interpreter to pass for an export. Ultralytics uses its
  * managed python; RF-DETR resolves to the selected stack inside the backend,
  * so an existing stack works without the Ultralytics environment or system
- * Python. Never use this for installs (see getInstallAndExportStrategy).
+ * Python. Check and export calls only: installs must resolve a real
+ * interpreter through route-owned setup instead.
  */
 export function resolveExportPython(
   providerId: ProviderId,
@@ -430,27 +431,6 @@ export function resolveExportPython(
     return rfdetrBackendPlaceholder(stackPython ?? envPython, routeId);
   }
   return envPython;
-}
-
-export type InstallAndExportStrategy = "export-direct" | "stream-install" | "route-setup";
-
-/**
- * Route an Install-and-Export consent action to the enforcement that owns it.
- * Ready routes export directly. Ultralytics installs with a managed python
- * stream into it; without one they delegate to route-owned setup, which
- * resolves a real bootstrap and owns the Python-required dialog. RF-DETR
- * installs always delegate to route-owned setup: install_dependencies probes
- * its python first, so it must never receive a backend placeholder, and the
- * stack (not the Ultralytics environment) is the only valid target.
- */
-export function getInstallAndExportStrategy(
-  providerId: ProviderId,
-  missingCount: number,
-  hasPython: boolean,
-): InstallAndExportStrategy {
-  if (missingCount === 0) return "export-direct";
-  if (providerId === "rfdetr" || !hasPython) return "route-setup";
-  return "stream-install";
 }
 
 export type SourceSelection =
@@ -2714,26 +2694,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       return;
     }
 
-    // Installs without a valid target belong to route-owned setup: it
-    // resolves a real bootstrap, owns the Python-required dialog, and
-    // enforces backend gates. install_dependencies probes its python first,
-    // so it must never receive a backend placeholder (RF-DETR), and a
-    // missing Ultralytics python delegates the same way instead of silently
-    // returning.
-    if (
-      getInstallAndExportStrategy(
-        selectedProviderId,
-        missingPkgs.length,
-        (envInfo?.python_path ?? null) !== null,
-      ) === "route-setup"
-    ) {
-      setInstallPhase("idle");
-      if (selectedProviderId === "rfdetr") await runRfDetrRouteSetup(selectedRoute.id);
-      else await runUltralyticsRouteSetup(selectedRoute.id);
-      return;
-    }
-
-    const pythonPath = envInfo?.python_path ?? null;
+    const pythonPath = envInfo?.python_path;
     if (!pythonPath) return;
     setInstallPhase("installing");
     setLogLines([]);
@@ -3173,8 +3134,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         // Deletion succeeds independently of setup-state persistence, so refresh
         // the managed runtime card whenever the .venv was actually removed, even
         // if saving setup state failed (surfaced via cleanupMessage above).
-        // Ticket 12 stays in the workspace: the legacy setup callback only
-        // updates readable state, never navigates (see App).
         if (managedEnvironmentDeletionSucceeded(report, "ultralytics-managed")) {
           setEnvInfo(null);
           const setupAction = applyManagedEnvironmentCleanupSetup(report, onSetupCompleteChange);
@@ -3182,30 +3141,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
             const settings = await loadSettings();
             await handleRedetect(settings.python_path_override || undefined, true);
           }
-          // A missing Ultralytics environment never blocks RF-DETR: refresh
-          // stacks and the current route so a healthy stack stays ready.
-          await refreshStackEnvironmentCards();
-          const fallbackPython = resolveRouteDependencyCheckPython(
-            selectedProviderId,
-            null,
-            selectedRouteId,
-          );
-          if (fallbackPython) {
-            await refreshRouteDependencies(selectedRouteId, fallbackPython).catch(() => {});
-          }
         }
       } else {
         await refreshStackEnvironmentCards();
-        const checkPython = resolveRouteDependencyCheckPython(
-          selectedProviderId,
-          envInfo?.python_path ?? null,
-          selectedRouteId,
-        );
-        if (checkPython) {
-          await refreshRouteDependencies(selectedRouteId, checkPython).catch(() => {});
-        } else {
-          await refreshRouteDependencies(selectedRouteId, null).catch(() => {});
-        }
+        await refreshRouteDependencies(selectedRouteId, envInfo?.python_path ?? null).catch(() => {});
       }
       if (report.results.some((result) => result.status === "failed")) {
         // Deletion failed: keep the confirmation open so the in-dialog
@@ -3220,7 +3159,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     } finally {
       setCleanupBusy(false);
     }
-  }, [blockOnSetupConflict, cleanupBusy, cleanupConfirmation, dismissTask, envInfo?.python_path, handleRedetect, invalidateManagedEnvironmentSizesForMutation, onSetupCompleteChange, pythonOverride, refreshRouteDependencies, refreshStackEnvironmentCards, selectedProviderId, selectedRouteId, setupTask, stackEnvironments]);
+  }, [blockOnSetupConflict, cleanupBusy, cleanupConfirmation, dismissTask, envInfo?.python_path, handleRedetect, invalidateManagedEnvironmentSizesForMutation, onSetupCompleteChange, pythonOverride, refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId, setupTask, stackEnvironments]);
 
   // Save output dir override
   const handleSaveOutputDir = useCallback(async () => {
@@ -3488,7 +3427,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         <div className="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm">
           <div><p className="font-medium">What will be removed</p><p className="text-zinc-600">{cleanupConfirmation.environments.join(", ")}</p></div>
           <div><p className="font-medium">Approx. size</p><p className="text-zinc-600">{cleanupConfirmation.estimatedLogicalBytes === null ? "Unavailable" : formatManagedEnvironmentSize(cleanupConfirmation.estimatedLogicalBytes)}</p></div>
-          <div><p className="font-medium">What happens next</p><p className="text-zinc-600">{cleanupConfirmation.removesLastManagedRuntime && <><strong>This is your last managed runtime.</strong> </>}{cleanupConfirmation.removesLastManagedRuntime && cleanupConfirmation.hasPythonOverride ? "Your Python override will stay active. You can continue exporting with it." : cleanupConfirmation.provider === "Ultralytics YOLO" ? "Your Python override will stay active. You can continue exporting with it." : cleanupConfirmation.isBulkCleanup ? "These environments will be set up again when needed." : "This environment will be set up again when needed."}</p></div>
+          <div><p className="font-medium">What happens next</p><p className="text-zinc-600">{cleanupConfirmation.removesLastManagedRuntime && <><strong>This is your last managed runtime.</strong> </>}{cleanupConfirmation.removesLastManagedRuntime && cleanupConfirmation.hasPythonOverride ? "Your Python override will stay active. You can continue exporting with it." : cleanupConfirmation.provider === "Ultralytics YOLO" && cleanupConfirmation.hasPythonOverride ? "Your Python override will stay active. You can continue exporting with it." : cleanupConfirmation.isBulkCleanup ? "These environments will be set up again when needed." : "This environment will be set up again when needed."}</p></div>
           <div><p className="font-medium">What stays safe</p><p className="text-zinc-600">Your models, exported files, and settings will not be deleted.</p></div>
           <details>
             <summary className="cursor-pointer font-medium">Affected export formats ({cleanupConfirmation.routeIds.length})</summary>
