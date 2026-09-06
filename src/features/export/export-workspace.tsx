@@ -96,10 +96,15 @@ import {
   type SetupInstallTarget,
 } from "./ultralytics-route-setup";
 import {
+  formatRfDetrInspectionSummary,
+  getRfDetrInspectionFailureActions,
+  getRfDetrInspectionFollowUpPhase,
   getRfDetrSetupHostRefusal,
   getRfDetrSetupInstallPackages,
   getRfDetrSetupVerifyError,
-  shouldHideRfDetrExportControls,
+  isRfDetrInspectionReadyForExport,
+  shouldHideRfDetrExportControlsUntilInspected,
+  shouldResumeRfDetrInspectionAfterSetup,
 } from "./rfdetr-route-setup";
 import { rfdetrSetupReadiness, type RfDetrSetupReadiness } from "@/lib/tauri/rfdetr";
 import { getEffectiveHostSupportResult, getHostSupportResult } from "./host-support";
@@ -634,11 +639,17 @@ function isRfDetrExportReady(
   inspectStatus: RfDetrInspectStatus,
   variantMode: RfDetrVariantMode,
   manualClassSymbol: string,
+  inspectResult: RfDetrInspectResult | null = null,
 ): boolean {
-  if (variantMode === "manual") {
-    return manualClassSymbol.trim().length > 0;
-  }
-  return inspectStatus === "detected";
+  // Single readiness policy shared by export enforcement and export-control
+  // visibility (ticket 11): Plus stays blocked, manual requires an explicit
+  // symbol, auto requires a successful detection.
+  return isRfDetrInspectionReadyForExport({
+    status: inspectStatus,
+    result: inspectResult,
+    variantMode,
+    manualClassSymbol,
+  });
 }
 
 export function getRfDetrExportImgszError(
@@ -1465,8 +1476,33 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // export chrome: it also blocks the setup action itself.
   const ultralyticsSetupHidesExport = ultralyticsRouteSetupStatus != null
     && shouldHideUltralyticsExportControls(selectedProviderId, ultralyticsRouteSetupStatus);
+  // Ticket 11: RF-DETR export configuration additionally requires usable
+  // checkpoint inspection data. The environment stays Ready when inspection
+  // fails; only the export chrome hides until inspection succeeds (or a
+  // manual variant is explicitly selected, with Plus still blocked).
+  const rfdetrInspectionReady = selectedProviderId === "rfdetr"
+    ? isRfDetrInspectionReadyForExport({
+      status: rfdetrInspectStatus,
+      result: rfdetrInspectResult,
+      variantMode: rfdetrVariantMode,
+      manualClassSymbol: rfdetrManualClassSymbol,
+    })
+    : false;
   const rfdetrSetupHidesExport = rfdetrRouteSetupStatus != null
-    && shouldHideRfDetrExportControls(selectedProviderId, rfdetrRouteSetupStatus);
+    && shouldHideRfDetrExportControlsUntilInspected(
+      selectedProviderId,
+      rfdetrRouteSetupStatus,
+      rfdetrInspectionReady,
+    );
+  const rfdetrInspectionFollowUp = rfdetrRouteSetupStatus != null
+    ? getRfDetrInspectionFollowUpPhase(rfdetrRouteSetupStatus, rfdetrInspectStatus)
+    : null;
+  const rfdetrInspectionFailure = selectedProviderId === "rfdetr"
+    ? getRfDetrInspectionFailureActions({ status: rfdetrInspectStatus, result: rfdetrInspectResult })
+    : { canRetry: false, showManualVariant: false, showFileAction: false };
+  const rfdetrInspectionSummary = selectedProviderId === "rfdetr"
+    ? formatRfDetrInspectionSummary(rfdetrInspectResult)
+    : null;
   // Ref to current sessionId for use inside event listener closures
   const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = sessionId;
@@ -1476,8 +1512,80 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // the user navigates mid-refresh.
   const selectedRouteIdRef = useRef(selectedRouteId);
   selectedRouteIdRef.current = selectedRouteId;
+  // Live checkpoint observation for background setup completion: the terminal
+  // effect re-reads these when it resumes so a changed or cleared model
+  // suppresses the inspection resume instead of inspecting a stale file.
+  const sourcePathRef = useRef(sourcePath);
+  sourcePathRef.current = sourcePath;
+  const rfdetrTrustRef = useRef(rfdetrTrust);
+  rfdetrTrustRef.current = rfdetrTrust;
+  const rfdetrInspectStatusRef = useRef(rfdetrInspectStatus);
+  rfdetrInspectStatusRef.current = rfdetrInspectStatus;
   const currentExportRouteRef = useRef<{ routeId: string; exportFormat: string } | null>(null);
   const currentExportOutputDirRef = useRef<string | null>(null);
+
+  // Shared post-trust inspection: inspect through an app-owned stack with an
+  // already-bound trust, apply the native size to untouched route options,
+  // and keep the environment Ready on failure. Never starts an export.
+  // Generation-guarded so a trust reset retires the in-flight request.
+  const inspectWithTrustedCheckpoint = useCallback(async (
+    checkpointPath: string,
+    stackKey: string | null,
+    trusted: RfDetrTrustedCheckpoint,
+  ): Promise<void> => {
+    const requestId = rfdetrInspectRequestRef.current + 1;
+    rfdetrInspectRequestRef.current = requestId;
+    setRfDetrInspectStatus("inspecting");
+    setRfDetrInspectResult(null);
+    setInvokeError(null);
+    try {
+      const result = await inspectRfDetrCheckpoint({
+        checkpointPath,
+        stackKey,
+        trustConfirmed: true,
+        trustedIdentity: trusted.identity,
+      });
+      if (rfdetrInspectRequestRef.current !== requestId) return;
+      setRfDetrInspectResult(result);
+      setRfDetrInspectStatus(result.success ? "detected" : "failed");
+      if (result.success && result.recommended_imgsz) {
+        const recommended = result.recommended_imgsz;
+        const nextRouteOptions = applyDetectedRouteOptionsToProviderRoutes(
+          routeOptionsRef.current,
+          "rfdetr",
+          recommended,
+          checkpointPath,
+        );
+        routeOptionsRef.current = nextRouteOptions;
+        const currentSelection = selectedRouteIdRef.current;
+        if (currentSelection) {
+          const selectedState = nextRouteOptions[currentSelection];
+          if (selectedState && selectedState.source === "detected") {
+            setOptions(selectedState.options);
+          }
+        }
+      }
+    } catch (error) {
+      if (rfdetrInspectRequestRef.current !== requestId) return;
+      const message = String(error);
+      // Classify without matching backend strings: re-stat and compare with
+      // the typed fingerprint. A mismatch means the file changed after trust
+      // (reset); anything else — including no healthy stack, whose backend
+      // message already explains route setup — preserves trust.
+      try {
+        const current = await getRfDetrCheckpointIdentity(checkpointPath);
+        if (rfdetrInspectRequestRef.current !== requestId) return;
+        if (!isRfDetrTrustValid(trusted, checkpointPath, current)) {
+          resetRfDetrTrust("needs_trust");
+          setInvokeError(message);
+          return;
+        }
+      } catch {
+        if (rfdetrInspectRequestRef.current !== requestId) return;
+      }
+      showRfDetrInspectFailure(message);
+    }
+  }, [resetRfDetrTrust, showRfDetrInspectFailure]);
 
   // One shared environment publisher for mount, setup-terminal,
   // Environment-panel, and post-install detection. Only the latest request
@@ -1661,18 +1769,54 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       await scanProviderEnvironments("rfdetr").catch(() => {});
       // Freshness ownership: the selection may have moved while awaiting.
       // Only the route still selected may publish into the single slot;
-      // the selection effect owns the new route's own check.
+      // the selection effect owns the new route's own check. Inspection
+      // below is file-scoped instead: a background completion still resumes
+      // while the user browses another route, as long as the same trusted
+      // checkpoint remains selected.
       const currentSelection = selectedRouteIdRef.current;
       const routeId = rfdetrTerminalRoute ?? currentSelection;
-      if (routeId !== currentSelection) return;
-      const pythonPath = envInfo?.python_path ?? rfdetrTerminalKey ?? routeId;
-      try {
-        await refreshRouteDependencies(routeId, pythonPath);
-      } catch {
-        // State handled in helper; avoid unhandled promise noise.
+      if (routeId === currentSelection) {
+        const pythonPath = envInfo?.python_path ?? rfdetrTerminalKey ?? routeId;
+        try {
+          await refreshRouteDependencies(routeId, pythonPath);
+        } catch {
+          // State handled in helper; avoid unhandled promise noise.
+        }
       }
+      // Ticket 11 resume: the selected stack is ready, so inspect the same
+      // previously trusted checkpoint and move the route into export
+      // configuration. A changed or cleared model suppresses the resume.
+      // The environment stays Ready when this inspection fails, and no
+      // export ever starts here.
+      const path = sourcePathRef.current;
+      const trust = rfdetrTrustRef.current;
+      const inspectStatus = rfdetrInspectStatusRef.current;
+      const selectionNow = selectedRouteIdRef.current;
+      if (!shouldResumeRfDetrInspectionAfterSetup({
+        setupSucceeded: true,
+        setupRouteId: rfdetrTerminalRoute,
+        selectedRouteId: selectionNow,
+        sourcePath: path,
+        trust,
+        inspectStatus,
+      })) {
+        return;
+      }
+      if (!trust) return;
+      let current: RfDetrCheckpointIdentity;
+      try {
+        current = await getRfDetrCheckpointIdentity(path);
+      } catch {
+        return;
+      }
+      if (!isRfDetrTrustValid(trust, path, current)) {
+        resetRfDetrTrust("needs_trust");
+        return;
+      }
+      setRfDetrLiveIdentity(current);
+      await inspectWithTrustedCheckpoint(path, rfdetrTerminalKey, trust);
     })();
-  }, [envInfo?.python_path, invalidateManagedEnvironmentSizesForMutation, refreshRouteDependencies, refreshStackEnvironmentCards, rfdetrTerminalDismissed, rfdetrTerminalError, rfdetrTerminalKey, rfdetrTerminalRoute, rfdetrTerminalSession, rfdetrTerminalStatus, scanProviderEnvironments, selectedRouteId, setRouteDepCheckError]);
+  }, [envInfo?.python_path, inspectWithTrustedCheckpoint, invalidateManagedEnvironmentSizesForMutation, refreshRouteDependencies, refreshStackEnvironmentCards, resetRfDetrTrust, rfdetrTerminalDismissed, rfdetrTerminalError, rfdetrTerminalKey, rfdetrTerminalRoute, rfdetrTerminalSession, rfdetrTerminalStatus, scanProviderEnvironments, selectedRouteId, setRouteDepCheckError]);
 
   // Register once; handlers filter events through the current session ref.
   useEffect(() => {
@@ -2202,7 +2346,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         setInvokeError(plusBlock);
         return;
       }
-      if (!isRfDetrExportReady(rfdetrInspectStatus, rfdetrVariantMode, rfdetrManualClassSymbol)) {
+      if (!isRfDetrExportReady(rfdetrInspectStatus, rfdetrVariantMode, rfdetrManualClassSymbol, rfdetrInspectResult)) {
         setInvokeError("Inspect RF-DETR checkpoint successfully or select a manual variant before export.");
         return;
       }
@@ -2605,53 +2749,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       showRfDetrInspectFailure(String(error));
       return;
     }
-    try {
-      const result = await inspectRfDetrCheckpoint({
-        checkpointPath: sourcePath,
-        stackKey: null,
-        trustConfirmed: true,
-        trustedIdentity: trusted.identity,
-      });
-      if (rfdetrInspectRequestRef.current !== requestId) return;
-      setRfDetrInspectResult(result);
-      setRfDetrInspectStatus(result.success ? "detected" : "failed");
-      if (result.success && result.recommended_imgsz) {
-        const recommended = result.recommended_imgsz;
-        const nextRouteOptions = applyDetectedRouteOptionsToProviderRoutes(
-          routeOptionsRef.current,
-          "rfdetr",
-          recommended,
-          sourcePath,
-        );
-        routeOptionsRef.current = nextRouteOptions;
-
-        if (selectedRouteId) {
-          const selectedState = nextRouteOptions[selectedRouteId];
-          if (selectedState && selectedState.source === "detected") {
-            setOptions(selectedState.options);
-          }
-        }
-      }
-    } catch (error) {
-      if (rfdetrInspectRequestRef.current !== requestId) return;
-      const message = String(error);
-      // Classify without matching backend strings: re-stat and compare with
-      // the typed fingerprint. A mismatch means the file changed after trust
-      // (reset); anything else — including no healthy stack, whose backend
-      // message already explains route setup — preserves trust.
-      try {
-        const current = await getRfDetrCheckpointIdentity(sourcePath);
-        if (rfdetrInspectRequestRef.current !== requestId) return;
-        if (!isRfDetrTrustValid(trusted, sourcePath, current)) {
-          resetRfDetrTrust("needs_trust");
-          setInvokeError(message);
-          return;
-        }
-      } catch {
-        if (rfdetrInspectRequestRef.current !== requestId) return;
-      }
-      showRfDetrInspectFailure(message);
-    }
+    // Delegate to the shared runner (which owns its own request generation)
+    // so Trust and post-setup resume share one inspection path.
+    rfdetrInspectRequestRef.current = requestId;
+    await inspectWithTrustedCheckpoint(sourcePath, null, trusted);
   };
 
   // Route row clicked — open modal for that route. Route browsing stays
@@ -3256,11 +3357,40 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
               )}
               {rfdetrInspectStatus === "inspecting" && <p>Inspecting RF-DETR checkpoint...</p>}
               {rfdetrInspectStatus === "detected" && rfdetrInspectResult && (
-                <p>Detected: <span className="font-mono">{rfdetrInspectResult.class_symbol}</span>{rfdetrInspectResult.is_legacy ? " (legacy)" : ""}{rfdetrInspectResult.recommended_imgsz ? ` · native ${rfdetrInspectResult.recommended_imgsz}px` : ""}{rfdetrInspectResult.required_multiple ? ` · multiple ${rfdetrInspectResult.required_multiple}` : ""}</p>
+                <p>Detected: <span className="font-mono">{rfdetrInspectionSummary ?? rfdetrInspectResult.class_symbol}</span>{rfdetrInspectResult.is_legacy ? " (legacy)" : ""}</p>
               )}
               {rfdetrInspectStatus === "failed" && (
                 <div className="space-y-3">
                   <p>{rfdetrInspectResult?.error ?? "RF-DETR inspection failed."}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {rfdetrInspectionFailure.canRetry && rfdetrTrust && sourcePath && rfdetrTrust.sourcePath === sourcePath && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          void inspectWithTrustedCheckpoint(
+                            sourcePath,
+                            rfdetrSelectedStackKey,
+                            rfdetrTrust,
+                          );
+                        }}
+                      >
+                        Retry inspection
+                      </Button>
+                    )}
+                    {rfdetrInspectionFailure.showFileAction && (
+                      <Button size="sm" variant="outline" onClick={handleClearFile}>
+                        Choose different file
+                      </Button>
+                    )}
+                  </div>
+                  {rfdetrInspectionFailure.showFileAction && (
+                    <p className="text-xs">
+                      Try a different checkpoint file, or check route compatibility and environment setup.
+                    </p>
+                  )}
+                  {rfdetrInspectionFailure.showManualVariant && (
+                    <>
                   <label className="block text-xs font-medium uppercase tracking-wide">Manual variant</label>
                   <select
                     value={rfdetrManualClassSymbol}
@@ -3289,6 +3419,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
                       <option value="RFDETRSeg2XLarge">RFDETRSeg2XLarge</option>
                     </optgroup>
                   </select>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -3384,7 +3516,18 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           recommendedImgsz: rfdetrInspectResult?.recommended_imgsz ?? null,
           patchSize: rfdetrInspectResult?.patch_size ?? null,
           requiredMultiple: rfdetrInspectResult?.required_multiple ?? null,
+          resolutionSource: rfdetrInspectResult?.resolution_source ?? null,
         } : null}
+        rfdetrInspectStatus={selectedProviderId === "rfdetr" ? rfdetrInspectStatus : null}
+        rfdetrInspectError={selectedProviderId === "rfdetr" ? rfdetrInspectResult?.error ?? null : null}
+        rfdetrInspectionReady={selectedProviderId === "rfdetr" ? rfdetrInspectionReady : null}
+        rfdetrInspectionFollowUp={selectedProviderId === "rfdetr" ? rfdetrInspectionFollowUp : null}
+        rfdetrInspectionFailure={selectedProviderId === "rfdetr" ? rfdetrInspectionFailure : null}
+        onRetryRfDetrInspection={selectedProviderId === "rfdetr" && rfdetrTrust && sourcePath && rfdetrTrust.sourcePath === sourcePath
+          ? () => {
+            void inspectWithTrustedCheckpoint(sourcePath, rfdetrSelectedStackKey, rfdetrTrust);
+          }
+          : undefined}
       />
 
       {managedRuntimeUpgradeDialog}

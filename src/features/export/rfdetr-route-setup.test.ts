@@ -14,6 +14,15 @@ import {
   getRfDetrSetupInstallPackages,
   getRfDetrSetupVerifyError,
   shouldHideRfDetrExportControls,
+  shouldResumeRfDetrInspectionAfterSetup,
+  isRfDetrInspectionReadyForExport,
+  shouldHideRfDetrExportControlsUntilInspected,
+  getRfDetrInspectionFollowUpPhase,
+  getRfDetrInspectionFollowUpCopy,
+  getRfDetrInspectionFailureActions,
+  getRfDetrFallbackPreset,
+  canUseRfDetrVariantFallback,
+  formatRfDetrInspectionSummary,
 } from "./rfdetr-route-setup";
 
 function readyOnnxResults(): DepCheckResult[] {
@@ -415,5 +424,282 @@ describe("getRfDetrRouteSetupCopy", () => {
     const copy = getRfDetrRouteSetupCopy("setup-incomplete", "ONNX", "rfdetr-default");
     expect(copy.body).toContain("Retry");
     expect(copy.body).toContain("Recreate");
+  });
+});
+
+function trustedCheckpoint(sourcePath = "/tmp/model.pth") {
+  return {
+    sourcePath,
+    identity: {
+      canonical_path: sourcePath,
+      len: 1234,
+      modified_ms: 1700000000000,
+    },
+  };
+}
+
+function inspectSuccess(overrides: Record<string, unknown> = {}) {
+  return {
+    success: true,
+    class_symbol: "RFDETRSmall",
+    family: "detection",
+    size: "small",
+    requires_plus: false,
+    is_legacy: false,
+    recommended_imgsz: 512,
+    patch_size: 16,
+    num_windows: 2,
+    required_multiple: 32,
+    token_grid: 32,
+    resolution_source: "saved_model_config",
+    error: null,
+    ...overrides,
+  } as never;
+}
+
+function inspectFailure(overrides: Record<string, unknown> = {}) {
+  return {
+    success: false,
+    class_symbol: null,
+    family: null,
+    size: null,
+    requires_plus: false,
+    is_legacy: false,
+    recommended_imgsz: null,
+    patch_size: null,
+    num_windows: null,
+    required_multiple: null,
+    token_grid: null,
+    resolution_source: null,
+    error: "torch load boom",
+    ...overrides,
+  } as never;
+}
+
+describe("shouldResumeRfDetrInspectionAfterSetup (ticket 11)", () => {
+  test("resumes the same trusted checkpoint after successful setup", () => {
+    expect(
+      shouldResumeRfDetrInspectionAfterSetup({
+        setupSucceeded: true,
+        setupRouteId: "rfdetr.pth.onnx",
+        selectedRouteId: "rfdetr.pth.onnx",
+        sourcePath: "/tmp/model.pth",
+        trust: trustedCheckpoint("/tmp/model.pth"),
+        inspectStatus: "failed",
+      }),
+    ).toBe(true);
+  });
+
+  test("suppresses resume when the model changed during background setup", () => {
+    expect(
+      shouldResumeRfDetrInspectionAfterSetup({
+        setupSucceeded: true,
+        setupRouteId: "rfdetr.pth.onnx",
+        selectedRouteId: "rfdetr.pth.onnx",
+        sourcePath: "/tmp/other.pth",
+        trust: trustedCheckpoint("/tmp/model.pth"),
+        inspectStatus: "failed",
+      }),
+    ).toBe(false);
+  });
+
+  test("suppresses resume when the model was cleared during background setup", () => {
+    expect(
+      shouldResumeRfDetrInspectionAfterSetup({
+        setupSucceeded: true,
+        setupRouteId: "rfdetr.pth.onnx",
+        selectedRouteId: "rfdetr.pth.onnx",
+        sourcePath: "",
+        trust: trustedCheckpoint("/tmp/model.pth"),
+        inspectStatus: "failed",
+      }),
+    ).toBe(false);
+  });
+
+  test("resumes in the background even after navigating to another route", () => {
+    expect(
+      shouldResumeRfDetrInspectionAfterSetup({
+        setupSucceeded: true,
+        setupRouteId: "rfdetr.pth.onnx",
+        selectedRouteId: "rfdetr.pth.executorch",
+        sourcePath: "/tmp/model.pth",
+        trust: trustedCheckpoint("/tmp/model.pth"),
+        inspectStatus: "failed",
+      }),
+    ).toBe(true);
+  });
+
+  test("never resumes without setup success, trust, or a failed inspection", () => {
+    const base = {
+      setupSucceeded: true,
+      setupRouteId: "rfdetr.pth.onnx",
+      selectedRouteId: "rfdetr.pth.onnx",
+      sourcePath: "/tmp/model.pth",
+      trust: trustedCheckpoint("/tmp/model.pth"),
+      inspectStatus: "failed" as const,
+    };
+    expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, setupSucceeded: false })).toBe(false);
+    expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, trust: null })).toBe(false);
+    expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, inspectStatus: "detected" })).toBe(false);
+    expect(shouldResumeRfDetrInspectionAfterSetup({ ...base, inspectStatus: "inspecting" })).toBe(false);
+  });
+});
+
+describe("isRfDetrInspectionReadyForExport (ticket 11)", () => {
+  test("is ready after successful inspection", () => {
+    expect(
+      isRfDetrInspectionReadyForExport({
+        status: "detected",
+        result: inspectSuccess(),
+        variantMode: "auto",
+        manualClassSymbol: "",
+      }),
+    ).toBe(true);
+  });
+
+  test("is ready for incomplete geometry with known constraints (preset fallback)", () => {
+    expect(
+      isRfDetrInspectionReadyForExport({
+        status: "detected",
+        result: inspectSuccess({ recommended_imgsz: null, resolution_source: null, token_grid: null }),
+        variantMode: "auto",
+        manualClassSymbol: "",
+      }),
+    ).toBe(true);
+  });
+
+  test("stays not ready on checkpoint-load failure without a manual variant", () => {
+    expect(
+      isRfDetrInspectionReadyForExport({
+        status: "failed",
+        result: inspectFailure(),
+        variantMode: "auto",
+        manualClassSymbol: "",
+      }),
+    ).toBe(false);
+  });
+
+  test("manual variant selection makes a failed inspection exportable", () => {
+    expect(
+      isRfDetrInspectionReadyForExport({
+        status: "failed",
+        result: inspectFailure(),
+        variantMode: "manual",
+        manualClassSymbol: "RFDETRSmall",
+      }),
+    ).toBe(true);
+  });
+
+  test("plus-only checkpoints stay blocked even with a manual variant", () => {
+    const plus = inspectFailure({
+      class_symbol: "RFDETRXLarge",
+      requires_plus: true,
+      error: "RFDETRXLarge requires rfdetr_plus support and is not supported in v1.",
+    });
+    expect(
+      isRfDetrInspectionReadyForExport({
+        status: "failed",
+        result: plus,
+        variantMode: "manual",
+        manualClassSymbol: "RFDETRSmall",
+      }),
+    ).toBe(false);
+    expect(
+      isRfDetrInspectionReadyForExport({
+        status: "failed",
+        result: plus,
+        variantMode: "auto",
+        manualClassSymbol: "",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldHideRfDetrExportControlsUntilInspected (ticket 11)", () => {
+  test("hides until both setup and inspection are ready", () => {
+    expect(shouldHideRfDetrExportControlsUntilInspected("rfdetr", "not-set-up", false)).toBe(true);
+    expect(shouldHideRfDetrExportControlsUntilInspected("rfdetr", "ready", false)).toBe(true);
+    expect(shouldHideRfDetrExportControlsUntilInspected("rfdetr", "ready", true)).toBe(false);
+    expect(shouldHideRfDetrExportControlsUntilInspected("rfdetr", "setting-up", true)).toBe(true);
+  });
+
+  test("leaves other providers untouched", () => {
+    expect(shouldHideRfDetrExportControlsUntilInspected("ultralytics", "ready", false)).toBe(false);
+  });
+});
+
+describe("inspection follow-up phase (ticket 11)", () => {
+  test("shows a named inspecting phase without changing setup readiness", () => {
+    expect(getRfDetrInspectionFollowUpPhase("ready", "inspecting")).toBe("inspecting-checkpoint");
+    expect(getRfDetrInspectionFollowUpPhase("ready", "detected")).toBeNull();
+    expect(getRfDetrInspectionFollowUpPhase("ready", "failed")).toBeNull();
+    expect(getRfDetrInspectionFollowUpPhase("setting-up", "inspecting")).toBeNull();
+  });
+
+  test("follow-up copy has no percentage and keeps browsing guidance", () => {
+    const copy = getRfDetrInspectionFollowUpCopy("inspecting-checkpoint");
+    expect(copy.title).toContain("Inspecting");
+    expect(copy.body).not.toContain("%");
+    expect(copy.body).toContain("ready");
+  });
+});
+
+describe("inspection failure actions (ticket 11)", () => {
+  test("load failure offers retry, manual variant, and file action without guessed defaults", () => {
+    const actions = getRfDetrInspectionFailureActions({ status: "failed", result: inspectFailure() });
+    expect(actions.canRetry).toBe(true);
+    expect(actions.showManualVariant).toBe(true);
+    expect(actions.showFileAction).toBe(true);
+  });
+
+  test("plus-only blocks retry and manual bypass, keeps file action", () => {
+    const plus = inspectFailure({
+      class_symbol: "RFDETRXLarge",
+      requires_plus: true,
+      error: "RFDETRXLarge requires rfdetr_plus support and is not supported in v1.",
+    });
+    const actions = getRfDetrInspectionFailureActions({ status: "failed", result: plus });
+    expect(actions.canRetry).toBe(false);
+    expect(actions.showManualVariant).toBe(false);
+    expect(actions.showFileAction).toBe(true);
+  });
+
+  test("successful inspection needs no failure actions", () => {
+    const actions = getRfDetrInspectionFailureActions({ status: "detected", result: inspectSuccess() });
+    expect(actions.canRetry).toBe(false);
+    expect(actions.showManualVariant).toBe(false);
+  });
+});
+
+describe("preset fallback and variant gating (ticket 11)", () => {
+  test("finds a clearly labelled standard preset for known multiples", () => {
+    expect(getRfDetrFallbackPreset(32)).toBe(384);
+    expect(getRfDetrFallbackPreset(56)).toBe(560);
+    expect(getRfDetrFallbackPreset(null)).toBeNull();
+  });
+
+  test("requires a known or explicitly selected variant before variant fallback", () => {
+    expect(
+      canUseRfDetrVariantFallback({ result: inspectSuccess(), variantMode: "auto", manualClassSymbol: "" }),
+    ).toBe(true);
+    expect(
+      canUseRfDetrVariantFallback({ result: inspectFailure(), variantMode: "manual", manualClassSymbol: "RFDETRSmall" }),
+    ).toBe(true);
+    expect(
+      canUseRfDetrVariantFallback({ result: inspectFailure(), variantMode: "auto", manualClassSymbol: "" }),
+    ).toBe(false);
+    expect(
+      canUseRfDetrVariantFallback({ result: null, variantMode: "auto", manualClassSymbol: "" }),
+    ).toBe(false);
+  });
+
+  test("inspection summary shows variant, native size, source, and multiple", () => {
+    const summary = formatRfDetrInspectionSummary(inspectSuccess());
+    expect(summary).toContain("RFDETRSmall");
+    expect(summary).toContain("512px");
+    expect(summary).toContain("saved_model_config");
+    expect(summary).toContain("32");
+    expect(formatRfDetrInspectionSummary(inspectFailure())).toBeNull();
+    expect(formatRfDetrInspectionSummary(null)).toBeNull();
   });
 });

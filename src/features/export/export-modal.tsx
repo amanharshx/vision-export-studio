@@ -15,6 +15,7 @@ import type {
   ExportStatus,
   InstallPhase,
   ProviderSpec,
+  RfDetrInspectStatus,
   RfDetrVariantMode,
   RouteSpec,
 } from "@/lib/types";
@@ -34,7 +35,10 @@ import {
 } from "./ultralytics-route-setup";
 import {
   getRfDetrRouteSetupCopy,
+  getRfDetrInspectionFollowUpCopy,
   shouldHideRfDetrExportControls,
+  shouldHideRfDetrExportControlsUntilInspected,
+  type RfDetrInspectionFollowUpPhase,
   type RfDetrRouteSetupStatus,
 } from "./rfdetr-route-setup";
 import { formatIconMap } from "@/components/format-icons";
@@ -83,7 +87,18 @@ interface ExportModalProps {
     recommendedImgsz?: number | null;
     patchSize?: number | null;
     requiredMultiple?: number | null;
+    resolutionSource?: string | null;
   } | null;
+  rfdetrInspectStatus?: RfDetrInspectStatus | null;
+  rfdetrInspectError?: string | null;
+  rfdetrInspectionReady?: boolean | null;
+  rfdetrInspectionFollowUp?: RfDetrInspectionFollowUpPhase | null;
+  rfdetrInspectionFailure?: {
+    canRetry: boolean;
+    showManualVariant: boolean;
+    showFileAction: boolean;
+  } | null;
+  onRetryRfDetrInspection?: () => void;
 }
 
 type FooterAction = "cancel" | "export" | "export_again" | "show_folder" | "starting" | "stop";
@@ -317,6 +332,51 @@ export function RfDetrSetupPanel({
   );
 }
 
+export function RfDetrInspectionFollowUpPanel({
+  phase,
+}: {
+  phase: Exclude<RfDetrInspectionFollowUpPhase, null>;
+}) {
+  const copy = getRfDetrInspectionFollowUpCopy(phase);
+  return (
+    <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
+      <p className="text-sm font-medium text-blue-800">{copy.title}</p>
+      <p className="mt-1 text-xs text-blue-800">{copy.body}</p>
+    </div>
+  );
+}
+
+export function RfDetrInspectionFailurePanel({
+  error,
+  canRetry,
+  onRetry,
+}: {
+  error: string | null;
+  canRetry: boolean;
+  onRetry?: () => void;
+}) {
+  return (
+    <div className="rounded-md border border-red-200 bg-red-50 p-3">
+      <p className="text-sm font-medium text-red-800">Checkpoint inspection failed</p>
+      <p className="mt-1 text-xs text-red-800">
+        {error ?? "RF-DETR inspection failed."}
+      </p>
+      <p className="mt-2 text-xs text-red-700">
+        {canRetry
+          ? "The environment is ready. Retry inspection, try a different checkpoint file, or check route compatibility and environment setup. No guessed defaults were applied."
+          : "The environment is ready. Try a different checkpoint file, or check route compatibility and environment setup. No guessed defaults were applied."}
+      </p>
+      {canRetry && onRetry && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" onClick={onRetry}>
+            Retry inspection
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ExportModal({
   open,
   onOpenChange,
@@ -353,6 +413,12 @@ export function ExportModal({
   onRemoveEnvironment,
   onRecreateEnvironment,
   rfdetrSummary,
+  rfdetrInspectStatus,
+  rfdetrInspectError,
+  rfdetrInspectionReady,
+  rfdetrInspectionFollowUp,
+  rfdetrInspectionFailure,
+  onRetryRfDetrInspection,
 }: ExportModalProps) {
   const format = formats[route.targetFormat];
   const formatIcon = formatIconMap[format.id];
@@ -370,9 +436,34 @@ export function ExportModal({
   // each RF-DETR route owns its isolated stack.
   const ultralyticsHides = ultralyticsSetup != null
     && shouldHideUltralyticsExportControls(provider.id, ultralyticsSetup.status);
+  // Ticket 11: RF-DETR export configuration additionally requires usable
+  // checkpoint inspection. When the caller supplies inspection readiness the
+  // modal hides export controls until both setup and inspection are ready;
+  // older callers without inspection data keep the setup-only behavior.
   const rfdetrHides = rfdetrSetup != null
-    && shouldHideRfDetrExportControls(provider.id, rfdetrSetup.status);
+    && (rfdetrInspectionReady == null
+      ? shouldHideRfDetrExportControls(provider.id, rfdetrSetup.status)
+      : shouldHideRfDetrExportControlsUntilInspected(
+        provider.id,
+        rfdetrSetup.status,
+        rfdetrInspectionReady,
+      ));
   const setupMode = ultralyticsHides || rfdetrHides;
+  // Inspection follow-up runs beside a Ready environment, never as setup
+  // readiness: when setup is Ready but inspection is still running or has
+  // failed, the modal shows the named checkpoint phase instead of export
+  // configuration. The environment stays Ready throughout.
+  const rfdetrFollowUpActive = provider.id === "rfdetr"
+    && rfdetrSetup != null
+    && rfdetrSetup.status === "ready"
+    && rfdetrInspectionFollowUp != null;
+  const rfdetrFailureActive = provider.id === "rfdetr"
+    && rfdetrSetup != null
+    && rfdetrSetup.status === "ready"
+    && rfdetrInspectionReady === false
+    && rfdetrInspectStatus === "failed";
+  const inspectionHidesExport = rfdetrFollowUpActive || rfdetrFailureActive;
+  const exportConfigVisible = !setupMode && !inspectionHidesExport;
   // One setup owns the footer at a time; both states share the same shape
   // (RfDetrSetupModalState extends UltralyticsSetupModalState), so the
   // primary action resolves once instead of per provider.
@@ -394,7 +485,8 @@ export function ExportModal({
     provider.id === "rfdetr" && rfdetrSummary
       ? validateRfDetrImgsz(options.imgsz, rfdetrSummary.requiredMultiple ?? null)
       : null;
-  const exportDisabled = isRunning || isStarting || !sourcePath || isInstalling || setupBlocked || rfdetrImgszError !== null;
+  const exportDisabled = isRunning || isStarting || !sourcePath || isInstalling || setupBlocked || rfdetrImgszError !== null
+    || (provider.id === "rfdetr" && rfdetrInspectionReady === false);
   const showLog = exportStatus !== "idle" || logLines.length > 0;
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const footerActions = getExportFooterActions({
@@ -406,11 +498,11 @@ export function ExportModal({
     if (provider.id !== "rfdetr" || !rfdetrSummary?.recommendedImgsz) {
       return "Converting with current options";
     }
-    const patch = rfdetrSummary.patchSize ? ` \u00b7 patch ${rfdetrSummary.patchSize}` : "";
+    const patch = rfdetrSummary.patchSize ? ` · patch ${rfdetrSummary.patchSize}` : "";
     if (options.imgsz === rfdetrSummary.recommendedImgsz) {
       return `Native settings applied: ${options.imgsz}px${patch}`;
     }
-    return `Override active: ${options.imgsz}px \u00b7 native ${rfdetrSummary.recommendedImgsz}px${patch}`;
+    return `Override active: ${options.imgsz}px · native ${rfdetrSummary.recommendedImgsz}px${patch}`;
   })();
 
   const commandPreview = buildCommandPreview({
@@ -452,7 +544,7 @@ export function ExportModal({
                 <DialogTitle className="text-lg">
                   Export to {route.title}
                 </DialogTitle>
-                {!setupMode && <HostSupportBadge result={hostSupportResult} />}
+                {exportConfigVisible && <HostSupportBadge result={hostSupportResult} />}
               </div>
               <p className="font-mono text-xs text-zinc-400">
                 format={route.targetFormat}{route.backend ? ` · backend=${route.backend}` : ""}
@@ -471,8 +563,10 @@ export function ExportModal({
                     : rfdetrSummary.detectedClass ?? "Auto"}
                 </span>
                 {rfdetrSummary.recommendedImgsz
-                  ? ` · native ${rfdetrSummary.recommendedImgsz}px${rfdetrSummary.patchSize ? ` · patch ${rfdetrSummary.patchSize}` : ""}`
-                  : ""}
+                  ? ` · native ${rfdetrSummary.recommendedImgsz}px${rfdetrSummary.patchSize ? ` · patch ${rfdetrSummary.patchSize}` : ""}${rfdetrSummary.resolutionSource ? ` · source ${rfdetrSummary.resolutionSource}` : ""}${rfdetrSummary.requiredMultiple ? ` · multiple ${rfdetrSummary.requiredMultiple}` : ""}`
+                  : rfdetrSummary.requiredMultiple
+                    ? ` · multiple ${rfdetrSummary.requiredMultiple}`
+                    : ""}
               </p>
               <p className="mt-1">Use checkpoints from trusted sources only. Local checkpoint loading may execute Python pickle data.</p>
             </div>
@@ -527,8 +621,22 @@ export function ExportModal({
               />
             )}
 
-            {/* Export configuration — hidden as one group while setup is incomplete */}
-            {!setupMode && (
+            {/* Ticket 11 follow-up: environment Ready, checkpoint inspection running */}
+            {rfdetrFollowUpActive && rfdetrInspectionFollowUp && (
+              <RfDetrInspectionFollowUpPanel phase={rfdetrInspectionFollowUp} />
+            )}
+
+            {/* Ticket 11 failure: environment stays Ready, offer Retry and file action */}
+            {rfdetrFailureActive && (
+              <RfDetrInspectionFailurePanel
+                error={rfdetrInspectError ?? null}
+                canRetry={Boolean(rfdetrInspectionFailure?.canRetry && onRetryRfDetrInspection)}
+                onRetry={onRetryRfDetrInspection}
+              />
+            )}
+
+            {/* Export configuration — hidden as one group until setup and inspection are ready */}
+            {exportConfigVisible && (
             <>
             {/* Default options notice + advanced toggle */}
             <div className="space-y-3">
@@ -627,6 +735,26 @@ export function ExportModal({
                 {setupPrimary.label}
               </Button>
             </>
+          ) : inspectionHidesExport ? (
+            <>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                Cancel
+              </Button>
+              {rfdetrFailureActive && rfdetrInspectionFailure?.canRetry && onRetryRfDetrInspection && (
+                <Button
+                  onClick={onRetryRfDetrInspection}
+                  className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                >
+                  Retry inspection
+                </Button>
+              )}
+              {rfdetrFollowUpActive && (
+                <Button disabled className="bg-primary text-primary-foreground opacity-50">
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Inspecting…
+                </Button>
+              )}
+            </>
           ) : (
           <>
           {footerActions.secondary === "stop" ? (
@@ -640,7 +768,7 @@ export function ExportModal({
               Starting…
             </Button>
           ) : footerActions.secondary === "export_again" ? (
-            <Button variant="outline" onClick={onExport} disabled={isInstalling || setupBlocked || rfdetrImgszError !== null} title={setupBlocked && setupConflictMessage ? setupConflictMessage : undefined}>
+            <Button variant="outline" onClick={onExport} disabled={isInstalling || setupBlocked || rfdetrImgszError !== null || (provider.id === "rfdetr" && rfdetrInspectionReady === false)} title={setupBlocked && setupConflictMessage ? setupConflictMessage : undefined}>
               <Play className="mr-2 h-4 w-4" />
               Export Again
             </Button>

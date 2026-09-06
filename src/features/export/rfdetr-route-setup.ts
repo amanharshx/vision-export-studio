@@ -18,6 +18,9 @@ import type {
   DepCheckResult,
   InstallableDependency,
   ProviderId,
+  RfDetrInspectResult,
+  RfDetrInspectStatus,
+  RfDetrVariantMode,
   RouteSpec,
 } from "@/lib/types";
 import type { HostSupportResult } from "@/lib/tauri/app";
@@ -27,6 +30,7 @@ import {
   type UltralyticsRouteSetupStatus,
 } from "./ultralytics-route-setup";
 import { getInstallableMissingPackages } from "./install-packages";
+import { getRfDetrPlusBlockReason, type RfDetrTrustedCheckpoint } from "./rfdetr-trust";
 
 export type RfDetrRouteSetupStatus = UltralyticsRouteSetupStatus;
 
@@ -177,4 +181,169 @@ export function getRfDetrSetupVerifyError(results: DepCheckResult[] | null): str
   const unmet = getInstallableMissingPackages(results);
   if (unmet.length === 0) return null;
   return `RF-DETR dependencies still missing after install: ${unmet.map((pkg) => pkg.package).join(", ")}. Review requirements before export.`;
+}
+
+// ---------------------------------------------------------------------------
+// Ticket 11: resume RF-DETR inspection after the selected stack becomes ready.
+// ---------------------------------------------------------------------------
+
+export interface RfDetrInspectionResumeInput {
+  setupSucceeded: boolean;
+  /** Route the finished setup task ran for; kept for background auditing. */
+  setupRouteId: string | null;
+  /** Currently selected route; a mismatch must not suppress the resume. */
+  selectedRouteId: string;
+  sourcePath: string;
+  trust: RfDetrTrustedCheckpoint | null;
+  inspectStatus: RfDetrInspectStatus;
+}
+
+/**
+ * Resume eligibility after successful route setup. True only when the same
+ * trusted checkpoint remains selected and its inspection previously failed
+ * (typically for want of a healthy stack). A changed or cleared model
+ * suppresses the resume so an old checkpoint is never inspected. A route
+ * mismatch does not suppress: setup may finish in the background while the
+ * user browses another route, and inspection is checkpoint-global.
+ */
+export function shouldResumeRfDetrInspectionAfterSetup(
+  input: RfDetrInspectionResumeInput,
+): boolean {
+  if (!input.setupSucceeded) return false;
+  if (!input.sourcePath) return false;
+  if (!input.trust) return false;
+  if (input.trust.sourcePath !== input.sourcePath) return false;
+  return input.inspectStatus === "failed";
+}
+
+export interface RfDetrInspectionReadinessInput {
+  status: RfDetrInspectStatus;
+  result: RfDetrInspectResult | null;
+  variantMode: RfDetrVariantMode;
+  manualClassSymbol: string;
+}
+
+/**
+ * Inspection readiness for export configuration. Plus-only checkpoints are
+ * never ready, even with an explicit manual variant. Otherwise ready when
+ * the checkpoint was detected (including incomplete geometry with known
+ * constraints, which the options panel presents as a labelled fallback) or
+ * when a manual variant was explicitly selected after a load failure.
+ */
+export function isRfDetrInspectionReadyForExport(
+  input: RfDetrInspectionReadinessInput,
+): boolean {
+  if (getRfDetrPlusBlockReason(input.result)) return false;
+  if (input.variantMode === "manual") return input.manualClassSymbol.trim().length > 0;
+  return input.status === "detected" && Boolean(input.result?.success);
+}
+
+/**
+ * Hide export configuration until both the route environment and the
+ * checkpoint inspection are ready. Setup unreadiness hides first; a Ready
+ * environment still hides while inspection has not produced usable data.
+ */
+export function shouldHideRfDetrExportControlsUntilInspected(
+  providerId: ProviderId,
+  setupStatus: RfDetrRouteSetupStatus,
+  inspectionReady: boolean,
+): boolean {
+  if (providerId !== "rfdetr") return false;
+  if (setupStatus !== "ready") return true;
+  return !inspectionReady;
+}
+
+export type RfDetrInspectionFollowUpPhase = "inspecting-checkpoint" | null;
+
+/**
+ * Named follow-up phase shown after the environment reports Ready while the
+ * resumed inspection is still running. Returns null otherwise so setup
+ * readiness is never relabelled: the environment stays Ready while the
+ * checkpoint phase runs beside it.
+ */
+export function getRfDetrInspectionFollowUpPhase(
+  setupStatus: RfDetrRouteSetupStatus,
+  inspectStatus: RfDetrInspectStatus,
+): RfDetrInspectionFollowUpPhase {
+  if (setupStatus === "ready" && inspectStatus === "inspecting") return "inspecting-checkpoint";
+  return null;
+}
+
+export function getRfDetrInspectionFollowUpCopy(
+  phase: Exclude<RfDetrInspectionFollowUpPhase, null>,
+): RfDetrRouteSetupCopy {
+  return {
+    title: "Inspecting checkpoint…",
+    body: "The environment is ready. Inspecting the trusted checkpoint to load model details. You can keep browsing; this continues in the background.",
+  };
+}
+
+export interface RfDetrInspectionFailureActions {
+  canRetry: boolean;
+  showManualVariant: boolean;
+  showFileAction: boolean;
+}
+
+/**
+ * Failure recovery without guessed defaults. Load failures offer Retry
+ * inspection, an explicit manual-variant path, and a file action. Plus-only
+ * checkpoints offer only the file action: Retry cannot help and manual
+ * selection must not bypass support policy.
+ */
+export function getRfDetrInspectionFailureActions(input: {
+  status: RfDetrInspectStatus;
+  result: RfDetrInspectResult | null;
+}): RfDetrInspectionFailureActions {
+  const idle: RfDetrInspectionFailureActions = {
+    canRetry: false,
+    showManualVariant: false,
+    showFileAction: false,
+  };
+  if (input.status !== "failed" || !input.result || input.result.success) return idle;
+  if (getRfDetrPlusBlockReason(input.result)) {
+    return { canRetry: false, showManualVariant: false, showFileAction: true };
+  }
+  return { canRetry: true, showManualVariant: true, showFileAction: true };
+}
+
+/** Standard presets offered as an explicit fallback when native size is unknown. */
+const RFDETR_FALLBACK_PRESETS = [384, 512, 560, 576, 640, 704, 768];
+
+/**
+ * First standard preset divisible by the known model block size, or null when
+ * constraints are unknown. Labelled as a fallback by callers, never as native.
+ */
+export function getRfDetrFallbackPreset(requiredMultiple: number | null): number | null {
+  if (requiredMultiple == null || requiredMultiple <= 0) return null;
+  return RFDETR_FALLBACK_PRESETS.find((preset) => preset % requiredMultiple === 0) ?? null;
+}
+
+/**
+ * Variant-level fallback is allowed only with a known or explicitly selected
+ * variant: a detected class in auto mode, or a non-empty manual selection.
+ * Unknown variants must not invent constraints.
+ */
+export function canUseRfDetrVariantFallback(input: {
+  result: RfDetrInspectResult | null;
+  variantMode: RfDetrVariantMode;
+  manualClassSymbol: string;
+}): boolean {
+  if (input.variantMode === "manual") return input.manualClassSymbol.trim().length > 0;
+  return Boolean(input.result?.success && input.result.class_symbol);
+}
+
+/**
+ * Compact detected-geometry summary: variant, native size, geometry source,
+ * and compatible-size requirement. Null when there is no successful
+ * inspection to report, so callers show the failure path instead.
+ */
+export function formatRfDetrInspectionSummary(
+  result: RfDetrInspectResult | null,
+): string | null {
+  if (!result?.success || !result.class_symbol) return null;
+  const parts = [result.class_symbol];
+  if (result.recommended_imgsz != null) parts.push(`native ${result.recommended_imgsz}px`);
+  if (result.resolution_source) parts.push(`source ${result.resolution_source}`);
+  if (result.required_multiple != null) parts.push(`multiple ${result.required_multiple}`);
+  return parts.join(" · ");
 }
