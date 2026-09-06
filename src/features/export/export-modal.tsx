@@ -368,6 +368,9 @@ export function RfDetrInspectionFailurePanel({
   const canRetry = failure.canRetry && onRetry;
   const showFileAction = failure.showFileAction && onChooseDifferentFile;
   const showManualVariant = failure.showManualVariant && onRevealManualVariant;
+  const recoveryOptions = canRetry
+    ? "Retry inspection, try a different checkpoint file, or check route compatibility and environment setup."
+    : "Try a different checkpoint file, or check route compatibility and environment setup.";
   return (
     <div className="rounded-md border border-red-200 bg-red-50 p-3">
       <p className="text-sm font-medium text-red-800">Checkpoint inspection failed</p>
@@ -375,9 +378,7 @@ export function RfDetrInspectionFailurePanel({
         {error ?? "RF-DETR inspection failed."}
       </p>
       <p className="mt-2 text-xs text-red-700">
-        {canRetry
-          ? "The environment is ready. Retry inspection, try a different checkpoint file, or check route compatibility and environment setup. No guessed defaults were applied."
-          : "The environment is ready. Try a different checkpoint file, or check route compatibility and environment setup. No guessed defaults were applied."}
+        The environment is ready. {recoveryOptions} No guessed defaults were applied.
       </p>
       {(canRetry || showFileAction || showManualVariant) && (
         <div className="mt-2 flex flex-wrap gap-2">
@@ -474,13 +475,12 @@ export function ExportModal({
   // readiness: when setup is Ready but inspection is still running or has
   // failed, the modal shows the named checkpoint phase instead of export
   // configuration. The environment stays Ready throughout.
-  const rfdetrFollowUpActive = provider.id === "rfdetr"
+  const isRfDetrRouteReady = provider.id === "rfdetr"
     && rfdetrSetup != null
-    && rfdetrSetup.status === "ready"
+    && rfdetrSetup.status === "ready";
+  const rfdetrFollowUpActive = isRfDetrRouteReady
     && rfdetrInspection?.followUp != null;
-  const rfdetrFailureActive = provider.id === "rfdetr"
-    && rfdetrSetup != null
-    && rfdetrSetup.status === "ready"
+  const rfdetrFailureActive = isRfDetrRouteReady
     && !inspectionReady
     && rfdetrInspection?.status === "failed";
   const inspectionHidesExport = rfdetrFollowUpActive || rfdetrFailureActive;
