@@ -37,6 +37,7 @@ import {
   getRfDetrRouteSetupCopy,
   getRfDetrInspectionFollowUpCopy,
   shouldHideRfDetrExportControlsUntilInspected,
+  type RfDetrInspectionFailureActions,
   type RfDetrInspectionFollowUpPhase,
   type RfDetrRouteSetupStatus,
 } from "./rfdetr-route-setup";
@@ -91,20 +92,23 @@ interface ExportModalProps {
   rfdetrInspection?: RfDetrInspectionModalState | null;
   onRetryRfDetrInspection?: () => void;
   onChooseDifferentRfDetrFile?: () => void;
+  onSelectRfDetrManualVariant?: () => void;
 }
 
 /**
  * Checkpoint inspection state for the RF-DETR export modal. Bundled so the
  * modal takes one inspection object (plus action callbacks, matching the
- * setup state's convention) instead of a clump of related props.
+ * setup state's convention) instead of a clump of related props. The
+ * failure recovery contract is shared with the workspace panel via
+ * RfDetrInspectionFailureActions: retry and file actions render here, and
+ * the manual-variant select lives in the workspace checkpoint panel.
  */
 export interface RfDetrInspectionModalState {
   status: RfDetrInspectStatus;
   error: string | null;
   ready: boolean;
   followUp: RfDetrInspectionFollowUpPhase;
-  canRetry: boolean;
-  showFileAction: boolean;
+  failure: RfDetrInspectionFailureActions;
 }
 
 type FooterAction = "cancel" | "export" | "export_again" | "show_folder" | "starting" | "stop";
@@ -350,17 +354,20 @@ export function RfDetrInspectionFollowUpPanel() {
 
 export function RfDetrInspectionFailurePanel({
   error,
-  canRetry,
+  failure,
   onRetry,
-  showFileAction,
   onChooseDifferentFile,
+  onSelectManualVariant,
 }: {
   error: string | null;
-  canRetry: boolean;
+  failure: RfDetrInspectionFailureActions;
   onRetry?: () => void;
-  showFileAction?: boolean;
   onChooseDifferentFile?: () => void;
+  onSelectManualVariant?: () => void;
 }) {
+  const canRetry = failure.canRetry && onRetry;
+  const showFileAction = failure.showFileAction && onChooseDifferentFile;
+  const showManualVariant = failure.showManualVariant && onSelectManualVariant;
   return (
     <div className="rounded-md border border-red-200 bg-red-50 p-3">
       <p className="text-sm font-medium text-red-800">Checkpoint inspection failed</p>
@@ -372,16 +379,21 @@ export function RfDetrInspectionFailurePanel({
           ? "The environment is ready. Retry inspection, try a different checkpoint file, or check route compatibility and environment setup. No guessed defaults were applied."
           : "The environment is ready. Try a different checkpoint file, or check route compatibility and environment setup. No guessed defaults were applied."}
       </p>
-      {((canRetry && onRetry) || (showFileAction && onChooseDifferentFile)) && (
+      {(canRetry || showFileAction || showManualVariant) && (
         <div className="mt-2 flex flex-wrap gap-2">
-          {canRetry && onRetry && (
+          {canRetry && (
             <Button size="sm" variant="outline" onClick={onRetry}>
               Retry inspection
             </Button>
           )}
-          {showFileAction && onChooseDifferentFile && (
+          {showFileAction && (
             <Button size="sm" variant="outline" onClick={onChooseDifferentFile}>
               Choose different file
+            </Button>
+          )}
+          {showManualVariant && (
+            <Button size="sm" variant="outline" onClick={onSelectManualVariant}>
+              Select manual variant
             </Button>
           )}
         </div>
@@ -429,6 +441,7 @@ export function ExportModal({
   rfdetrInspection,
   onRetryRfDetrInspection,
   onChooseDifferentRfDetrFile,
+  onSelectRfDetrManualVariant,
 }: ExportModalProps) {
   const format = formats[route.targetFormat];
   const formatIcon = formatIconMap[format.id];
@@ -635,14 +648,14 @@ export function ExportModal({
               <RfDetrInspectionFollowUpPanel />
             )}
 
-            {/* Ticket 11 failure: environment stays Ready, offer Retry and file action */}
-            {rfdetrFailureActive && (
+            {/* Ticket 11 failure: environment stays Ready; offer Retry, file, and manual-variant actions */}
+            {rfdetrFailureActive && rfdetrInspection && (
               <RfDetrInspectionFailurePanel
-                error={rfdetrInspection?.error ?? null}
-                canRetry={Boolean(rfdetrInspection?.canRetry && onRetryRfDetrInspection)}
+                error={rfdetrInspection.error}
+                failure={rfdetrInspection.failure}
                 onRetry={onRetryRfDetrInspection}
-                showFileAction={Boolean(rfdetrInspection?.showFileAction && onChooseDifferentRfDetrFile)}
                 onChooseDifferentFile={onChooseDifferentRfDetrFile}
+                onSelectManualVariant={onSelectRfDetrManualVariant}
               />
             )}
 
@@ -751,7 +764,7 @@ export function ExportModal({
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
-              {rfdetrFailureActive && rfdetrInspection?.canRetry && onRetryRfDetrInspection && (
+              {rfdetrFailureActive && rfdetrInspection?.failure.canRetry && onRetryRfDetrInspection && (
                 <Button
                   onClick={onRetryRfDetrInspection}
                   className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"

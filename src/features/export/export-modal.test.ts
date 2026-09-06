@@ -255,11 +255,14 @@ describe("RfDetrInspectionFollowUpPanel (ticket 11)", () => {
 });
 
 describe("RfDetrInspectionFailurePanel (ticket 11)", () => {
+  const loadFailure = { canRetry: true, showManualVariant: true, showFileAction: true };
+  const plusFailure = { canRetry: false, showManualVariant: false, showFileAction: true };
+
   test("offers retry without guessed defaults and keeps the environment ready", () => {
     const html = renderToStaticMarkup(
       React.createElement(RfDetrInspectionFailurePanel, {
         error: "torch load boom",
-        canRetry: true,
+        failure: loadFailure,
         onRetry: () => {},
       }),
     );
@@ -275,7 +278,7 @@ describe("RfDetrInspectionFailurePanel (ticket 11)", () => {
     const html = renderToStaticMarkup(
       React.createElement(RfDetrInspectionFailurePanel, {
         error: "RFDETRXLarge requires rfdetr_plus support and is not supported in v1.",
-        canRetry: false,
+        failure: plusFailure,
       }),
     );
 
@@ -287,9 +290,8 @@ describe("RfDetrInspectionFailurePanel (ticket 11)", () => {
     const html = renderToStaticMarkup(
       React.createElement(RfDetrInspectionFailurePanel, {
         error: "torch load boom",
-        canRetry: true,
+        failure: loadFailure,
         onRetry: () => {},
-        showFileAction: true,
         onChooseDifferentFile: () => {},
       }),
     );
@@ -302,13 +304,38 @@ describe("RfDetrInspectionFailurePanel (ticket 11)", () => {
     const html = renderToStaticMarkup(
       React.createElement(RfDetrInspectionFailurePanel, {
         error: "torch load boom",
-        canRetry: true,
+        failure: { ...loadFailure, showFileAction: false },
         onRetry: () => {},
-        showFileAction: false,
       }),
     );
 
     expect(html).toContain("Retry inspection");
     expect(html).not.toContain("Choose different file");
+  });
+
+  test("offers the manual-variant path from the modal on load failure", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RfDetrInspectionFailurePanel, {
+        error: "torch load boom",
+        failure: loadFailure,
+        onRetry: () => {},
+        onSelectManualVariant: () => {},
+      }),
+    );
+
+    expect(html).toContain("Select manual variant");
+  });
+
+  test("hides the manual-variant path for plus-only checkpoints", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RfDetrInspectionFailurePanel, {
+        error: "RFDETRXLarge requires rfdetr_plus support and is not supported in v1.",
+        failure: plusFailure,
+        onChooseDifferentFile: () => {},
+      }),
+    );
+
+    expect(html).toContain("Choose different file");
+    expect(html).not.toContain("Select manual variant");
   });
 });

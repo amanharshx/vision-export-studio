@@ -1492,8 +1492,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       error: rfdetrInspectResult?.error ?? null,
       ready: rfdetrInspectionReady,
       followUp: rfdetrInspectionFollowUp,
-      canRetry: rfdetrInspectionFailure.canRetry,
-      showFileAction: rfdetrInspectionFailure.showFileAction,
+      failure: rfdetrInspectionFailure,
     }
     : null;
   const rfdetrInspectionSummary = selectedProviderId === "rfdetr"
@@ -1582,6 +1581,15 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       showRfDetrInspectFailure(message);
     }
   }, [resetRfDetrTrust, showRfDetrInspectFailure]);
+
+  // Single retry entry point shared by the formats-view and modal Retry
+  // buttons: re-inspects through the selected route's stack only while the
+  // same trusted checkpoint remains selected; otherwise a no-op.
+  const handleRetryRfDetrInspection = useCallback((): void => {
+    if (selectedProviderId !== "rfdetr") return;
+    if (!sourcePath || !rfdetrTrust || rfdetrTrust.sourcePath !== sourcePath) return;
+    void inspectWithTrustedCheckpoint(sourcePath, rfdetrSelectedStackKey, rfdetrTrust);
+  }, [inspectWithTrustedCheckpoint, rfdetrSelectedStackKey, rfdetrTrust, selectedProviderId, sourcePath]);
 
   // One shared environment publisher for mount, setup-terminal,
   // Environment-panel, and post-install detection. Only the latest request
@@ -3367,13 +3375,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => {
-                          void inspectWithTrustedCheckpoint(
-                            sourcePath,
-                            rfdetrSelectedStackKey,
-                            rfdetrTrust,
-                          );
-                        }}
+                        onClick={handleRetryRfDetrInspection}
                       >
                         Retry inspection
                       </Button>
@@ -3520,14 +3522,20 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         } : null}
         rfdetrInspection={rfdetrInspectionModalState}
         onRetryRfDetrInspection={selectedProviderId === "rfdetr" && rfdetrTrust && sourcePath && rfdetrTrust.sourcePath === sourcePath
-          ? () => {
-            void inspectWithTrustedCheckpoint(sourcePath, rfdetrSelectedStackKey, rfdetrTrust);
-          }
+          ? handleRetryRfDetrInspection
           : undefined}
         onChooseDifferentRfDetrFile={selectedProviderId === "rfdetr"
           ? () => {
             setDialogOpen(false);
             handleClearFile();
+          }
+          : undefined}
+        onSelectRfDetrManualVariant={selectedProviderId === "rfdetr"
+          ? () => {
+            // The manual-variant select lives in the workspace checkpoint
+            // panel behind the modal; closing reveals it without touching
+            // trust, options, or environment state.
+            setDialogOpen(false);
           }
           : undefined}
       />
