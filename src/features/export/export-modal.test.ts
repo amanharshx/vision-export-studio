@@ -319,7 +319,7 @@ describe("RfDetrInspectionFailurePanel (ticket 11)", () => {
         error: "torch load boom",
         failure: loadFailure,
         onRetry: () => {},
-        onSelectManualVariant: () => {},
+        onRevealManualVariant: () => {},
       }),
     );
 

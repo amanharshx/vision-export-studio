@@ -92,7 +92,7 @@ interface ExportModalProps {
   rfdetrInspection?: RfDetrInspectionModalState | null;
   onRetryRfDetrInspection?: () => void;
   onChooseDifferentRfDetrFile?: () => void;
-  onSelectRfDetrManualVariant?: () => void;
+  onRevealRfDetrManualVariant?: () => void;
 }
 
 /**
@@ -357,17 +357,17 @@ export function RfDetrInspectionFailurePanel({
   failure,
   onRetry,
   onChooseDifferentFile,
-  onSelectManualVariant,
+  onRevealManualVariant,
 }: {
   error: string | null;
   failure: RfDetrInspectionFailureActions;
   onRetry?: () => void;
   onChooseDifferentFile?: () => void;
-  onSelectManualVariant?: () => void;
+  onRevealManualVariant?: () => void;
 }) {
   const canRetry = failure.canRetry && onRetry;
   const showFileAction = failure.showFileAction && onChooseDifferentFile;
-  const showManualVariant = failure.showManualVariant && onSelectManualVariant;
+  const showManualVariant = failure.showManualVariant && onRevealManualVariant;
   return (
     <div className="rounded-md border border-red-200 bg-red-50 p-3">
       <p className="text-sm font-medium text-red-800">Checkpoint inspection failed</p>
@@ -392,7 +392,7 @@ export function RfDetrInspectionFailurePanel({
             </Button>
           )}
           {showManualVariant && (
-            <Button size="sm" variant="outline" onClick={onSelectManualVariant}>
+            <Button size="sm" variant="outline" onClick={onRevealManualVariant}>
               Select manual variant
             </Button>
           )}
@@ -441,7 +441,7 @@ export function ExportModal({
   rfdetrInspection,
   onRetryRfDetrInspection,
   onChooseDifferentRfDetrFile,
-  onSelectRfDetrManualVariant,
+  onRevealRfDetrManualVariant,
 }: ExportModalProps) {
   const format = formats[route.targetFormat];
   const formatIcon = formatIconMap[format.id];
@@ -485,6 +485,12 @@ export function ExportModal({
     && rfdetrInspection?.status === "failed";
   const inspectionHidesExport = rfdetrFollowUpActive || rfdetrFailureActive;
   const exportConfigVisible = !setupMode && !inspectionHidesExport;
+  // Single footer decision for the failure branch: the body panel owns the
+  // same retry rule for its own button; this bool keeps the footer's copy
+  // in one named place instead of repeating the guard.
+  const showRetryInFooter = Boolean(
+    rfdetrFailureActive && rfdetrInspection?.failure.canRetry && onRetryRfDetrInspection,
+  );
   // One setup owns the footer at a time; both states share the same shape
   // (RfDetrSetupModalState extends UltralyticsSetupModalState), so the
   // primary action resolves once instead of per provider.
@@ -655,7 +661,7 @@ export function ExportModal({
                 failure={rfdetrInspection.failure}
                 onRetry={onRetryRfDetrInspection}
                 onChooseDifferentFile={onChooseDifferentRfDetrFile}
-                onSelectManualVariant={onSelectRfDetrManualVariant}
+                onRevealManualVariant={onRevealRfDetrManualVariant}
               />
             )}
 
@@ -764,7 +770,7 @@ export function ExportModal({
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
-              {rfdetrFailureActive && rfdetrInspection?.failure.canRetry && onRetryRfDetrInspection && (
+              {showRetryInFooter && (
                 <Button
                   onClick={onRetryRfDetrInspection}
                   className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"

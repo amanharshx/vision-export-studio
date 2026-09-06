@@ -1482,7 +1482,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     : null;
   const rfdetrInspectionFailure = selectedProviderId === "rfdetr"
     ? getRfDetrInspectionFailureActions({ status: rfdetrInspectStatus, result: rfdetrInspectResult })
-    : { canRetry: false, showManualVariant: false, showFileAction: false };
+    : getRfDetrInspectionFailureActions({ status: "idle", result: null });
   // Single inspection object for the export modal (mirrors the setup-state
   // convention): the modal takes one inspection bundle plus action
   // callbacks instead of a clump of related props.
@@ -3530,7 +3530,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
             handleClearFile();
           }
           : undefined}
-        onSelectRfDetrManualVariant={selectedProviderId === "rfdetr"
+        onRevealRfDetrManualVariant={selectedProviderId === "rfdetr"
           ? () => {
             // The manual-variant select lives in the workspace checkpoint
             // panel behind the modal; closing reveals it without touching
