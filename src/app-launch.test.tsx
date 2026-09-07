@@ -1,11 +1,11 @@
 // @ts-expect-error Bun provides this module at test runtime.
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 
+// Registered for the whole test process (no unregister): React may still
+// have scheduled work when a file finishes, and other suites tolerate the
+// globals (verified by the full run).
 GlobalRegistrator.register();
-afterAll(() => {
-  GlobalRegistrator.unregister();
-});
 
 import React from "react";
 import App from "@/App";

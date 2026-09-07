@@ -3001,9 +3001,14 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Clear python override
   const handleClearOverride = useCallback(async () => {
     if (cleanupBusy) return;
+    try {
+      await savePythonOverride(null);
+    } catch (error) {
+      setEnvironmentPanelError(String(error));
+      return;
+    }
     setPythonOverride("");
     setAppliedPythonOverride("");
-    await savePythonOverride(null);
     handleRedetect();
   }, [cleanupBusy, handleRedetect]);
 
