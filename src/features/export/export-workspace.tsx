@@ -401,21 +401,21 @@ export function resolveRoutePython(
 }
 
 /**
- * Ultralytics interpreter eligible for checks and exports: the managed
- * environment, or the detected environment when the user explicitly chose it
- * via a saved Python override (override semantics belong to ticket 14).
+ * Ultralytics interpreter eligible for checks and exports: only the managed
+ * environment. Ticket 14: a saved Python override is bootstrap-only — it
+ * creates isolated export environments and never runs checks or exports
+ * directly, so it no longer grants readiness through another interpreter.
  * Automatically discovered system Python never qualifies: it would mark
  * routes Ready and export through it with no route setup and no app-owned
  * environment, bypassing provider inventory.
  */
 export function resolveUltralyticsRoutePython(
   envPython: string | null,
-  appliedOverride: string,
+  _appliedOverride: string,
   managedPython: string | null,
   os?: AppOS,
 ): string | null {
   if (!envPython) return null;
-  if (appliedOverride.trim()) return envPython;
   if (managedPython && isManagedPythonEnvironment(envPython, managedPython, os ?? getOS())) {
     return envPython;
   }
@@ -1649,13 +1649,17 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         const override = settings.python_path_override || "";
         if (override) setPythonOverride(override);
         setAppliedPythonOverride(override);
-        setManagedPythonPath(getManagedPythonPath(settings.runtime_dir));
+        const managedPython = getManagedPythonPath(settings.runtime_dir);
+        setManagedPythonPath(managedPython);
         const outOverride = settings.output_dir_override || "";
         if (outOverride) {
           setOutputDirOverride(outOverride);
           setOutputDirInput(outOverride);
         }
-        return environmentPublisher.publish(override.trim() || undefined);
+        // Ticket 14: detection never runs through the saved bootstrap
+        // override; it always probes the managed environment so routes stay
+        // independent of whether an override exists.
+        return environmentPublisher.publish(managedPython);
       })
       .catch((e: unknown) => setEnvError(String(e)));
     void getManagedRuntimeRebuildEligibility().then(setManagedRuntimeUpgrade).catch(() => setManagedRuntimeUpgrade(null));
@@ -2696,7 +2700,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       }
 
       if (selectedProviderId === "ultralytics") {
-        const published = await environmentPublisher.publish(pythonOverride.trim() || pythonPath);
+        // Ticket 14: re-detect the managed environment after install, never
+        // the saved bootstrap override. pythonPath is already the managed
+        // interpreter (backend installs only into app-owned environments).
+        const published = await environmentPublisher.publish(pythonPath);
         if (!environmentPublisher.isCurrent(published.requestId)) return;
         if (published.failed || !published.info) {
           captureAnalyticsEvent("export_failed", {
@@ -2875,16 +2882,17 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     currentExportOutputDirRef.current = null;
   };
 
-  // Re-detect environment with current override. Detection and loading-state
+  // Re-detect the managed environment. Ticket 14: detection never runs
+  // through the saved bootstrap override; the override only creates
+  // isolated environments at setup time. Detection and loading-state
   // publication go through the shared generation-owning path; the envInfo
   // effect refreshes whichever route is current.
-  const handleRedetect = useCallback(async (overridePath?: string, allowDuringCleanup = false) => {
+  const handleRedetect = useCallback(async (allowDuringCleanup = false) => {
     if (shouldSkipEnvironmentRedetection(cleanupBusy, allowDuringCleanup)) return;
-    const trimmedOverride = overridePath?.trim();
     setRedetecting(true);
     setEnvInfo(null);
     setEnvError(null);
-    const outcome = await environmentPublisher.publish(trimmedOverride || undefined);
+    const outcome = await environmentPublisher.publish(managedPythonPath ?? undefined);
     if (!environmentPublisher.isCurrent(outcome.requestId)) return;
     if (outcome.failed) return;
     try {
@@ -2893,7 +2901,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     } catch (e: unknown) {
       if (environmentPublisher.isCurrent(outcome.requestId)) setEnvironmentPanelError(String(e));
     }
-  }, [cleanupBusy, environmentPublisher, refreshStackEnvironmentCards]);
+  }, [cleanupBusy, environmentPublisher, managedPythonPath, refreshStackEnvironmentCards]);
 
   const handleRebuildManagedRuntime = useCallback(async () => {
     if (blockOnSetupConflict(setManagedRuntimeRebuildError)) return;
@@ -2949,7 +2957,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     if (mayStartRuntimeUpgrade) setManagedRuntimeUpgradeOpen(true);
   }, [blockOnSetupConflict, mayStartRuntimeUpgrade]);
 
-  // Save python path override and re-detect
+  // Save bootstrap python and re-detect the managed environment.
+  // Ticket 14: saving only records the bootstrap candidate; detection
+  // always probes the managed interpreter so the override never runs
+  // checks directly.
   const handleSaveAndRedetect = useCallback(async () => {
     if (cleanupBusy) return;
     const val = pythonOverride.trim();
@@ -2961,7 +2972,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       return;
     }
     setAppliedPythonOverride(val);
-    handleRedetect(val);
+    handleRedetect();
   }, [cleanupBusy, pythonOverride, handleRedetect]);
 
   // Browse for python executable
@@ -3075,11 +3086,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         // runtime on every successful deletion (not only when an override
         // survives) so affected Ultralytics routes report their honest
         // missing state while healthy RF-DETR routes keep resolving through
-        // their own stacks. Detection uses the saved override, never
-        // unsaved input text, and cleanup never touches legacy setup state.
+        // their own stacks. Ticket 14: detection always probes the managed
+        // interpreter, never the saved bootstrap override or unsaved input
+        // text, and cleanup never touches legacy setup state.
         if (managedEnvironmentDeletionSucceeded(report, "ultralytics-managed")) {
           setEnvInfo(null);
-          await handleRedetect(appliedPythonOverride.trim() || undefined, true);
+          await handleRedetect(true);
         }
       } else {
         await refreshStackEnvironmentCards();
@@ -3105,7 +3117,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     } finally {
       setCleanupBusy(false);
     }
-  }, [appliedPythonOverride, blockOnSetupConflict, cleanupBusy, cleanupConfirmation, dismissTask, handleRedetect, invalidateManagedEnvironmentSizesForMutation, providerEnvPython, refreshRouteDependencies, refreshStackEnvironmentCards, selectedProviderId, selectedRouteId, setupTask, stackEnvironments]);
+  }, [blockOnSetupConflict, cleanupBusy, cleanupConfirmation, dismissTask, handleRedetect, invalidateManagedEnvironmentSizesForMutation, providerEnvPython, refreshRouteDependencies, refreshStackEnvironmentCards, selectedProviderId, selectedRouteId, setupTask, stackEnvironments]);
 
   // Save output dir override
   const handleSaveOutputDir = useCallback(async () => {
@@ -3172,7 +3184,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
             </SheetHeader>
             <button
               type="button"
-              onClick={() => handleRedetect(pythonOverride.trim())}
+              onClick={() => handleRedetect()}
               disabled={redetecting || cleanupBusy}
               className="rounded-lg p-1.5 text-zinc-400 transition-colors hover:bg-zinc-200/60 hover:text-zinc-700 disabled:opacity-50"
               title="Re-detect environment"
@@ -3220,7 +3232,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
 
               <div className="rounded-xl border border-zinc-200/80 bg-white p-4 shadow-sm">
                 <div className="mb-2.5 flex items-center justify-between">
-                  <p className="text-[13px] font-semibold text-zinc-800">Python override</p>
+                  <p className="text-[13px] font-semibold text-zinc-800">Bootstrap Python</p>
                   {pythonOverride && (
                     <button
                       type="button"
@@ -3237,7 +3249,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                     value={pythonOverride}
                     onChange={(e) => setPythonOverride(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter") handleSaveAndRedetect(); }}
-                    placeholder="Use managed Vision Export Studio runtime"
+                    placeholder="Auto-detect compatible Python"
                     className="h-8 flex-1 min-w-0 rounded-lg border-zinc-200 bg-zinc-50 font-mono text-[12px] placeholder:text-zinc-300 focus-visible:bg-white"
                   />
                   <button
@@ -3250,8 +3262,13 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                   </button>
                 </div>
                 <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
-                  Leave empty to use Vision Export Studio&apos;s managed runtime in <code>~/.vision-export-studio/.venv</code>.
+                  Used only to create isolated export environments. Your selected Python is never modified and never runs exports directly. Leave empty to auto-detect a compatible Python.
                 </p>
+                {appliedPythonOverride.trim() && (
+                  <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
+                    Your saved Python creates isolated export environments when setup runs. Packages are installed into app-owned environments, never into your Python.
+                  </p>
+                )}
                 <div className="mt-2.5 flex justify-end">
                   <Button
                     size="sm"
@@ -3373,7 +3390,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         <div className="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm">
           <div><p className="font-medium">What will be removed</p><p className="text-zinc-600">{cleanupConfirmation.environments.join(", ")}</p></div>
           <div><p className="font-medium">Approx. size</p><p className="text-zinc-600">{cleanupConfirmation.estimatedLogicalBytes === null ? "Unavailable" : formatManagedEnvironmentSize(cleanupConfirmation.estimatedLogicalBytes)}</p></div>
-          <div><p className="font-medium">What happens next</p><p className="text-zinc-600">{cleanupConfirmation.hasPythonOverride && <>Your Python override will stay active. </>}{cleanupConfirmation.isBulkCleanup ? "These environments will be set up again when needed." : "This environment will be set up again when needed."}</p></div>
+          <div><p className="font-medium">What happens next</p><p className="text-zinc-600">{cleanupConfirmation.hasPythonOverride && <>Your bootstrap Python stays saved. </>}{cleanupConfirmation.isBulkCleanup ? "These environments will be set up again when needed." : "This environment will be set up again when needed."}</p></div>
           <div><p className="font-medium">What stays safe</p><p className="text-zinc-600">Your models, exported files, and settings will not be deleted.</p></div>
           <details>
             <summary className="cursor-pointer font-medium">Affected export formats ({cleanupConfirmation.routeIds.length})</summary>

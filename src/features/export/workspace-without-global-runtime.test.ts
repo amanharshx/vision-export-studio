@@ -68,8 +68,8 @@ describe("ultralytics managed-only readiness (ticket 12)", () => {
     expect(resolveUltralyticsRoutePython(MANAGED, "", MANAGED, "linux")).toBe(MANAGED);
   });
 
-  test("an explicit override keeps current behavior until ticket 14", () => {
-    expect(resolveUltralyticsRoutePython(SYSTEM, "/custom/python", MANAGED, "linux")).toBe(SYSTEM);
+  test("an explicit override never grants readiness (ticket 14 bootstrap-only)", () => {
+    expect(resolveUltralyticsRoutePython(SYSTEM, "/custom/python", MANAGED, "linux")).toBeNull();
     expect(resolveUltralyticsRoutePython(MANAGED, "/custom/python", MANAGED, "linux")).toBe(MANAGED);
   });
 });

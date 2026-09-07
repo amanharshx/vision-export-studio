@@ -97,6 +97,10 @@ export function PythonRequiredDialogBody({
             cancel. Vision Export Studio never downloads Python automatically.
           </p>
           <p>
+            The selected Python only creates isolated export environments and
+            is never modified.
+          </p>
+          <p>
             <a
               href={PYTHON_DOWNLOAD_URL}
               target="_blank"

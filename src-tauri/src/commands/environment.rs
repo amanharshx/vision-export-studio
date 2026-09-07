@@ -455,7 +455,7 @@ fn resolve_effective_python(
     }
 }
 
-fn normalize_path_for_comparison(path: &str, is_windows: bool) -> String {
+pub(crate) fn normalize_path_for_comparison(path: &str, is_windows: bool) -> String {
     let normalized = path.trim().trim_end_matches(['/', '\\']);
     if is_windows {
         normalized.replace('\\', "/").to_lowercase()
@@ -464,7 +464,7 @@ fn normalize_path_for_comparison(path: &str, is_windows: bool) -> String {
     }
 }
 
-fn paths_equal(left: &str, right: &str, is_windows: bool) -> bool {
+pub(crate) fn paths_equal(left: &str, right: &str, is_windows: bool) -> bool {
     normalize_path_for_comparison(left, is_windows)
         == normalize_path_for_comparison(right, is_windows)
 }

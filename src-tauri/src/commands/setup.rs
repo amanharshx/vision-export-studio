@@ -897,6 +897,32 @@ mod tests {
             "/Users/tester/.vision-export-studio"
         );
         assert!(normalized.setup_complete);
+        // Ticket 14: existing saved executable paths survive migration so a
+        // bootstrap-only override keeps working as a creation candidate.
+        assert_eq!(
+            normalized.python_path_override.as_deref(),
+            Some("/custom/python")
+        );
+    }
+
+    #[test]
+    fn normalize_loaded_settings_preserves_trimmed_override_path() {
+        let settings = AppSettings {
+            runtime_dir: "/Users/tester/.vision-export-studio".to_string(),
+            setup_complete: false,
+            python_path_override: Some("  /custom/python  ".to_string()),
+            output_dir_override: None,
+        };
+
+        let (normalized, changed) =
+            normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio", false);
+
+        assert!(changed);
+        assert_eq!(
+            normalized.python_path_override.as_deref(),
+            Some("/custom/python")
+        );
+        assert!(normalized.setup_complete);
     }
 
     #[test]
