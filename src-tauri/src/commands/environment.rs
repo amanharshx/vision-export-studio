@@ -1,5 +1,6 @@
 use crate::commands::deps;
-use crate::commands::setup::{load_settings, venv_python, venv_yolo};
+use crate::commands::setup::{load_settings, venv_python, venv_python_at, venv_yolo};
+use crate::commands::stack_environments::{known_stacks, stack_venv_dir_for_key};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -477,19 +478,24 @@ pub(crate) fn is_managed_python(python_path: &str, runtime_dir: &str) -> bool {
 }
 
 /// Ticket 14: an explicit detection probe must target an app-owned
-/// interpreter — the managed environment or an RF-DETR stack venv under the
-/// runtime root. A saved bootstrap override (or any other user-owned Python)
-/// never runs detection directly: the frontend always probes managed, and
-/// this gate holds for direct invokes.
+/// interpreter — the managed environment or a known RF-DETR stack venv.
+/// A saved bootstrap override (or any other user-owned Python) never runs
+/// detection directly: the frontend always probes managed, RF-DETR setup
+/// verification probes its resolved stack, and this gate holds for direct
+/// invokes. Stacks match exactly against the stack inventory (not a path
+/// prefix), so unknown directories under `envs/` stay rejected.
 pub(crate) fn explicit_detect_path_allowed(explicit: &str, runtime_dir: &str) -> bool {
     if is_managed_python(explicit, runtime_dir) {
         return true;
     }
-    let stacks_prefix = format!(
-        "{}/envs/",
-        normalize_path_for_comparison(runtime_dir, cfg!(windows))
-    );
-    normalize_path_for_comparison(explicit, cfg!(windows)).starts_with(&stacks_prefix)
+    let normalized = normalize_path_for_comparison(explicit, cfg!(windows));
+    known_stacks().iter().any(|stack| {
+        stack_venv_dir_for_key(Path::new(runtime_dir), stack.key)
+            .map(|venv| {
+                normalized == normalize_path_for_comparison(&venv_python_at(&venv), cfg!(windows))
+            })
+            .unwrap_or(false)
+    })
 }
 
 fn detect_yolo_path(
@@ -1003,6 +1009,11 @@ mod tests {
         assert!(!explicit_detect_path_allowed("/usr/bin/python3", runtime));
         assert!(!explicit_detect_path_allowed(
             "/tmp/other-runtime/.venv/bin/python",
+            runtime
+        ));
+        // Unknown directories under envs/ are not app-owned stacks.
+        assert!(!explicit_detect_path_allowed(
+            "/tmp/runtime/envs/rfdetr-backup/.venv/bin/python",
             runtime
         ));
     }

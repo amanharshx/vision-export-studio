@@ -1237,44 +1237,53 @@ pub(crate) fn is_ultralytics_route(route_id: &str) -> bool {
     route_id.starts_with("ultralytics.")
 }
 
+/// Resolve the authoritative bootstrap from the saved override for
+/// environment creation or repair. Ticket 14: the saved override is the
+/// highest-priority bootstrap candidate when compatible — a direct invoke
+/// passing another interpreter must neither bypass it nor dodge its
+/// invalid-override error.
+fn resolve_saved_override_bootstrap(
+    route_id: &str,
+    override_path: &str,
+    runtime_root: &str,
+) -> Result<String, String> {
+    match resolve_bootstrap_for_runtime(route_id, Some(override_path), Path::new(runtime_root)) {
+        BootstrapPythonResult::Available { python_path, .. } => Ok(python_path),
+        BootstrapPythonResult::Missing {
+            requirement,
+            reason,
+            ..
+        } => Err(format!("Python required ({requirement}): {reason}")),
+        BootstrapPythonResult::InvalidOverride { reason, .. }
+        | BootstrapPythonResult::Error { reason } => Err(reason),
+    }
+}
+
 /// Resolve the install target for the shared Ultralytics environment: install
 /// only into the app-owned managed interpreter — never into the bootstrap or
 /// saved-override interpreter (a chosen Python is bootstrap-only). A healthy
 /// managed environment installs in place even when the saved override is
-/// invalid or missing, because the override is only consulted when a repair
-/// or creation actually needs a bootstrap. Used by both the provider-wide
-/// setup (route_id = None) and route-scoped Ultralytics installs so the two
-/// entry points cannot disagree on where packages land.
+/// invalid or missing. When work is actually needed, the bootstrap comes
+/// authoritatively from the saved override (highest priority, with its
+/// invalid-override error surfacing); only without a saved override is the
+/// passed interpreter used as the bootstrap candidate. Used by both the
+/// provider-wide setup (route_id = None) and route-scoped Ultralytics
+/// installs so the two entry points cannot disagree on where packages land.
 fn resolve_ultralytics_install_python(
     passed_python: &str,
     runtime_root: &str,
     settings_override: Option<&str>,
 ) -> Result<String, String> {
-    match ensure_ultralytics_managed_environment(passed_python, runtime_root) {
-        Ok(python) => Ok(python),
-        Err(_) => {
-            // The passed interpreter may itself be the broken managed
-            // one: resolve a vetted bootstrap authoritatively from
-            // settings and retry the repair once, in place.
-            let override_opt = settings_override.filter(|path| !path.trim().is_empty());
-            match resolve_bootstrap_for_runtime(
-                DEFAULT_SETUP_ROUTE_ID,
-                override_opt,
-                Path::new(runtime_root),
-            ) {
-                BootstrapPythonResult::Available { python_path, .. } => {
-                    ensure_ultralytics_managed_environment(&python_path, runtime_root)
-                }
-                BootstrapPythonResult::Missing {
-                    requirement,
-                    reason,
-                    ..
-                } => Err(format!("Python required ({requirement}): {reason}")),
-                BootstrapPythonResult::InvalidOverride { reason, .. }
-                | BootstrapPythonResult::Error { reason } => Err(reason),
-            }
-        }
+    if managed_python_usable(&venv_python(runtime_root)) {
+        return Ok(venv_python(runtime_root));
     }
+    let override_opt = settings_override.filter(|path| !path.trim().is_empty());
+    if let Some(override_path) = override_opt {
+        let bootstrap =
+            resolve_saved_override_bootstrap(DEFAULT_SETUP_ROUTE_ID, override_path, runtime_root)?;
+        return ensure_ultralytics_managed_environment(&bootstrap, runtime_root);
+    }
+    ensure_ultralytics_managed_environment(passed_python, runtime_root)
 }
 
 /// True when the interpreter runs AND pip works: installs can proceed in
@@ -1435,6 +1444,32 @@ fn resolve_stack_venv_for_setup(
         .expect("known stack resolves exactly one target");
     let python = venv_python_at(&venv);
     Ok((stack.key.to_string(), venv, python))
+}
+
+/// Resolve the install target for one RF-DETR stack: install only into the
+/// stack interpreter — never into the bootstrap or saved-override
+/// interpreter. A healthy stack installs in place even when the saved
+/// override is invalid or missing. When work is actually needed, the
+/// bootstrap comes authoritatively from the saved override (highest
+/// priority, with its invalid-override error surfacing); only without a
+/// saved override is the passed interpreter used as the bootstrap
+/// candidate.
+fn resolve_rfdetr_install_python(
+    passed_python: &str,
+    runtime_root: &str,
+    route_id: &str,
+    settings_override: Option<&str>,
+) -> Result<String, String> {
+    let (_, _, stack_python_path) = resolve_stack_venv_for_setup(runtime_root, route_id)?;
+    if managed_python_usable(&stack_python_path) {
+        return Ok(stack_python_path);
+    }
+    let override_opt = settings_override.filter(|path| !path.trim().is_empty());
+    if let Some(override_path) = override_opt {
+        let bootstrap = resolve_saved_override_bootstrap(route_id, override_path, runtime_root)?;
+        return ensure_rfdetr_stack_environment(&bootstrap, runtime_root, route_id);
+    }
+    ensure_rfdetr_stack_environment(passed_python, runtime_root, route_id)
 }
 
 /// Ensure the selected RF-DETR stack environment is usable, creating or
@@ -1769,14 +1804,19 @@ pub async fn install_dependencies(
         }
         if stack_for_route(route_id).is_some() {
             // Route-owned RF-DETR setup (ticket 10): create or repair only
-            // the selected stack from the compatible bootstrap interpreter,
+            // the selected stack from the authoritative bootstrap
+            // interpreter (ticket 14: the saved override wins when set),
             // then install only the selected route's packages into it. Other
             // stacks and the Ultralytics environment remain untouched. A
             // present-but-broken stack is repaired in place so Retry
             // continues in the same directory and the partial stack stays
             // visible as `Setup incomplete`.
-            let install_python =
-                ensure_rfdetr_stack_environment(&python_path, &runtime_root, route_id);
+            let install_python = resolve_rfdetr_install_python(
+                &python_path,
+                &runtime_root,
+                route_id,
+                settings.python_path_override.as_deref(),
+            );
             managed_environments.invalidate(Path::new(&runtime_root), [invalidation_key.as_str()]);
             install_python?
         } else if is_ultralytics_route(route_id) {
@@ -3324,6 +3364,71 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn ultralytics_install_uses_saved_override_over_passed_bootstrap() {
+        // Ticket 14: the saved override is the highest-priority bootstrap
+        // candidate. A direct invoke passing another interpreter must not
+        // bypass it when the managed environment needs work.
+        let root =
+            std::env::temp_dir().join(format!("ultralytics-override-priority-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let template_saved = root.join("template-saved");
+        let template_other = root.join("template-other");
+        write_python_stub(&template_saved, true);
+        write_python_stub(&template_other, true);
+        let saved = root.join("saved-python");
+        let other = root.join("other-python");
+        write_marker_venv_bootstrap(&saved, &template_saved);
+        write_marker_venv_bootstrap(&other, &template_other);
+        let saved_str = saved.to_string_lossy().into_owned();
+        let other_str = other.to_string_lossy().into_owned();
+
+        let managed = resolve_ultralytics_install_python(&other_str, &runtime, Some(&saved_str))
+            .expect("install resolves the saved override first");
+        assert_eq!(managed, venv_python(&runtime));
+        assert_eq!(
+            std::fs::read(Path::new(&managed)).expect("read managed"),
+            std::fs::read(&template_saved).expect("read saved template"),
+            "environment created from the saved override, not the passed interpreter"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ultralytics_install_surfaces_invalid_saved_override() {
+        // Ticket 14: an invalid saved override is a visible error when
+        // creation needs a bootstrap — a direct invoke must not dodge it by
+        // passing a working interpreter.
+        let root =
+            std::env::temp_dir().join(format!("ultralytics-invalid-override-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let template = root.join("working-template");
+        write_python_stub(&template, true);
+        let other = root.join("other-python");
+        write_marker_venv_bootstrap(&other, &template);
+        let other_str = other.to_string_lossy().into_owned();
+
+        let error = resolve_ultralytics_install_python(
+            &other_str,
+            &runtime,
+            Some("/missing/override-python"),
+        )
+        .expect_err("invalid saved override errors instead of using the passed interpreter");
+        assert!(
+            error.contains("does not exist"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !Path::new(&venv_python(&runtime)).exists(),
+            "no environment created from the bypass"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn ultralytics_route_install_repairs_broken_managed_in_place() {
         // Retry after a failed setup continues in the same directory: a
         // present-but-broken managed interpreter is repaired from the
@@ -4171,6 +4276,78 @@ possible problem with your settings or a recent ultralytics package update.\n8.4
         assert!(
             Path::new(&runtime2).join("envs").exists(),
             "partial stack directory preserved for Retry"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rfdetr_install_uses_saved_override_over_passed_bootstrap() {
+        // Ticket 14: the saved override is the highest-priority bootstrap
+        // candidate. A direct invoke passing another interpreter must not
+        // bypass it when the stack needs work.
+        let root =
+            std::env::temp_dir().join(format!("rfdetr-override-priority-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let template_saved = root.join("template-saved");
+        let template_other = root.join("template-other");
+        write_python_stub(&template_saved, true);
+        write_python_stub(&template_other, true);
+        let saved = root.join("saved-python");
+        let other = root.join("other-python");
+        write_marker_venv_bootstrap(&saved, &template_saved);
+        write_marker_venv_bootstrap(&other, &template_other);
+        let saved_str = saved.to_string_lossy().into_owned();
+        let other_str = other.to_string_lossy().into_owned();
+
+        let created = resolve_rfdetr_install_python(
+            &other_str,
+            &runtime,
+            "rfdetr.pth.onnx",
+            Some(&saved_str),
+        )
+        .expect("install resolves the saved override first");
+        let expected = stack_python(&runtime, "rfdetr.pth.onnx").expect("stack python");
+        assert_eq!(created, expected);
+        assert_eq!(
+            std::fs::read(Path::new(&created)).expect("read stack"),
+            std::fs::read(&template_saved).expect("read saved template"),
+            "stack created from the saved override, not the passed interpreter"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rfdetr_install_surfaces_invalid_saved_override() {
+        // Ticket 14: an invalid saved override is a visible error when stack
+        // creation needs a bootstrap — a direct invoke must not dodge it by
+        // passing a working interpreter.
+        let root = std::env::temp_dir().join(format!("rfdetr-invalid-override-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let template = root.join("working-template");
+        write_python_stub(&template, true);
+        let other = root.join("other-python");
+        write_marker_venv_bootstrap(&other, &template);
+        let other_str = other.to_string_lossy().into_owned();
+
+        let error = resolve_rfdetr_install_python(
+            &other_str,
+            &runtime,
+            "rfdetr.pth.onnx",
+            Some("/missing/override-python"),
+        )
+        .expect_err("invalid saved override errors instead of using the passed interpreter");
+        assert!(
+            error.contains("does not exist"),
+            "unexpected error: {error}"
+        );
+        let stack = stack_python(&runtime, "rfdetr.pth.onnx").expect("stack python");
+        assert!(
+            !Path::new(&stack).exists(),
+            "no stack created from the bypass"
         );
         std::fs::remove_dir_all(root).expect("remove temp root");
     }

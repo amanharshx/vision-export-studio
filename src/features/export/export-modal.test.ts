@@ -244,6 +244,71 @@ describe("RfDetrSetupPanel", () => {
   });
 });
 
+describe("setup panels bootstrap notice (ticket 14)", () => {
+  const notice =
+    "Setting up from your saved Python: it only creates the isolated export environment and is never modified.";
+
+  test("setting-up from a saved override explains bootstrap-only behavior", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(UltralyticsSetupPanel, {
+        status: "setting-up",
+        routeTitle: "ONNX",
+        error: null,
+        showRecovery: false,
+        bootstrapNotice: notice,
+      }),
+    );
+
+    expect(html).toContain("Setting up");
+    expect(html).toContain("only creates the isolated export environment");
+  });
+
+  test("the RF-DETR panel shows the notice while its stack is created", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RfDetrSetupPanel, {
+        status: "setting-up",
+        routeTitle: "ONNX",
+        stackKey: "rfdetr-default",
+        error: null,
+        showRecovery: false,
+        bootstrapNotice: notice,
+      }),
+    );
+
+    expect(html).toContain("Setting up");
+    expect(html).toContain("only creates the isolated export environment");
+  });
+
+  test("the notice hides once setup leaves setting-up", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(UltralyticsSetupPanel, {
+        status: "ready",
+        routeTitle: "ONNX",
+        error: null,
+        showRecovery: false,
+        bootstrapNotice: notice,
+      }),
+    );
+
+    expect(html).toContain("Ready");
+    expect(html).not.toContain("only creates the isolated export environment");
+  });
+
+  test("setting-up without a notice shows no bootstrap copy", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(UltralyticsSetupPanel, {
+        status: "setting-up",
+        routeTitle: "ONNX",
+        error: null,
+        showRecovery: false,
+      }),
+    );
+
+    expect(html).toContain("Setting up");
+    expect(html).not.toContain("only creates the isolated export environment");
+  });
+});
+
 describe("RfDetrInspectionFailurePanel (ticket 11)", () => {
   const loadFailure = { canRetry: true, showManualVariant: true, showFileAction: true };
   const plusFailure = { canRetry: false, showManualVariant: false, showFileAction: true };

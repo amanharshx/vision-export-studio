@@ -437,18 +437,6 @@ export function getBootstrapFirstUseNotice(
   return BOOTSTRAP_FIRST_USE_NOTICE;
 }
 
-/** First-use banner for the settings panel: rendered only while a setup run
- * is creating (or just created) an environment from a pre-existing saved
- * override. Null renders nothing. */
-export function BootstrapFirstUseBanner({ notice }: { notice: string | null }) {
-  if (!notice) return null;
-  return (
-    <p className="mt-2 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-2 text-[11px] leading-relaxed text-blue-800">
-      {notice}
-    </p>
-  );
-}
-
 /**
  * Builds the user-facing cleanup error from per-environment deletion
  * failures. Returns null when the cleanup fully succeeded. Ticket 13:
@@ -1474,6 +1462,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       canSetup: !cleanupBusy && !setupConflictMessage,
       showRecovery: ultralyticsRouteSetupStatus === "setup-incomplete",
       error: selectedCheck.error,
+      bootstrapNotice: bootstrapFirstUseNotice,
     };
   // The stack key for the selected RF-DETR route comes from the live stack
   // inventory when present, otherwise from the setup task running for it —
@@ -1498,6 +1487,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       showRecovery: rfdetrRouteSetupStatus === "setup-incomplete",
       error: selectedCheck.error,
       stackKey: rfdetrSelectedStackKey ?? rfdetrTaskStackKey,
+      bootstrapNotice: bootstrapFirstUseNotice,
     };
   // Export chrome (runtime-upgrade nudge, artifact banners, export errors,
   // and — inside the modal — options, preview, and Start export) stays
@@ -3316,7 +3306,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                     Your saved Python creates isolated export environments when setup runs. Packages are installed into app-owned environments, never into your Python.
                   </p>
                 )}
-                <BootstrapFirstUseBanner notice={bootstrapFirstUseNotice} />
                 <div className="mt-2.5 flex justify-end">
                   <Button
                     size="sm"

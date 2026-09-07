@@ -1,10 +1,7 @@
 // @ts-expect-error Bun provides this module at test runtime.
 import { describe, expect, test } from "bun:test";
-import * as React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import {
   BOOTSTRAP_FIRST_USE_NOTICE,
-  BootstrapFirstUseBanner,
   getBootstrapFirstUseNotice,
   resolveUltralyticsRoutePython,
 } from "@/features/export/export-workspace";
@@ -47,16 +44,5 @@ describe("bootstrap first-use notice (ticket 14)", () => {
     expect(getBootstrapFirstUseNotice("/custom/python", "ultralytics-managed")).toBeNull();
     expect(getBootstrapFirstUseNotice("/custom/python", "discovered-system")).toBeNull();
     expect(getBootstrapFirstUseNotice("/custom/python", null)).toBeNull();
-  });
-
-  test("the banner renders the notice and nothing without one", () => {
-    const html = renderToStaticMarkup(
-      React.createElement(BootstrapFirstUseBanner, { notice: BOOTSTRAP_FIRST_USE_NOTICE }),
-    );
-    expect(html).toContain("only creates the isolated export environment");
-
-    expect(
-      renderToStaticMarkup(React.createElement(BootstrapFirstUseBanner, { notice: null })),
-    ).toBe("");
   });
 });
