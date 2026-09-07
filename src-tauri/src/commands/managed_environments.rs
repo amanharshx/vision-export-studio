@@ -946,6 +946,26 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// Shared tail for cross-provider deletion tests: the report carries
+    /// no setup state, and user settings plus exported artifacts survive
+    /// byte-identical.
+    fn assert_cleanup_preserved_user_files(
+        root: &Path,
+        report: &ManagedEnvironmentCleanupReport,
+        settings_bytes: &[u8],
+    ) {
+        assert!(report.setup_complete.is_none());
+        assert!(report.setup_error.is_none());
+        assert_eq!(
+            fs::read(root.join("vision-export-studio-settings.json")).unwrap(),
+            settings_bytes
+        );
+        assert_eq!(
+            fs::read(root.join("exports/result.onnx")).unwrap(),
+            b"output"
+        );
+    }
+
     /// Ticket 13 cross-provider fixture: Ultralytics runtime plus one RF-DETR
     /// stack, user settings with the legacy setup flag set, and an export
     /// artifact. Every automated deletion test uses a temporary runtime
@@ -986,18 +1006,9 @@ mod tests {
             [ManagedEnvironmentCleanupResult::Succeeded { key, .. }]
                 if key == ULTRALYTICS_MANAGED_KEY
         ));
-        assert!(report.setup_complete.is_none());
-        assert!(report.setup_error.is_none());
         assert!(!root.join(".venv").exists());
         assert_eq!(fs::read(stack.join("payload")).unwrap(), b"stack");
-        assert_eq!(
-            fs::read(root.join("vision-export-studio-settings.json")).unwrap(),
-            settings_bytes
-        );
-        assert_eq!(
-            fs::read(root.join("exports/result.onnx")).unwrap(),
-            b"output"
-        );
+        assert_cleanup_preserved_user_files(&root, &report, &settings_bytes);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1020,18 +1031,9 @@ mod tests {
             [ManagedEnvironmentCleanupResult::Succeeded { key, .. }]
                 if key == "rfdetr-default"
         ));
-        assert!(report.setup_complete.is_none());
-        assert!(report.setup_error.is_none());
         assert!(!stack.exists());
         assert_eq!(fs::read(root.join(".venv/keep")).unwrap(), b"ultra");
-        assert_eq!(
-            fs::read(root.join("vision-export-studio-settings.json")).unwrap(),
-            settings_bytes
-        );
-        assert_eq!(
-            fs::read(root.join("exports/result.onnx")).unwrap(),
-            b"output"
-        );
+        assert_cleanup_preserved_user_files(&root, &report, &settings_bytes);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1041,9 +1043,9 @@ mod tests {
         // still touches only the affected provider.
         let (root, settings_bytes) =
             seed_cross_provider_cleanup_root("cleanup-rfdetr-all-keeps-ultra");
-        let second = root.join("envs/rfdetr-coreml/.venv");
-        fs::create_dir_all(&second).unwrap();
-        fs::write(second.join("payload"), b"coreml").unwrap();
+        let coreml_stack = root.join("envs/rfdetr-coreml/.venv");
+        fs::create_dir_all(&coreml_stack).unwrap();
+        fs::write(coreml_stack.join("payload"), b"coreml").unwrap();
 
         let report = cleanup_sync(
             &ManagedEnvironments::default(),
@@ -1064,19 +1066,10 @@ mod tests {
             .collect();
         removed.sort_unstable();
         assert_eq!(removed, ["rfdetr-coreml", "rfdetr-default"]);
-        assert!(report.setup_complete.is_none());
-        assert!(report.setup_error.is_none());
         assert!(!root.join("envs/rfdetr-default/.venv").exists());
-        assert!(!second.exists());
+        assert!(!coreml_stack.exists());
         assert_eq!(fs::read(root.join(".venv/keep")).unwrap(), b"ultra");
-        assert_eq!(
-            fs::read(root.join("vision-export-studio-settings.json")).unwrap(),
-            settings_bytes
-        );
-        assert_eq!(
-            fs::read(root.join("exports/result.onnx")).unwrap(),
-            b"output"
-        );
+        assert_cleanup_preserved_user_files(&root, &report, &settings_bytes);
         let _ = fs::remove_dir_all(root);
     }
 

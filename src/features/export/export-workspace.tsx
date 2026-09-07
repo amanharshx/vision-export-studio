@@ -362,6 +362,11 @@ export function managedEnvironmentKeysForProvider(
   return [singleKey ?? "rfdetr-all"];
 }
 
+export interface ManagedEnvironmentCleanupCopyOptions {
+  hasPythonOverride: boolean;
+  isBulkCleanup: boolean;
+}
+
 export function getManagedEnvironmentCleanupState({
   providerId,
   singleKey,
@@ -370,7 +375,7 @@ export function getManagedEnvironmentCleanupState({
   providerId: ProviderId;
   singleKey?: ManagedEnvironmentKey;
   hasPythonOverride: boolean;
-}) {
+}): ManagedEnvironmentCleanupCopyOptions {
   const isBulkCleanup = providerId === "rfdetr" && !singleKey;
   // Ticket 13 replaced last-runtime and Setup-redirect copy with concise
   // on-demand recreation copy: cleanup stays in the workspace and reports no
@@ -389,10 +394,7 @@ export function getManagedEnvironmentCleanupState({
 export function getManagedEnvironmentCleanupNextStepCopy({
   hasPythonOverride,
   isBulkCleanup,
-}: {
-  hasPythonOverride: boolean;
-  isBulkCleanup: boolean;
-}): string {
+}: ManagedEnvironmentCleanupCopyOptions): string {
   const recreation = isBulkCleanup
     ? "These environments will be set up again when needed."
     : "This environment will be set up again when needed.";
