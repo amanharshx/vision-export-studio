@@ -64,7 +64,6 @@ pub fn run() {
             commands::setup::load_settings,
             commands::setup::get_managed_runtime_rebuild_eligibility,
             commands::setup::rebuild_managed_runtime,
-            commands::setup::mark_setup_complete,
             commands::setup::save_python_override,
             commands::setup::save_output_dir_override,
         ])

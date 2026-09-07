@@ -23,10 +23,11 @@ import type {
 import type { HostSupportResult } from "@/lib/tauri/app";
 import type { UpdaterController } from "@/features/updater/use-updater-controller";
 
-// Ticket 12 launch contract, exercised through the real App: landing renders
+// Ticket 15 launch contract, exercised through the real App: landing renders
 // without the retired Setup screen, Get Started opens model upload for every
-// provider inventory with either legacy setup_complete value, settings
-// restore, and no setup work starts on launch, upload, or entry.
+// provider inventory, settings restore, and no setup work starts on launch,
+// upload, or entry. The retired setup_complete flag is gone from the
+// contract; legacy payloads carrying it behave identically.
 
 const MANAGED_PYTHON = "/tmp/runtime/.venv/bin/python";
 const STACK_PYTHON = "/tmp/runtime/envs/rfdetr-default/.venv/bin/python";
@@ -68,7 +69,6 @@ const calls = {
   rebuild: [] as unknown[],
   cleanup: [] as unknown[],
   saveOverride: [] as unknown[],
-  markComplete: [] as unknown[],
   resolveBootstrap: [] as unknown[],
   detect: [] as unknown[],
   depCheck: [] as unknown[],
@@ -186,10 +186,6 @@ mock.module("@/lib/tauri/setup", () => ({
     calls.rebuild.push(args);
     return Promise.resolve("session-1");
   },
-  markSetupComplete: (...args: unknown[]) => {
-    calls.markComplete.push(args);
-    return Promise.resolve();
-  },
 }));
 
 mock.module("@/lib/tauri/environment", () => ({
@@ -280,11 +276,19 @@ mock.module("@/lib/tauri/dialog", () => ({
 function baseSettings(overrides: Partial<AppSettings> = {}): AppSettings {
   return {
     runtime_dir: "/tmp/runtime",
-    setup_complete: false,
     python_path_override: undefined,
     output_dir_override: undefined,
     ...overrides,
   };
+}
+
+function legacySettings(overrides: Partial<AppSettings> = {}, setupComplete: boolean): AppSettings {
+  // Simulates an older settings file still carrying the retired flag: the
+  // extra field must be ignored by the workspace.
+  return {
+    ...baseSettings(overrides),
+    setup_complete: setupComplete,
+  } as unknown as AppSettings;
 }
 
 async function launchAndEnterWorkspace() {
@@ -305,11 +309,10 @@ function expectNoSetupStarted() {
   expect(calls.rebuild).toEqual([]);
   expect(calls.cleanup).toEqual([]);
   expect(calls.saveOverride).toEqual([]);
-  expect(calls.markComplete).toEqual([]);
   expect(calls.resolveBootstrap).toEqual([]);
 }
 
-describe("workspace launch without global runtime (ticket 12)", () => {
+describe("workspace launch without global runtime (ticket 12, contract removed in 15)", () => {
   beforeEach(() => {
     resetScenario();
   });
@@ -320,22 +323,22 @@ describe("workspace launch without global runtime (ticket 12)", () => {
     expectNoSetupStarted();
   });
 
-  test("restart with setup_complete false and no environments opens upload", async () => {
-    settingsFile = baseSettings({ setup_complete: false });
+  test("restart with new settings and no environments opens upload", async () => {
+    settingsFile = baseSettings();
     detectError = "no python";
     await launchAndEnterWorkspace();
     expectNoSetupStarted();
   });
 
-  test("restart with setup_complete true and Ultralytics-only opens upload", async () => {
-    settingsFile = baseSettings({ setup_complete: true });
+  test("restart with Ultralytics-only opens upload", async () => {
+    settingsFile = baseSettings();
     detectedEnv = MANAGED_ENV;
     await launchAndEnterWorkspace();
     expectNoSetupStarted();
   });
 
   test("restart with RF-DETR-only opens upload", async () => {
-    settingsFile = baseSettings({ setup_complete: false });
+    settingsFile = baseSettings();
     detectError = "no python";
     stacks = [DEFAULT_STACK];
     await launchAndEnterWorkspace();
@@ -343,7 +346,22 @@ describe("workspace launch without global runtime (ticket 12)", () => {
   });
 
   test("restart with both providers opens upload", async () => {
-    settingsFile = baseSettings({ setup_complete: true });
+    settingsFile = baseSettings();
+    detectedEnv = MANAGED_ENV;
+    stacks = [DEFAULT_STACK];
+    await launchAndEnterWorkspace();
+    expectNoSetupStarted();
+  });
+
+  test("legacy settings with setup_complete false open upload and start nothing", async () => {
+    settingsFile = legacySettings({}, false);
+    detectError = "no python";
+    await launchAndEnterWorkspace();
+    expectNoSetupStarted();
+  });
+
+  test("legacy settings with setup_complete true open upload and start nothing", async () => {
+    settingsFile = legacySettings({}, true);
     detectedEnv = MANAGED_ENV;
     stacks = [DEFAULT_STACK];
     await launchAndEnterWorkspace();
@@ -351,7 +369,7 @@ describe("workspace launch without global runtime (ticket 12)", () => {
   });
 
   test("model upload alone starts no setup", async () => {
-    settingsFile = baseSettings({ setup_complete: false });
+    settingsFile = baseSettings();
     detectError = "no python";
     pickedModelPath = "/tmp/best.pt";
     await launchAndEnterWorkspace();
@@ -383,7 +401,7 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
   };
 
   function bothProvidersWithModel(overrides: { python_path_override?: string } = {}) {
-    settingsFile = baseSettings({ setup_complete: true, output_dir_override: "/tmp/exports-out", ...overrides });
+    settingsFile = baseSettings({ output_dir_override: "/tmp/exports-out", ...overrides });
     detectedEnv = MANAGED_ENV;
     stacks = [DEFAULT_STACK];
     pickedModelPath = "/tmp/best.pt";
@@ -432,7 +450,6 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     expect(screen.getByText("Export Target")).not.toBeNull();
     expect(screen.getByText(modelBase)).not.toBeNull();
     expect(screen.queryByText("Set up Vision Export Studio")).toBeNull();
-    expect(calls.markComplete).toEqual([]);
     expect(calls.saveOverride).toEqual([]);
   }
 
@@ -497,7 +514,7 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
   });
 
   test("model upload stays usable after removing the final environment", async () => {
-    settingsFile = baseSettings({ setup_complete: true });
+    settingsFile = baseSettings();
     detectedEnv = MANAGED_ENV;
     stacks = [];
     scanRows = [ultraRow];
@@ -551,7 +568,7 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
   });
 
   test("removing the selected RF-DETR stack re-probes the affected route", async () => {
-    settingsFile = baseSettings({ setup_complete: false });
+    settingsFile = baseSettings();
     detectError = "no python";
     stacks = [DEFAULT_STACK];
     pickedModelPath = "/tmp/model.pth";
@@ -580,7 +597,6 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
 
   test("post-cleanup redetect uses the managed runtime, preserving unsaved edits", async () => {
     settingsFile = baseSettings({
-      setup_complete: true,
       python_path_override: "/custom/python",
       output_dir_override: "/tmp/exports-out",
     });
@@ -621,7 +637,6 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
 
   test("ticket 14: a saved override loads but detection probes the managed runtime", async () => {
     settingsFile = baseSettings({
-      setup_complete: true,
       python_path_override: "/custom/python",
     });
     detectedEnv = MANAGED_ENV;

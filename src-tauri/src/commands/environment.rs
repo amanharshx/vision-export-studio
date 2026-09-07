@@ -420,7 +420,6 @@ pub(crate) fn resolve_python(python_path: Option<&str>) -> Result<String, String
 
 fn pick_python_candidate(
     explicit_override: Option<String>,
-    setup_complete: bool,
     managed_python: Option<String>,
 ) -> Option<String> {
     if let Some(path) = explicit_override {
@@ -430,11 +429,7 @@ fn pick_python_candidate(
         }
     }
 
-    if setup_complete {
-        return managed_python.filter(|path| !path.trim().is_empty());
-    }
-
-    None
+    managed_python.filter(|path| !path.trim().is_empty())
 }
 
 fn resolve_effective_python(
@@ -442,14 +437,13 @@ fn resolve_effective_python(
     explicit_override: Option<String>,
 ) -> Result<String, String> {
     let settings = load_settings(app_handle.clone())?;
-    let managed_python = if settings.setup_complete {
-        let candidate = venv_python(&settings.runtime_dir);
-        Path::new(&candidate).exists().then_some(candidate)
-    } else {
-        None
-    };
+    // Ticket 15: readiness is inventory-driven. The managed interpreter
+    // qualifies whenever its file exists; the retired global setup flag no
+    // longer gates it.
+    let candidate = venv_python(&settings.runtime_dir);
+    let managed_python = Path::new(&candidate).exists().then_some(candidate);
 
-    match pick_python_candidate(explicit_override, settings.setup_complete, managed_python) {
+    match pick_python_candidate(explicit_override, managed_python) {
         Some(candidate) => resolve_python(Some(candidate.as_str())),
         None => resolve_python(None),
     }
@@ -939,23 +933,22 @@ mod tests {
     fn explicit_override_wins_when_present() {
         let selected = pick_python_candidate(
             Some("/custom/python".to_string()),
-            true,
             Some("/managed/.venv/bin/python".to_string()),
         );
         assert_eq!(selected, Some("/custom/python".to_string()));
     }
 
     #[test]
-    fn managed_runtime_used_when_setup_complete_and_no_override() {
-        let selected =
-            pick_python_candidate(None, true, Some("/managed/.venv/bin/python".to_string()));
+    fn managed_runtime_used_from_inventory_without_override() {
+        // Ticket 15: the managed interpreter qualifies by file inventory,
+        // not by the retired global setup flag.
+        let selected = pick_python_candidate(None, Some("/managed/.venv/bin/python".to_string()));
         assert_eq!(selected, Some("/managed/.venv/bin/python".to_string()));
     }
 
     #[test]
-    fn system_python_fallback_used_before_setup() {
-        let selected =
-            pick_python_candidate(None, false, Some("/managed/.venv/bin/python".to_string()));
+    fn system_python_fallback_used_when_no_managed_runtime() {
+        let selected = pick_python_candidate(None, None);
         assert_eq!(selected, None);
     }
 
@@ -963,9 +956,14 @@ mod tests {
     fn blank_override_falls_back_to_managed_runtime() {
         let selected = pick_python_candidate(
             Some("   ".to_string()),
-            true,
             Some("/managed/.venv/bin/python".to_string()),
         );
         assert_eq!(selected, Some("/managed/.venv/bin/python".to_string()));
+    }
+
+    #[test]
+    fn blank_override_without_managed_runtime_falls_back_to_system() {
+        let selected = pick_python_candidate(Some("   ".to_string()), None);
+        assert_eq!(selected, None);
     }
 }

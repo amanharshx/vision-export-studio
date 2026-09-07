@@ -63,7 +63,6 @@ import { Button } from "@/components/ui/button";
 import {
   getManagedRuntimeRebuildEligibility,
   loadSettings,
-  markSetupComplete,
   rebuildManagedRuntime,
   savePythonOverride,
   saveOutputDirOverride,
@@ -118,14 +117,6 @@ import {
 
 type WorkspaceView = "drop" | "formats";
 type RuntimeInstallPhase = "idle" | "installing" | "ready" | "failed";
-
-interface InstallUltralyticsOptions {
-  /** Runs inside the setup lifecycle after verification, before the task
-   * succeeds; a throw fails the task so persistence failure cannot coexist
-   * with success. Recreate marks setup complete here, which also survives a
-   * Python-required dialog round-trip (the pending retry keeps these opts). */
-  finalize?: () => Promise<unknown>;
-}
 
 export function getManagedRuntimeUpgradeNudge(
   eligibility: ManagedRuntimeRebuildEligibility | null,
@@ -439,8 +430,8 @@ export function getBootstrapFirstUseNotice(
 
 /**
  * Builds the user-facing cleanup error from per-environment deletion
- * failures. Returns null when the cleanup fully succeeded. Ticket 13:
- * cleanup never rewrites setup state, so no setup persistence is reported.
+ * failures. Returns null when the cleanup fully succeeded. Cleanup never
+ * rewrites settings, so no setup persistence is reported.
  */
 export function managedEnvironmentCleanupErrorMessage(
   report: ManagedEnvironmentCleanupReport,
@@ -2034,7 +2025,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   // Retry, and Recreate call this same core; only the click handler below
   // adds the cleanup-busy guard, so a sequenced caller never trips on a flag
   // it holds itself.
-  const runUltralyticsRouteSetup = useCallback(async (routeId: string, opts?: InstallUltralyticsOptions): Promise<boolean> => {
+  const runUltralyticsRouteSetup = useCallback(async (routeId: string): Promise<boolean> => {
     if (blockOnSetupConflict((message) => setRouteDepCheckError(routeId, message))) return false;
     setBootstrapFirstUseNotice(null);
 
@@ -2117,11 +2108,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
           return false;
         }
         if (isPythonRequiredResult(bootstrap)) {
-          // The pending retry keeps the caller's route and opts, so a
-          // Recreate that detours through the dialog still marks setup
-          // complete after.
-          const pendingOpts = opts;
-          requirePython(routeId, bootstrap, () => handleRouteSetupRef.current(routeId, pendingOpts));
+          // The pending retry keeps the caller's route, so a Recreate that
+          // detours through the dialog resumes the same install.
+          requirePython(routeId, bootstrap, () => handleRouteSetupRef.current(routeId));
           // No mutation happened, so no inventory refresh: the dialog owns
           // the next step (choose, check again, clear, or cancel).
           setRouteDepCheckError(
@@ -2147,7 +2136,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
           pythonPath: bootstrap.python_path,
           verifyPythonPath: managedPythonPath,
           createsEnvironment: true,
-          finalize: opts?.finalize,
           summary: `Creating environment for ${route.title}…`,
         };
       }
@@ -2170,19 +2158,18 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   // retries: blocks while an Environment-panel cleanup owns the runtime.
   // Recreate calls the core above directly instead, sequencing cleanup
   // before install itself.
-  const handleRouteSetup = useCallback(async (routeId: string, opts?: InstallUltralyticsOptions): Promise<void> => {
+  const handleRouteSetup = useCallback(async (routeId: string): Promise<void> => {
     if (cleanupBusy) return;
-    await runUltralyticsRouteSetup(routeId, opts);
+    await runUltralyticsRouteSetup(routeId);
   }, [cleanupBusy, runUltralyticsRouteSetup]);
   const handleRouteSetupRef = useRef(handleRouteSetup);
   handleRouteSetupRef.current = handleRouteSetup;
 
   // Confirmed full recreation for a failed route setup: removes only
   // ultralytics-managed through the existing cleanup command, then sets the
-  // same route up again through the install path above. The global Setup
-  // screen is bypassed deliberately: marking setup complete after a
-  // successful reinstall keeps the workspace stable instead of forcing a
-  // global reset. Output settings, the saved Python override, RF-DETR environments, the loaded model, and unrelated runtime
+  // same route up again through the install path above. The workspace stays
+  // stable by design: readiness is inventory-driven, so no global flag is
+  // marked after reinstall. Output settings, the saved Python override, RF-DETR environments, the loaded model, and unrelated runtime
   // files are untouched: cleanup deletes exactly one known key and the
   // install only writes `.venv`.
   const handleRecreateUltralytics = useCallback(async (routeId: string) => {
@@ -2217,12 +2204,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       // Sequenced directly on the shared core, which performs no busy check
       // of its own: cleanup already finished, so no bypass flag is needed and
       // nothing depends on which render's callback runs.
-      await runUltralyticsRouteSetup(routeId, {
-        finalize: async () => {
-          const settings = await loadSettings();
-          await markSetupComplete(settings.runtime_dir);
-        },
-      });
+      await runUltralyticsRouteSetup(routeId);
     } catch (error) {
       setRouteDepCheckError(routeId, String(error));
     } finally {
@@ -3125,7 +3107,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         // missing state while healthy RF-DETR routes keep resolving through
         // their own stacks. Ticket 14: detection always probes the managed
         // interpreter, never the saved bootstrap override or unsaved input
-        // text, and cleanup never touches legacy setup state.
+        // text, and cleanup never touches settings.
         if (managedEnvironmentDeletionSucceeded(report, "ultralytics-managed")) {
           setEnvInfo(null);
           await handleRedetect(true);

@@ -47,10 +47,9 @@ function SetupActivityBarHost() {
 function App() {
   const updatesEnabled = !import.meta.env.DEV;
   const [appState, setAppState] = useState<AppState>("landing");
-  // Legacy global setup flag stays readable for analytics and older settings
-  // files, but navigation no longer depends on it (ticket 12). Its contract
-  // removal belongs to ticket 15.
-  const [setupComplete, setSetupComplete] = useState(false);
+  // Ticket 15: the retired global setup flag is gone. Navigation and
+  // readiness are inventory-driven; only settings load gates first-run and
+  // update checks.
   const [settingsReady, setSettingsReady] = useState(false);
   const [hasCheckedForUpdateThisLaunch, setHasCheckedForUpdateThisLaunch] = useState(false);
   const appOpenedSentRef = useRef(false);
@@ -68,9 +67,6 @@ function App() {
 
   useEffect(() => {
     loadSettings()
-      .then((settings) => {
-        setSetupComplete(settings.setup_complete);
-      })
       .catch(() => {
         captureAnalyticsEvent("settings_load_failed", {
           failure_kind: "settings_load_failed",
@@ -94,7 +90,6 @@ function App() {
     if (
       !shouldCaptureFirstRun({
         settingsReady,
-        setupComplete,
         appState,
         analyticsEnabled: isAnalyticsEnabled(),
         firstRunAlreadySent: firstRunSentRef.current || hasSentFirstRun(),
@@ -106,7 +101,7 @@ function App() {
     captureAnalyticsEvent("first_run");
     markFirstRunSent();
     firstRunSentRef.current = true;
-  }, [appState, settingsReady, setupComplete]);
+  }, [appState, settingsReady]);
 
   const handleGetStarted = () => {
     // Ticket 12: every user reaches model upload without first preparing a

@@ -142,7 +142,6 @@ describe("shouldCaptureFirstRun", () => {
     expect(
       shouldCaptureFirstRun({
         settingsReady: true,
-        setupComplete: true,
         appState: "export",
         analyticsEnabled: true,
         firstRunAlreadySent: false,
@@ -150,11 +149,10 @@ describe("shouldCaptureFirstRun", () => {
     ).toBe(true);
   });
 
-  it("does not fire on landing before setup", () => {
+  it("does not fire on landing", () => {
     expect(
       shouldCaptureFirstRun({
         settingsReady: true,
-        setupComplete: false,
         appState: "landing",
         analyticsEnabled: true,
         firstRunAlreadySent: false,
@@ -162,12 +160,11 @@ describe("shouldCaptureFirstRun", () => {
     ).toBe(false);
   });
 
-  it("does not fire before export screen is reached", () => {
+  it("does not fire before settings load", () => {
     expect(
       shouldCaptureFirstRun({
-        settingsReady: true,
-        setupComplete: true,
-        appState: "landing",
+        settingsReady: false,
+        appState: "export",
         analyticsEnabled: true,
         firstRunAlreadySent: false,
       }),
@@ -178,7 +175,6 @@ describe("shouldCaptureFirstRun", () => {
     expect(
       shouldCaptureFirstRun({
         settingsReady: true,
-        setupComplete: true,
         appState: "export",
         analyticsEnabled: true,
         firstRunAlreadySent: true,

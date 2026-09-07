@@ -57,7 +57,6 @@ where
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct AppSettings {
     pub runtime_dir: String,
-    pub setup_complete: bool,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub python_path_override: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -188,14 +187,9 @@ fn normalize_python_override(python_path_override: Option<String>) -> Option<Str
     })
 }
 
-fn managed_runtime_is_ready(runtime_dir: &str) -> bool {
-    Path::new(&venv_python(runtime_dir)).exists()
-}
-
 fn normalize_loaded_settings(
     settings: AppSettings,
     managed_runtime_dir: &str,
-    managed_runtime_ready: bool,
 ) -> (AppSettings, bool) {
     let mut normalized = settings;
     let mut changed = false;
@@ -208,13 +202,6 @@ fn normalize_loaded_settings(
     let normalized_override = normalize_python_override(normalized.python_path_override.clone());
     if normalized.python_path_override != normalized_override {
         normalized.python_path_override = normalized_override;
-        changed = true;
-    }
-
-    let expected_setup_complete =
-        managed_runtime_ready || has_python_override(normalized.python_path_override.as_deref());
-    if normalized.setup_complete != expected_setup_complete {
-        normalized.setup_complete = expected_setup_complete;
         changed = true;
     }
 
@@ -490,25 +477,21 @@ fn spawn_and_stream_rebuild(
 pub fn load_settings(app_handle: tauri::AppHandle) -> Result<AppSettings, String> {
     let path = settings_path(&app_handle)?;
     let managed_runtime_dir = default_runtime_dir(&app_handle)?;
-    let managed_runtime_ready = managed_runtime_is_ready(&managed_runtime_dir);
 
     if !path.exists() {
         let (settings, _) = normalize_loaded_settings(
             AppSettings {
                 runtime_dir: managed_runtime_dir,
-                setup_complete: false,
                 python_path_override: None,
                 output_dir_override: None,
             },
             default_runtime_dir(&app_handle)?.as_str(),
-            managed_runtime_ready,
         );
         return Ok(settings);
     }
 
     let settings = read_settings_file(&path)?;
-    let (normalized, changed) =
-        normalize_loaded_settings(settings, &managed_runtime_dir, managed_runtime_ready);
+    let (normalized, changed) = normalize_loaded_settings(settings, &managed_runtime_dir);
     if changed {
         write_settings(&app_handle, &normalized)?;
     }
@@ -578,19 +561,6 @@ pub async fn rebuild_managed_runtime(
 }
 
 #[tauri::command]
-pub fn mark_setup_complete(
-    app_handle: tauri::AppHandle,
-    state: tauri::State<'_, SettingsState>,
-    runtime_dir: String,
-) -> Result<(), String> {
-    let managed_runtime_dir = ensure_managed_runtime_dir(&app_handle, &runtime_dir)?;
-    update_settings(&app_handle, &state, |settings| {
-        settings.runtime_dir = managed_runtime_dir;
-        settings.setup_complete = true;
-    })
-}
-
-#[tauri::command]
 pub fn save_python_override(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, SettingsState>,
@@ -605,11 +575,6 @@ pub fn save_python_override(
     }
     update_settings(&app_handle, &state, |settings| {
         settings.python_path_override = normalized_override;
-        if settings.python_path_override.is_some() {
-            settings.setup_complete = true;
-        } else {
-            settings.setup_complete = managed_runtime_is_ready(&settings.runtime_dir);
-        }
     })
 }
 
@@ -627,7 +592,7 @@ pub fn save_output_dir_override(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::{self, File};
+    use std::fs;
 
     #[test]
     fn rebuild_eligibility_requires_old_managed_python_and_discovered_candidate() {
@@ -834,74 +799,48 @@ mod tests {
     }
 
     #[test]
-    fn managed_runtime_is_ready_when_venv_python_exists_and_yolo_missing() {
-        let runtime_dir = test_runtime_dir("managed-runtime-ready");
-        let python_path = venv_python(&runtime_dir);
-        let python_parent = Path::new(&python_path).parent().unwrap();
-        fs::create_dir_all(python_parent).unwrap();
-        File::create(&python_path).unwrap();
-
-        assert!(managed_runtime_is_ready(&runtime_dir));
-
-        fs::remove_dir_all(&runtime_dir).unwrap();
-    }
-
-    #[test]
-    fn managed_runtime_is_not_ready_when_venv_python_missing() {
-        let runtime_dir = test_runtime_dir("managed-runtime-missing-python");
-        let yolo_path = venv_yolo(&runtime_dir);
-        let yolo_parent = Path::new(&yolo_path).parent().unwrap();
-        fs::create_dir_all(yolo_parent).unwrap();
-        File::create(&yolo_path).unwrap();
-
-        assert!(!managed_runtime_is_ready(&runtime_dir));
-
-        fs::remove_dir_all(&runtime_dir).unwrap();
-    }
-
-    #[test]
     fn normalize_loaded_settings_migrates_runtime_dir_to_managed_root() {
         let settings = AppSettings {
             runtime_dir: "/Users/tester/Developer/oss/vision-export-studio".to_string(),
-            setup_complete: true,
             python_path_override: None,
             output_dir_override: None,
         };
 
         let (normalized, changed) =
-            normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio", false);
+            normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio");
 
         assert!(changed);
         assert_eq!(
             normalized.runtime_dir,
             "/Users/tester/.vision-export-studio"
         );
-        assert!(!normalized.setup_complete);
     }
 
     #[test]
-    fn normalize_loaded_settings_keeps_setup_complete_when_override_exists() {
+    fn normalize_loaded_settings_preserves_override_during_runtime_migration() {
         let settings = AppSettings {
             runtime_dir: "/Users/tester/Developer/oss/vision-export-studio".to_string(),
-            setup_complete: false,
             python_path_override: Some("/custom/python".to_string()),
-            output_dir_override: None,
+            output_dir_override: Some("/tmp/exports".to_string()),
         };
 
         let (normalized, changed) =
-            normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio", false);
+            normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio");
 
         assert!(changed);
         assert_eq!(
             normalized.runtime_dir,
             "/Users/tester/.vision-export-studio"
         );
-        assert!(normalized.setup_complete);
         // Ticket 14: existing saved executable paths survive migration so a
         // bootstrap-only override keeps working as a creation candidate.
         assert_eq!(
             normalized.python_path_override.as_deref(),
             Some("/custom/python")
+        );
+        assert_eq!(
+            normalized.output_dir_override.as_deref(),
+            Some("/tmp/exports")
         );
     }
 
@@ -909,51 +848,103 @@ mod tests {
     fn normalize_loaded_settings_preserves_trimmed_override_path() {
         let settings = AppSettings {
             runtime_dir: "/Users/tester/.vision-export-studio".to_string(),
-            setup_complete: false,
             python_path_override: Some("  /custom/python  ".to_string()),
             output_dir_override: None,
         };
 
         let (normalized, changed) =
-            normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio", false);
+            normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio");
 
         assert!(changed);
         assert_eq!(
             normalized.python_path_override.as_deref(),
             Some("/custom/python")
         );
-        assert!(normalized.setup_complete);
     }
 
     #[test]
-    fn normalize_loaded_settings_marks_complete_when_managed_venv_python_exists() {
+    fn normalize_loaded_settings_leaves_healthy_settings_untouched() {
         let settings = AppSettings {
             runtime_dir: "/Users/tester/.vision-export-studio".to_string(),
-            setup_complete: false,
             python_path_override: None,
-            output_dir_override: None,
+            output_dir_override: Some("/tmp/exports".to_string()),
         };
 
         let (normalized, changed) =
-            normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio", true);
+            normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio");
 
-        assert!(changed);
-        assert!(normalized.setup_complete);
+        assert!(!changed);
+        assert_eq!(
+            normalized.output_dir_override.as_deref(),
+            Some("/tmp/exports")
+        );
     }
 
     #[test]
-    fn normalize_loaded_settings_marks_incomplete_when_managed_venv_python_missing() {
+    fn legacy_setup_complete_field_is_ignored_without_forced_rewrite() {
+        // Ticket 15: older files carry the retired global flag. Deserialization
+        // must tolerate it (present true/false) and normalization must not
+        // derive or preserve it, so loading never forces a rewrite.
+        for legacy in ["true", "false"] {
+            let raw = format!(
+                r#"{{"runtime_dir":"/Users/tester/.vision-export-studio","setup_complete":{legacy},"python_path_override":null,"output_dir_override":null}}"#
+            );
+            let settings: AppSettings = serde_json::from_str(&raw).unwrap();
+            assert_eq!(settings.runtime_dir, "/Users/tester/.vision-export-studio");
+            assert_eq!(settings.python_path_override, None);
+
+            let (normalized, changed) =
+                normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio");
+            assert!(
+                !changed,
+                "legacy setup_complete={legacy} must not dirty settings"
+            );
+            // The retired flag never round-trips: new writes omit it while
+            // unrelated settings survive exactly.
+            let written = serde_json::to_string(&normalized).unwrap();
+            assert!(
+                !written.contains("setup_complete"),
+                "serialized settings must omit legacy flag: {written}"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_optional_fields_default_without_data_loss() {
+        // New minimal files and provider-only states (runtime_dir alone) load
+        // with absent overrides defaulting to None.
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"runtime_dir":"/tmp/runtime"}"#).unwrap();
+        assert_eq!(settings.runtime_dir, "/tmp/runtime");
+        assert_eq!(settings.python_path_override, None);
+        assert_eq!(settings.output_dir_override, None);
+
+        let (normalized, changed) = normalize_loaded_settings(settings, "/tmp/runtime");
+        assert!(!changed);
+        assert_eq!(normalized.runtime_dir, "/tmp/runtime");
+    }
+
+    #[test]
+    fn unrelated_settings_survive_trim_normalization_exactly() {
         let settings = AppSettings {
             runtime_dir: "/Users/tester/.vision-export-studio".to_string(),
-            setup_complete: true,
-            python_path_override: None,
-            output_dir_override: None,
+            python_path_override: Some("  /custom/python  ".to_string()),
+            output_dir_override: Some("/tmp/keep-me".to_string()),
         };
 
         let (normalized, changed) =
-            normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio", false);
+            normalize_loaded_settings(settings, "/Users/tester/.vision-export-studio");
 
         assert!(changed);
-        assert!(!normalized.setup_complete);
+        assert_eq!(
+            normalized.python_path_override.as_deref(),
+            Some("/custom/python")
+        );
+        // Unrelated output settings are preserved byte-for-byte through the
+        // same save path that drops the legacy flag.
+        assert_eq!(
+            normalized.output_dir_override.as_deref(),
+            Some("/tmp/keep-me")
+        );
     }
 }
