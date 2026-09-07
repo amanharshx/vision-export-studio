@@ -8,6 +8,7 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 GlobalRegistrator.register();
 
 import React from "react";
+import { act } from "react";
 import App from "@/App";
 // Dynamic import: @testing-library binds `screen` to document at import
 // time, so it must evaluate after GlobalRegistrator above.
@@ -227,8 +228,6 @@ mock.module("@/lib/tauri/managed-environments", () => ({
     }
     return Promise.resolve({
       results: keys.map((key) => ({ status: "succeeded", key, estimated_logical_bytes: 10 })),
-      setup_complete: null,
-      setup_error: null,
     });
   },
 }));
@@ -383,8 +382,8 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     exists: true,
   };
 
-  function bothProvidersWithModel() {
-    settingsFile = baseSettings({ setup_complete: true, output_dir_override: "/tmp/exports-out" });
+  function bothProvidersWithModel(overrides: { python_path_override?: string } = {}) {
+    settingsFile = baseSettings({ setup_complete: true, output_dir_override: "/tmp/exports-out", ...overrides });
     detectedEnv = MANAGED_ENV;
     stacks = [DEFAULT_STACK];
     pickedModelPath = "/tmp/best.pt";
@@ -392,26 +391,41 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
   }
 
   async function uploadModel(expectedBase = "best.pt") {
-    fireEvent.click(screen.getByRole("button", { name: "Browse file" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Browse file" }));
+    });
     await screen.findByText("Export Target");
     expect(screen.getByText(expectedBase)).not.toBeNull();
   }
 
-  async function clickEnabledButton(name: string | RegExp) {
-    await waitFor(() => {
-      const button = screen.getByRole("button", { name });
-      if ((button as HTMLButtonElement).disabled) throw new Error("waiting for enabled button");
-      fireEvent.click(button);
+  async function clickElement(element: HTMLElement) {
+    await act(async () => {
+      fireEvent.click(element);
     });
+  }
+
+  async function clickEnabledButton(name: string | RegExp) {
+    const button = await waitFor(() => {
+      const candidate = screen.getByRole("button", { name });
+      if ((candidate as HTMLButtonElement).disabled) throw new Error("waiting for enabled button");
+      return candidate;
+    });
+    await clickElement(button as HTMLElement);
   }
 
   async function confirmCleanupDialog(titleText: string, confirmName: string) {
     const title = await screen.findByText(titleText);
     const dialog = title.closest('[role="dialog"]');
     expect(dialog).not.toBeNull();
-    fireEvent.click(
+    await clickElement(
       within(dialog as HTMLElement).getByRole("button", { name: confirmName }),
     );
+  }
+
+  async function flushPendingUpdates() {
+    // Drain trailing promise chains (unawaited inventory/size refreshes)
+    // inside act so no state update lands outside a synchronized scope.
+    await act(async () => {});
   }
 
   function expectStableWorkspaceWithModel(modelBase: string) {
@@ -429,7 +443,7 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     const detectCallsBefore = calls.detect.length;
     expect(detectCallsBefore).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByTitle("Environment & settings"));
+    await clickElement(screen.getByTitle("Environment & settings"));
     await clickEnabledButton(/Ultralytics YOLO Ready/);
     await clickEnabledButton("Reset runtime");
 
@@ -454,6 +468,7 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     expect((screen.getByDisplayValue("/tmp/exports-out") as HTMLInputElement).value).toBe("/tmp/exports-out");
     expect((screen.getByPlaceholderText("Use managed Vision Export Studio runtime") as HTMLInputElement).value).toBe("");
     expectStableWorkspaceWithModel("best.pt");
+    await flushPendingUpdates();
   });
 
   test("removing one RF-DETR stack keeps healthy Ultralytics routes and the model", async () => {
@@ -461,7 +476,7 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     await launchAndEnterWorkspace();
     await uploadModel();
 
-    fireEvent.click(screen.getByTitle("Environment & settings"));
+    await clickElement(screen.getByTitle("Environment & settings"));
     await clickEnabledButton(/Roboflow RF-DETR 1 installed/);
     await clickEnabledButton(/RF-DETR 1\.9\.0/);
     await clickEnabledButton("Remove");
@@ -478,6 +493,7 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     await waitFor(() =>
       expect(calls.depCheck.at(-1)).toEqual(["ultralytics.pt.onnx", MANAGED_PYTHON]),
     );
+    await flushPendingUpdates();
   });
 
   test("model upload stays usable after removing the final environment", async () => {
@@ -487,7 +503,7 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     scanRows = [ultraRow];
     await launchAndEnterWorkspace();
 
-    fireEvent.click(screen.getByTitle("Environment & settings"));
+    await clickElement(screen.getByTitle("Environment & settings"));
     await clickEnabledButton(/Ultralytics YOLO Ready/);
     await clickEnabledButton("Reset runtime");
     await confirmCleanupDialog("Reset Ultralytics runtime?", "Reset runtime");
@@ -500,22 +516,23 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
 
     // Uploading a model afterwards opens the workspace without any setup.
     pickedModelPath = "/tmp/best.pt";
-    fireEvent.click(screen.getByRole("button", { name: "Browse file" }));
+    await clickElement(screen.getByRole("button", { name: "Browse file" }));
     await screen.findByText("Export Target");
     expectStableWorkspaceWithModel("best.pt");
+    await flushPendingUpdates();
   });
 
   test("removing all RF-DETR stacks re-probes the untouched Ultralytics routes", async () => {
-    bothProvidersWithModel();
+    bothProvidersWithModel({ python_path_override: "/custom/python" });
     await launchAndEnterWorkspace();
     await uploadModel();
 
-    fireEvent.click(screen.getByTitle("Environment & settings"));
+    await clickElement(screen.getByTitle("Environment & settings"));
     await clickEnabledButton(/Roboflow RF-DETR 1 installed/);
     await clickEnabledButton("Remove all");
     await screen.findByText("Remove RF-DETR environments?");
     expect(
-      screen.getByText("These environments will be set up again when needed."),
+      screen.getByText("Your Python override will stay active. These environments will be set up again when needed."),
     ).not.toBeNull();
     expect(screen.queryByText(/last managed runtime/i)).toBeNull();
     await confirmCleanupDialog("Remove RF-DETR environments?", "Remove all");
@@ -530,6 +547,7 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     await waitFor(() =>
       expect(calls.depCheck.at(-1)).toEqual(["ultralytics.pt.onnx", MANAGED_PYTHON]),
     );
+    await flushPendingUpdates();
   });
 
   test("removing the selected RF-DETR stack re-probes the affected route", async () => {
@@ -539,10 +557,10 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     pickedModelPath = "/tmp/model.pth";
     scanRows = [rfdetrRow];
     await launchAndEnterWorkspace();
-    fireEvent.click(screen.getByRole("button", { name: "Roboflow RF-DETR" }));
+    await clickElement(screen.getByRole("button", { name: "Roboflow RF-DETR" }));
     await uploadModel("model.pth");
 
-    fireEvent.click(screen.getByTitle("Environment & settings"));
+    await clickElement(screen.getByTitle("Environment & settings"));
     await clickEnabledButton(/Roboflow RF-DETR 1 installed/);
     await clickEnabledButton(/RF-DETR 1\.9\.0/);
     await clickEnabledButton("Remove");
@@ -557,6 +575,7 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     await waitFor(() =>
       expect(calls.depCheck.at(-1)).toEqual(["rfdetr.pth.onnx", "rfdetr.pth.onnx"]),
     );
+    await flushPendingUpdates();
   });
 
   test("post-cleanup redetect uses the saved override, preserving unsaved edits", async () => {
@@ -572,12 +591,14 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     await launchAndEnterWorkspace();
     await uploadModel();
 
-    fireEvent.click(screen.getByTitle("Environment & settings"));
+    await clickElement(screen.getByTitle("Environment & settings"));
     // Draft an unsaved override edit; the applied value stays saved.
-    fireEvent.change(
-      screen.getByPlaceholderText("Use managed Vision Export Studio runtime"),
-      { target: { value: "/custom/python-draft" } },
-    );
+    await act(async () => {
+      fireEvent.change(
+        screen.getByPlaceholderText("Use managed Vision Export Studio runtime"),
+        { target: { value: "/custom/python-draft" } },
+      );
+    });
     await clickEnabledButton(/Ultralytics YOLO Ready/);
     await clickEnabledButton("Reset runtime");
     await screen.findByText("Reset Ultralytics runtime?");
@@ -594,5 +615,6 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
       .toBe("/custom/python-draft");
     expect((screen.getByDisplayValue("/tmp/exports-out") as HTMLInputElement).value).toBe("/tmp/exports-out");
     expectStableWorkspaceWithModel("best.pt");
+    await flushPendingUpdates();
   });
 });

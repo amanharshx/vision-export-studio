@@ -22,8 +22,6 @@ export type ManagedEnvironmentCleanupResult =
 
 export interface ManagedEnvironmentCleanupReport {
   results: ManagedEnvironmentCleanupResult[];
-  setup_complete: boolean | null;
-  setup_error: string | null;
 }
 
 export type ProviderId = "ultralytics" | "rfdetr";

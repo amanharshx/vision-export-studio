@@ -362,11 +362,6 @@ export function managedEnvironmentKeysForProvider(
   return [singleKey ?? "rfdetr-all"];
 }
 
-export interface ManagedEnvironmentCleanupCopyOptions {
-  hasPythonOverride: boolean;
-  isBulkCleanup: boolean;
-}
-
 export function getManagedEnvironmentCleanupState({
   providerId,
   singleKey,
@@ -375,7 +370,10 @@ export function getManagedEnvironmentCleanupState({
   providerId: ProviderId;
   singleKey?: ManagedEnvironmentKey;
   hasPythonOverride: boolean;
-}): ManagedEnvironmentCleanupCopyOptions {
+}): {
+  hasPythonOverride: boolean;
+  isBulkCleanup: boolean;
+} {
   const isBulkCleanup = providerId === "rfdetr" && !singleKey;
   // Ticket 13 replaced last-runtime and Setup-redirect copy with concise
   // on-demand recreation copy: cleanup stays in the workspace and reports no
@@ -384,23 +382,6 @@ export function getManagedEnvironmentCleanupState({
     hasPythonOverride,
     isBulkCleanup,
   };
-}
-
-/**
- * Concise on-demand recreation copy for the cleanup dialog's "What happens
- * next" row (ticket 13). Every removal is recreated by an explicit `Set up`
- * action later; nothing navigates and no last-runtime warning is shown.
- */
-export function getManagedEnvironmentCleanupNextStepCopy({
-  hasPythonOverride,
-  isBulkCleanup,
-}: ManagedEnvironmentCleanupCopyOptions): string {
-  const recreation = isBulkCleanup
-    ? "These environments will be set up again when needed."
-    : "This environment will be set up again when needed.";
-  return hasPythonOverride
-    ? `Your Python override will stay active. ${recreation}`
-    : recreation;
 }
 
 /**
@@ -1215,6 +1196,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     cleanupAllowed: boolean;
     hasPythonOverride: boolean;
     isBulkCleanup: boolean;
+    // Concise on-demand recreation copy for the dialog's "What happens
+    // next" row, snapshotted with the confirmation: every removal is
+    // recreated by an explicit `Set up` action later, with no navigation
+    // and no last-runtime warning (ticket 13).
+    nextStep: string;
   } | null>(null);
 
   // Output directory
@@ -2166,10 +2152,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   // Confirmed full recreation for a failed route setup: removes only
   // ultralytics-managed through the existing cleanup command, then sets the
   // same route up again through the install path above. The global Setup
-  // screen is bypassed deliberately (no onSetupCompleteChange call): marking
-  // setup complete after a successful reinstall keeps the workspace stable
-  // instead of forcing a global reset. Output settings, the saved Python
-  // override, RF-DETR environments, the loaded model, and unrelated runtime
+  // screen is bypassed deliberately: marking setup complete after a
+  // successful reinstall keeps the workspace stable instead of forcing a
+  // global reset. Output settings, the saved Python override, RF-DETR environments, the loaded model, and unrelated runtime
   // files are untouched: cleanup deletes exactly one known key and the
   // install only writes `.venv`.
   const handleRecreateUltralytics = useCallback(async (routeId: string) => {
@@ -3049,6 +3034,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       singleKey,
       hasPythonOverride: Boolean(appliedPythonOverride.trim()),
     });
+    const recreationCopy = cleanupState.isBulkCleanup
+      ? "These environments will be set up again when needed."
+      : "This environment will be set up again when needed.";
     setCleanupConfirmation({
       keys: selectedKeys,
       provider: isUltralytics ? "Ultralytics YOLO" : "Roboflow RF-DETR",
@@ -3063,6 +3051,9 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       sizeError,
       cleanupAllowed,
       ...cleanupState,
+      nextStep: cleanupState.hasPythonOverride
+        ? `Your Python override will stay active. ${recreationCopy}`
+        : recreationCopy,
     });
   }, [blockOnSetupConflict, cleanupActionsDisabled, appliedPythonOverride, managedEnvironmentSizes, scanProviderEnvironments, stackEnvironments]);
 
@@ -3393,7 +3384,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         <div className="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm">
           <div><p className="font-medium">What will be removed</p><p className="text-zinc-600">{cleanupConfirmation.environments.join(", ")}</p></div>
           <div><p className="font-medium">Approx. size</p><p className="text-zinc-600">{cleanupConfirmation.estimatedLogicalBytes === null ? "Unavailable" : formatManagedEnvironmentSize(cleanupConfirmation.estimatedLogicalBytes)}</p></div>
-          <div><p className="font-medium">What happens next</p><p className="text-zinc-600">{getManagedEnvironmentCleanupNextStepCopy(cleanupConfirmation)}</p></div>
+          <div><p className="font-medium">What happens next</p><p className="text-zinc-600">{cleanupConfirmation.nextStep}</p></div>
           <div><p className="font-medium">What stays safe</p><p className="text-zinc-600">Your models, exported files, and settings will not be deleted.</p></div>
           <details>
             <summary className="cursor-pointer font-medium">Affected export formats ({cleanupConfirmation.routeIds.length})</summary>

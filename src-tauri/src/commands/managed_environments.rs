@@ -47,11 +47,6 @@ pub enum ManagedEnvironmentCleanupResult {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct ManagedEnvironmentCleanupReport {
     pub results: Vec<ManagedEnvironmentCleanupResult>,
-    pub setup_complete: Option<bool>,
-    /// Set when environment deletion succeeded but persisting the derived
-    /// setup state failed. The successful deletion report is still returned so
-    /// the UI can refresh inventory and surface the persistence failure.
-    pub setup_error: Option<String>,
 }
 
 type ScanKey = (String, String);
@@ -461,11 +456,7 @@ where
             Err(error) => reports.push(ManagedEnvironmentCleanupResult::Failed { key, error }),
         }
     }
-    Ok(ManagedEnvironmentCleanupReport {
-        results: reports,
-        setup_complete: None,
-        setup_error: None,
-    })
+    Ok(ManagedEnvironmentCleanupReport { results: reports })
 }
 
 pub(crate) fn cleanup_sync(
@@ -946,16 +937,9 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// Shared tail for cross-provider deletion tests: the report carries
-    /// no setup state, and user settings plus exported artifacts survive
-    /// byte-identical.
-    fn assert_cleanup_preserved_user_files(
-        root: &Path,
-        report: &ManagedEnvironmentCleanupReport,
-        settings_bytes: &[u8],
-    ) {
-        assert!(report.setup_complete.is_none());
-        assert!(report.setup_error.is_none());
+    /// Shared tail for cross-provider deletion tests: user settings plus
+    /// exported artifacts survive byte-identical.
+    fn assert_cleanup_preserved_user_files(root: &Path, settings_bytes: &[u8]) {
         assert_eq!(
             fs::read(root.join("vision-export-studio-settings.json")).unwrap(),
             settings_bytes
@@ -1008,7 +992,7 @@ mod tests {
         ));
         assert!(!root.join(".venv").exists());
         assert_eq!(fs::read(stack.join("payload")).unwrap(), b"stack");
-        assert_cleanup_preserved_user_files(&root, &report, &settings_bytes);
+        assert_cleanup_preserved_user_files(&root, &settings_bytes);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1033,7 +1017,7 @@ mod tests {
         ));
         assert!(!stack.exists());
         assert_eq!(fs::read(root.join(".venv/keep")).unwrap(), b"ultra");
-        assert_cleanup_preserved_user_files(&root, &report, &settings_bytes);
+        assert_cleanup_preserved_user_files(&root, &settings_bytes);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1069,7 +1053,7 @@ mod tests {
         assert!(!root.join("envs/rfdetr-default/.venv").exists());
         assert!(!coreml_stack.exists());
         assert_eq!(fs::read(root.join(".venv/keep")).unwrap(), b"ultra");
-        assert_cleanup_preserved_user_files(&root, &report, &settings_bytes);
+        assert_cleanup_preserved_user_files(&root, &settings_bytes);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1099,7 +1083,6 @@ mod tests {
             &report.results[..],
             [ManagedEnvironmentCleanupResult::Succeeded { key, .. }] if key == ULTRALYTICS_MANAGED_KEY
         ));
-        assert!(report.setup_error.is_none());
         assert!(!root.join(".venv").exists());
 
         // Settings and exported artifacts survive the reset untouched.
@@ -1111,11 +1094,6 @@ mod tests {
             fs::read(root.join("exports/model.onnx")).unwrap(),
             b"artifact"
         );
-
-        // Ticket 13: cleanup never derives or persists setup state. The
-        // report carries no setup values, so surviving readiness comes only
-        // from refreshed provider probes in the UI.
-        assert!(report.setup_complete.is_none());
 
         let _ = fs::remove_dir_all(root);
     }

@@ -15,7 +15,6 @@ import {
   applyManagedEnvironmentSizeMutation,
   managedEnvironmentCleanupErrorMessage,
   managedEnvironmentDeletionSucceeded,
-  getManagedEnvironmentCleanupNextStepCopy,
   managedEnvironmentKeysForProvider,
   getManagedEnvironmentCleanupState,
   EnvironmentGroups,
@@ -72,23 +71,6 @@ describe("managed environment cleanup helpers", () => {
   test("single RF-DETR cleanup with override keeps the override flag", () => {
     expect(getManagedEnvironmentCleanupState({ providerId: "rfdetr", singleKey: "rfdetr-coreml", hasPythonOverride: true }))
       .toEqual({ hasPythonOverride: true, isBulkCleanup: false });
-  });
-
-  test("cleanup next-step copy recreates a single environment on demand", () => {
-    expect(getManagedEnvironmentCleanupNextStepCopy({ hasPythonOverride: false, isBulkCleanup: false }))
-      .toBe("This environment will be set up again when needed.");
-  });
-
-  test("cleanup next-step copy recreates bulk environments on demand", () => {
-    expect(getManagedEnvironmentCleanupNextStepCopy({ hasPythonOverride: false, isBulkCleanup: true }))
-      .toBe("These environments will be set up again when needed.");
-  });
-
-  test("cleanup next-step copy keeps the override active and recreates on demand", () => {
-    expect(getManagedEnvironmentCleanupNextStepCopy({ hasPythonOverride: true, isBulkCleanup: false }))
-      .toBe("Your Python override will stay active. This environment will be set up again when needed.");
-    expect(getManagedEnvironmentCleanupNextStepCopy({ hasPythonOverride: true, isBulkCleanup: true }))
-      .toBe("Your Python override will stay active. These environments will be set up again when needed.");
   });
   test("formats bytes, MiB, and GiB at readable boundaries", () => {
     expect(formatManagedEnvironmentSize(512)).toBe("512 B");
@@ -275,8 +257,6 @@ describe("managed environment cleanup helpers", () => {
         { status: "succeeded", key: "rfdetr-default", estimated_logical_bytes: 100 },
         { status: "failed", key: "rfdetr-coreml", error: "permission denied" },
       ],
-      setup_complete: null,
-      setup_error: null,
     };
     // Only the failing environment is named; the succeeded one is not.
     const message = managedEnvironmentCleanupErrorMessage(report);
@@ -307,8 +287,6 @@ describe("managed environment cleanup helpers", () => {
         { status: "failed", key: "rfdetr-default", error: "permission denied" },
         { status: "failed", key: "rfdetr-coreml", error: "still exists" },
       ],
-      setup_complete: null,
-      setup_error: null,
     };
     expect(managedEnvironmentCleanupErrorMessage(report)).toBe(
       "Some environments could not be removed: rfdetr-default: permission denied; rfdetr-coreml: still exists",
@@ -318,8 +296,6 @@ describe("managed environment cleanup helpers", () => {
   test("fully successful cleanup produces no error message", () => {
     const report: ManagedEnvironmentCleanupReport = {
       results: [{ status: "succeeded", key: "ultralytics-managed", estimated_logical_bytes: 10 }],
-      setup_complete: null,
-      setup_error: null,
     };
     expect(managedEnvironmentCleanupErrorMessage(report)).toBeNull();
   });
