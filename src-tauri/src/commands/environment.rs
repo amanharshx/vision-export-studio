@@ -469,6 +469,29 @@ pub(crate) fn paths_equal(left: &str, right: &str, is_windows: bool) -> bool {
         == normalize_path_for_comparison(right, is_windows)
 }
 
+/// True when the given interpreter is the app-owned managed environment.
+/// Shared by the ticket-14 backend gates (detection, checks, exports) so
+/// the managed comparison cannot drift between them.
+pub(crate) fn is_managed_python(python_path: &str, runtime_dir: &str) -> bool {
+    paths_equal(python_path, &venv_python(runtime_dir), cfg!(windows))
+}
+
+/// Ticket 14: an explicit detection probe must target an app-owned
+/// interpreter — the managed environment or an RF-DETR stack venv under the
+/// runtime root. A saved bootstrap override (or any other user-owned Python)
+/// never runs detection directly: the frontend always probes managed, and
+/// this gate holds for direct invokes.
+pub(crate) fn explicit_detect_path_allowed(explicit: &str, runtime_dir: &str) -> bool {
+    if is_managed_python(explicit, runtime_dir) {
+        return true;
+    }
+    let stacks_prefix = format!(
+        "{}/envs/",
+        normalize_path_for_comparison(runtime_dir, cfg!(windows))
+    );
+    normalize_path_for_comparison(explicit, cfg!(windows)).starts_with(&stacks_prefix)
+}
+
 fn detect_yolo_path(
     python_path: &str,
     managed_runtime_dir: Option<&str>,
@@ -495,6 +518,15 @@ pub async fn detect_environment(
 ) -> Result<EnvironmentInfo, String> {
     let mut warnings: Vec<String> = Vec::new();
     let settings = load_settings(app_handle.clone())?;
+
+    // Ticket 14: detection never runs through the selected override (or any
+    // other user-owned interpreter). Blank callers fall through to the
+    // existing managed/system resolution below.
+    if let Some(path) = python_path.as_deref() {
+        if !path.trim().is_empty() && !explicit_detect_path_allowed(path, &settings.runtime_dir) {
+            return Err("Environment detection runs only against app-owned environments. Set up the managed runtime before detecting.".to_string());
+        }
+    }
 
     // Step 1: resolve the Python executable.
     let resolved = resolve_effective_python(&app_handle, python_path)?;
@@ -951,5 +983,27 @@ mod tests {
             Some("/managed/.venv/bin/python".to_string()),
         );
         assert_eq!(selected, Some("/managed/.venv/bin/python".to_string()));
+    }
+
+    #[test]
+    fn explicit_detect_probe_allows_only_app_owned_interpreters() {
+        // Ticket 14: detection never runs through a saved bootstrap override
+        // or any other user-owned Python — only the managed environment and
+        // RF-DETR stack venvs under the runtime root.
+        let runtime = "/tmp/runtime";
+        assert!(explicit_detect_path_allowed(
+            "/tmp/runtime/.venv/bin/python",
+            runtime
+        ));
+        assert!(explicit_detect_path_allowed(
+            "/tmp/runtime/envs/rfdetr-default/.venv/bin/python",
+            runtime
+        ));
+        assert!(!explicit_detect_path_allowed("/custom/python", runtime));
+        assert!(!explicit_detect_path_allowed("/usr/bin/python3", runtime));
+        assert!(!explicit_detect_path_allowed(
+            "/tmp/other-runtime/.venv/bin/python",
+            runtime
+        ));
     }
 }

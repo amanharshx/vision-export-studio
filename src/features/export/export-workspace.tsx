@@ -111,6 +111,7 @@ import { validateRfDetrImgsz } from "./rfdetr-image-size";
 import { getManagedPythonPath, isManagedPythonEnvironment } from "@/features/setup/managed-runtime";
 import { PythonRequiredDialog } from "@/features/setup/python-required-dialog";
 import {
+  BOOTSTRAP_SOURCE_EXPLICIT_OVERRIDE,
   isPythonRequiredResult,
   resolveBootstrapPython,
 } from "@/lib/tauri/bootstrap-python";
@@ -411,7 +412,6 @@ export function resolveRoutePython(
  */
 export function resolveUltralyticsRoutePython(
   envPython: string | null,
-  _appliedOverride: string,
   managedPython: string | null,
   os?: AppOS,
 ): string | null {
@@ -420,6 +420,33 @@ export function resolveUltralyticsRoutePython(
     return envPython;
   }
   return null;
+}
+
+/** First-use explanation shown when a setup run creates an environment from
+ * a pre-existing saved override. Ticket 14: migrated users meet the new
+ * bootstrap-only behavior exactly when their saved Python is first used. */
+export const BOOTSTRAP_FIRST_USE_NOTICE =
+  "Setting up from your saved Python: it only creates the isolated export environment and is never modified.";
+
+export function getBootstrapFirstUseNotice(
+  savedOverride: string,
+  bootstrapSource: string | null,
+): string | null {
+  if (!savedOverride.trim()) return null;
+  if (bootstrapSource !== BOOTSTRAP_SOURCE_EXPLICIT_OVERRIDE) return null;
+  return BOOTSTRAP_FIRST_USE_NOTICE;
+}
+
+/** First-use banner for the settings panel: rendered only while a setup run
+ * is creating (or just created) an environment from a pre-existing saved
+ * override. Null renders nothing. */
+export function BootstrapFirstUseBanner({ notice }: { notice: string | null }) {
+  if (!notice) return null;
+  return (
+    <p className="mt-2 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-2 text-[11px] leading-relaxed text-blue-800">
+      {notice}
+    </p>
+  );
 }
 
 /**
@@ -1172,6 +1199,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   // Saved (applied) override and managed interpreter backing Ultralytics
   // readiness: automatic system-Python discovery never qualifies (ticket 12).
   const [appliedPythonOverride, setAppliedPythonOverride] = useState("");
+  // First-use explanation for a setup run creating an environment from a
+  // pre-existing saved override (ticket 14). Set when the creation request
+  // is built, cleared when a setup starts without an override bootstrap or
+  // the saved override changes.
+  const [bootstrapFirstUseNotice, setBootstrapFirstUseNotice] = useState<string | null>(null);
   const [managedPythonPath, setManagedPythonPath] = useState<string | null>(null);
   const [redetecting, setRedetecting] = useState(false);
   const [stackEnvironments, setStackEnvironments] = useState<StackEnvironment[]>([]);
@@ -1725,11 +1757,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   // Check dependencies whenever the selected route or resolved environment changes.
   // Observes the environment object (not just its python path) so a fresh
   // object published by setup completion refreshes whichever route is current.
-  // Ultralytics usability comes from its managed environment (or an explicit
-  // override) — never automatic system-Python discovery. RF-DETR checks
-  // resolve inside the backend to the selected stack (ticket 12).
+  // Ultralytics usability comes only from its managed environment (ticket
+  // 14: a saved override is bootstrap-only) — never automatic system-Python
+  // discovery. RF-DETR checks resolve inside the backend to the selected
+  // stack (ticket 12).
   const providerEnvPython = selectedProviderId === "ultralytics"
-    ? resolveUltralyticsRoutePython(envInfo?.python_path ?? null, appliedPythonOverride, managedPythonPath)
+    ? resolveUltralyticsRoutePython(envInfo?.python_path ?? null, managedPythonPath)
     : envInfo?.python_path ?? null;
   useEffect(() => {
     const pythonPath = resolveRoutePython(
@@ -2013,6 +2046,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   // it holds itself.
   const runUltralyticsRouteSetup = useCallback(async (routeId: string, opts?: InstallUltralyticsOptions): Promise<boolean> => {
     if (blockOnSetupConflict((message) => setRouteDepCheckError(routeId, message))) return false;
+    setBootstrapFirstUseNotice(null);
 
     // This flow only starts the app-wide setup task and publishes the fresh
     // environment on terminal. It never touches sourcePath (loaded model),
@@ -2110,6 +2144,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
           setRouteDepCheckError(routeId, bootstrap.reason);
           return false;
         }
+        // Ticket 14: when a pre-existing saved override is first used to
+        // create the environment, explain the bootstrap-only behavior.
+        setBootstrapFirstUseNotice(
+          getBootstrapFirstUseNotice(appliedPythonOverride, bootstrap.source),
+        );
         request = {
           provider: "ultralytics",
           routeId,
@@ -2136,7 +2175,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     } catch (error) {
       return failInstall(String(error));
     }
-  }, [blockOnSetupConflict, dismissTask, invalidateManagedEnvironmentSizesForMutation, requirePython, routeDepCheck, scanProviderEnvironments, setRouteDepCheckError, startRuntimeInstall, ultralyticsSetupTask]);
+  }, [appliedPythonOverride, blockOnSetupConflict, dismissTask, invalidateManagedEnvironmentSizesForMutation, requirePython, routeDepCheck, scanProviderEnvironments, setRouteDepCheckError, startRuntimeInstall, ultralyticsSetupTask]);
   // Guarded click handler for the route modal setup action and dialog
   // retries: blocks while an Environment-panel cleanup owns the runtime.
   // Recreate calls the core above directly instead, sequencing cleanup
@@ -2211,6 +2250,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   // readiness. Modal setup, Retry, and Recreate call this same core.
   const runRfDetrRouteSetup = useCallback(async (routeId: string): Promise<boolean> => {
     if (blockOnSetupConflict((message) => setRouteDepCheckError(routeId, message))) return false;
+    setBootstrapFirstUseNotice(null);
     // Refuse before any environment work when the host is already known to
     // be incompatible: backend platform state (authoritative batch plus the
     // dependency preflight) wins over starting a doomed large installation.
@@ -2297,6 +2337,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
           setRouteDepCheckError(routeId, bootstrap.reason);
           return false;
         }
+        // Ticket 14: when a pre-existing saved override is first used to
+        // create the stack, explain the bootstrap-only behavior.
+        setBootstrapFirstUseNotice(
+          getBootstrapFirstUseNotice(appliedPythonOverride, bootstrap.source),
+        );
         request = {
           provider: "rfdetr",
           routeId,
@@ -2323,7 +2368,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     } catch (error) {
       return failInstall(String(error));
     }
-  }, [blockOnSetupConflict, dismissTask, effectiveHostSupportResults, refreshStackEnvironmentCards, requirePython, rfdetrSetupTask, routeDepCheck, scanProviderEnvironments, setRouteDepCheckError, startRuntimeInstall]);
+  }, [appliedPythonOverride, blockOnSetupConflict, dismissTask, effectiveHostSupportResults, refreshStackEnvironmentCards, requirePython, rfdetrSetupTask, routeDepCheck, scanProviderEnvironments, setRouteDepCheckError, startRuntimeInstall]);
   const handleRfDetrRouteSetup = useCallback(async (routeId: string): Promise<void> => {
     if (cleanupBusy) return;
     await runRfDetrRouteSetup(routeId);
@@ -2388,12 +2433,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   // Core export invocation — call only when deps are satisfied
   const doStartExport = async (missingDepCount: number, envOverride?: EnvironmentInfo) => {
     const activeEnv = envOverride ?? envInfo;
-    // Ticket 12: Ultralytics exports run only from its managed environment
-    // (or an explicit override) — never from automatic system-Python
-    // discovery, which would bypass route setup. RF-DETR exports resolve to
-    // the selected stack inside the backend.
+    // Ticket 12 + 14: Ultralytics exports run only from its managed
+    // environment (a saved override is bootstrap-only) — never from
+    // automatic system-Python discovery, which would bypass route setup.
+    // RF-DETR exports resolve to the selected stack inside the backend.
     const activeEnvPython = selectedProviderId === "ultralytics"
-      ? resolveUltralyticsRoutePython(activeEnv?.python_path ?? null, appliedPythonOverride, managedPythonPath)
+      ? resolveUltralyticsRoutePython(activeEnv?.python_path ?? null, managedPythonPath)
       : activeEnv?.python_path ?? null;
     const exportPython = resolveRoutePython(
       selectedProviderId,
@@ -2972,6 +3017,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       return;
     }
     setAppliedPythonOverride(val);
+    setBootstrapFirstUseNotice(null);
     handleRedetect();
   }, [cleanupBusy, pythonOverride, handleRedetect]);
 
@@ -2992,6 +3038,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     }
     setPythonOverride("");
     setAppliedPythonOverride("");
+    setBootstrapFirstUseNotice(null);
     handleRedetect();
   }, [cleanupBusy, handleRedetect]);
 
@@ -3269,6 +3316,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
                     Your saved Python creates isolated export environments when setup runs. Packages are installed into app-owned environments, never into your Python.
                   </p>
                 )}
+                <BootstrapFirstUseBanner notice={bootstrapFirstUseNotice} />
                 <div className="mt-2.5 flex justify-end">
                   <Button
                     size="sm"

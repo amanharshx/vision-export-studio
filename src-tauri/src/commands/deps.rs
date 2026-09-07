@@ -8,6 +8,7 @@ use tauri::Emitter;
 use uuid::Uuid;
 
 use crate::commands::bootstrap_python::{resolve_bootstrap_for_runtime, BootstrapPythonResult};
+use crate::commands::environment::is_managed_python;
 use crate::commands::managed_environments::{
     resolve_target_path, ManagedEnvironments, ULTRALYTICS_MANAGED_KEY,
 };
@@ -1033,6 +1034,24 @@ fn check_rfdetr_probe_dep(python: &str, route_id: &str) -> Vec<DepCheckResult> {
 // check_dependencies command
 // ---------------------------------------------------------------------------
 
+/// Ticket 14: Ultralytics dependency checks run only against the app-owned
+/// managed environment. A saved bootstrap override (or any other user-owned
+/// interpreter) never runs checks directly: the frontend only checks
+/// managed, and this gate holds for direct invokes. Returns an actionable
+/// error unless the caller passes the managed interpreter.
+pub(crate) fn ultralytics_check_python_error(
+    python_path: &str,
+    runtime_dir: &str,
+) -> Option<String> {
+    if is_managed_python(python_path, runtime_dir) {
+        return None;
+    }
+    Some(
+        "Ultralytics dependency checks run only against the managed environment. Set up the Ultralytics runtime before checking."
+            .to_string(),
+    )
+}
+
 #[tauri::command]
 pub async fn check_dependencies(
     app_handle: tauri::AppHandle,
@@ -1047,8 +1066,15 @@ pub async fn check_dependencies(
         return Err("python_path must not be empty".to_string());
     }
 
+    let settings = load_settings(app_handle)?;
+    if is_ultralytics_route(&route_id) {
+        if let Some(error) = ultralytics_check_python_error(&python_path, &settings.runtime_dir) {
+            return Err(error);
+        }
+    }
+
     let stack_runtime_dir = if stack_for_route(&route_id).is_some() {
-        Some(load_settings(app_handle)?.runtime_dir)
+        Some(settings.runtime_dir)
     } else {
         None
     };
@@ -2641,6 +2667,16 @@ mod tests {
     }
 
     #[test]
+    fn ultralytics_check_gate_allows_only_managed_python() {
+        // Ticket 14: checks never run through a saved bootstrap override or
+        // any other user-owned interpreter — only the managed environment.
+        let managed = venv_python("/tmp/runtime");
+        assert!(ultralytics_check_python_error(&managed, "/tmp/runtime").is_none());
+        assert!(ultralytics_check_python_error("/custom/python", "/tmp/runtime").is_some());
+        assert!(ultralytics_check_python_error("python3", "/tmp/runtime").is_some());
+    }
+
+    #[test]
     fn rfdetr_executorch_route_declares_flatc_dependency_row() {
         let deps = route_deps("rfdetr.pth.executorch").expect("route deps");
         assert_eq!(
@@ -2752,20 +2788,42 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn venv_bootstrap_script(probe_echo: &str, template: &std::path::Path) -> String {
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"-c\" ]; then {probe_echo}; exit 0; fi\nvenv_path=\"$3\"\nmkdir -p \"$venv_path/bin\"\ncp \"{}\" \"$venv_path/bin/python\"\nchmod +x \"$venv_path/bin/python\"\n",
+            template.to_string_lossy()
+        )
+    }
+
+    #[cfg(unix)]
     fn write_venv_bootstrap(path: &std::path::Path, template: Option<&std::path::Path>) {
         use std::os::unix::fs::PermissionsExt;
         // Fake `python -m venv`: answers `-c` probes, then either installs
         // `template` as `<venv>/bin/python` (repair-in-place, like stock venv
         // keeping existing files) or exits 1 leaving partial files.
         let script = match template {
-            Some(template) => format!(
-                "#!/bin/sh\nif [ \"$1\" = \"-c\" ]; then echo \"3.12.12\"; exit 0; fi\nvenv_path=\"$3\"\nmkdir -p \"$venv_path/bin\"\ncp \"{}\" \"$venv_path/bin/python\"\nchmod +x \"$venv_path/bin/python\"\n",
-                template.to_string_lossy()
-            ),
+            Some(template) => venv_bootstrap_script("echo \"3.12.12\"", template),
             None => {
-                "#!/bin/sh\nif [ \"$1\" = \"-c\" ]; then echo \"3.12.12\"; exit 0; fi\nexit 1\n".to_string()
+                "#!/bin/sh\nif [ \"$1\" = \"-c\" ]; then echo \"3.12.12\"; exit 0; fi\nexit 1\n"
+                    .to_string()
             }
         };
+        std::fs::write(path, script).expect("write fake bootstrap");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .expect("make fake bootstrap executable");
+    }
+
+    #[cfg(unix)]
+    fn write_marker_venv_bootstrap(path: &std::path::Path, template: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        // Fake saved-override bootstrap for the resolver path: answers `-c`
+        // probes with marker output like a real interpreter (so the
+        // bootstrap resolver accepts it) and creates venvs by installing
+        // `template` as `<venv>/bin/python`.
+        let script = venv_bootstrap_script(
+            "echo \"__VES_PYTHON__=$0\"; echo \"__VES_PYTHON_VERSION__=3.12.12\"",
+            template,
+        );
         std::fs::write(path, script).expect("write fake bootstrap");
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
             .expect("make fake bootstrap executable");
@@ -3220,6 +3278,47 @@ mod tests {
         assert_eq!(managed, venv_python(&runtime));
         assert_ne!(managed, bootstrap_str);
         assert!(Path::new(&managed).exists(), "managed python created");
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ultralytics_route_install_leaves_bootstrap_untouched() {
+        // Ticket 14: creating the shared environment from the saved override
+        // must never mutate that interpreter's files. Mirrors the frontend
+        // flow: the passed Python is the still-missing managed interpreter,
+        // so resolution falls back to the saved override as bootstrap.
+        let root = std::env::temp_dir().join(format!(
+            "ultralytics-bootstrap-untouched-{}",
+            Uuid::new_v4()
+        ));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        let bootstrap = root.join("bootstrap-python");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let template = root.join("working-template");
+        write_python_stub(&template, true);
+        write_marker_venv_bootstrap(&bootstrap, &template);
+        let bootstrap_before = std::fs::read(&bootstrap).expect("read bootstrap");
+        let template_before = std::fs::read(&template).expect("read template");
+        let bootstrap_str = bootstrap.to_string_lossy().into_owned();
+
+        let managed = resolve_ultralytics_install_python(
+            &venv_python(&runtime),
+            &runtime,
+            Some(&bootstrap_str),
+        )
+        .expect("route setup creates the shared environment from the saved override");
+        assert_eq!(managed, venv_python(&runtime));
+        assert_eq!(
+            std::fs::read(&bootstrap).expect("reread bootstrap"),
+            bootstrap_before,
+            "bootstrap interpreter untouched"
+        );
+        assert_eq!(
+            std::fs::read(&template).expect("reread template"),
+            template_before,
+            "venv template untouched"
+        );
         std::fs::remove_dir_all(root).expect("remove temp root");
     }
 

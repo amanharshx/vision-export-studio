@@ -7,7 +7,7 @@ use tauri::Emitter;
 use uuid::Uuid;
 
 use crate::commands::artifacts::publish_artifacts;
-use crate::commands::environment::paths_equal;
+use crate::commands::environment::is_managed_python;
 use crate::commands::provider_registry::{
     current_host_context, validate_provider_route, validate_route_platform,
     validate_source_extension, ProviderId,
@@ -578,13 +578,13 @@ fn resolve_ultralytics_export_python(
     base_python: &str,
     runtime_dir: &str,
 ) -> Result<String, String> {
-    let managed = venv_python(runtime_dir);
-    if !paths_equal(base_python, &managed, cfg!(windows)) {
+    if !is_managed_python(base_python, runtime_dir) {
         return Err(
             "Ultralytics exports run only from the managed environment. Set up the Ultralytics runtime before exporting."
                 .to_string(),
         );
     }
+    let managed = venv_python(runtime_dir);
     if !Path::new(&managed).exists() {
         return Err(
             "Ultralytics environment is missing. Install route dependencies before exporting."
@@ -600,7 +600,9 @@ fn resolve_export_python(
     runtime_dir: &str,
 ) -> Result<String, String> {
     let Some(stack_python) = stack_python(runtime_dir, route_id) else {
-        return Ok(base_python.to_string());
+        return Err(format!(
+            "no RF-DETR environment is mapped for route: {route_id}; refusing to export through {base_python}"
+        ));
     };
     if !Path::new(&stack_python).exists() {
         return Err(
@@ -711,6 +713,21 @@ mod tests {
 
     const TEST_CHILD_MODE: &str = "VISION_EXPORT_STUDIO_TEST_CHILD_MODE";
 
+    /// Disposable runtime root for export-gate tests. Always creates the
+    /// root; optionally lays down a managed interpreter file. Returns
+    /// (root, runtime_dir, managed_python).
+    fn temp_export_runtime(create_managed: bool) -> (std::path::PathBuf, String, String) {
+        let root = std::env::temp_dir().join(format!("ves-export-gate-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let runtime_str = root.to_string_lossy().into_owned();
+        let managed = venv_python(&runtime_str);
+        if create_managed {
+            std::fs::create_dir_all(Path::new(&managed).parent().unwrap()).unwrap();
+            std::fs::write(&managed, b"python").unwrap();
+        }
+        (root, runtime_str, managed)
+    }
+
     fn spawn_test_child(mode: &str) -> Child {
         let mut command = std::process::Command::new(
             std::env::current_exe().expect("resolve current Rust test executable"),
@@ -761,12 +778,21 @@ mod tests {
     }
 
     #[test]
+    fn unmapped_route_never_exports_through_base_python() {
+        // Ticket 14: no route may export through the caller's interpreter.
+        // A route without a mapped stack fails closed instead of running
+        // through the passed (possibly override) Python.
+        let (root, runtime_str, _) = temp_export_runtime(false);
+        let error = resolve_export_python("rfdetr.pth.unknown", "/custom/python", &runtime_str)
+            .unwrap_err();
+
+        assert!(error.contains("no RF-DETR environment is mapped"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn ultralytics_export_requires_managed_python() {
-        let runtime = std::env::temp_dir().join(format!("ultralytics-export-{}", Uuid::new_v4()));
-        let runtime_str = runtime.to_string_lossy().into_owned();
-        let managed = venv_python(&runtime_str);
-        std::fs::create_dir_all(Path::new(&managed).parent().unwrap()).unwrap();
-        std::fs::write(&managed, b"python").unwrap();
+        let (_root, runtime_str, managed) = temp_export_runtime(true);
 
         // Managed interpreter exports through itself.
         assert_eq!(
@@ -778,17 +804,17 @@ mod tests {
         let error = resolve_ultralytics_export_python("/custom/python", &runtime_str).unwrap_err();
         assert!(error.contains("only from the managed environment"));
 
-        std::fs::remove_dir_all(runtime).unwrap();
+        std::fs::remove_dir_all(_root).unwrap();
     }
 
     #[test]
     fn missing_ultralytics_managed_blocks_export() {
-        let runtime = std::env::temp_dir().join(format!("ultralytics-export-{}", Uuid::new_v4()));
-        let runtime_str = runtime.to_string_lossy().into_owned();
-        let managed = venv_python(&runtime_str);
+        let (_root, runtime_str, managed) = temp_export_runtime(false);
 
         let error = resolve_ultralytics_export_python(&managed, &runtime_str).unwrap_err();
         assert!(error.contains("Ultralytics environment is missing"));
+
+        std::fs::remove_dir_all(_root).unwrap();
     }
 
     #[test]
