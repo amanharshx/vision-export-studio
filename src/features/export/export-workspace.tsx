@@ -108,7 +108,7 @@ import { rfdetrSetupReadiness, type RfDetrSetupReadiness } from "@/lib/tauri/rfd
 import { getEffectiveHostSupportResult, getHostSupportResult } from "./host-support";
 import { normalizeOptionsForRoute } from "./options/normalize";
 import { validateRfDetrImgsz } from "./rfdetr-image-size";
-import { getManagedPythonPath } from "@/features/setup/managed-runtime";
+import { getManagedPythonPath, isManagedPythonEnvironment } from "@/features/setup/managed-runtime";
 import { PythonRequiredDialog } from "@/features/setup/python-required-dialog";
 import {
   isPythonRequiredResult,
@@ -379,12 +379,52 @@ export function getManagedEnvironmentCleanupState({
   const removesLastManagedRuntime = providerId === "ultralytics"
     ? rfdetrCount === 0
     : ultralyticsExists === false && (isBulkCleanup ? rfdetrCount > 0 : rfdetrCount === 1);
+  // Ticket 12 retired the required full-page Setup screen, so cleanup stays
+  // in the workspace and reports no Setup navigation. Concise on-demand
+  // recreation copy belongs to ticket 13.
   return {
     removesLastManagedRuntime,
-    willReturnToSetup: providerId === "ultralytics" && !hasPythonOverride,
     hasPythonOverride,
     isBulkCleanup,
   };
+}
+
+/**
+ * Resolve the interpreter argument for one route's check or export call.
+ * Ultralytics passes its managed python (null fails closed). Mapped RF-DETR
+ * routes pass the route id: both backend commands resolve the route's stack
+ * themselves and never consult the passed value, which only has to be
+ * non-empty — so a missing Ultralytics environment never blocks RF-DETR.
+ */
+export function resolveRoutePython(
+  providerId: ProviderId,
+  envPython: string | null,
+  routeId: string,
+): string | null {
+  if (providerId === "rfdetr") return routeId;
+  return envPython;
+}
+
+/**
+ * Ultralytics interpreter eligible for checks and exports: the managed
+ * environment, or the detected environment when the user explicitly chose it
+ * via a saved Python override (override semantics belong to ticket 14).
+ * Automatically discovered system Python never qualifies: it would mark
+ * routes Ready and export through it with no route setup and no app-owned
+ * environment, bypassing provider inventory.
+ */
+export function resolveUltralyticsRoutePython(
+  envPython: string | null,
+  appliedOverride: string,
+  managedPython: string | null,
+  os?: AppOS,
+): string | null {
+  if (!envPython) return null;
+  if (appliedOverride.trim()) return envPython;
+  if (managedPython && isManagedPythonEnvironment(envPython, managedPython, os ?? getOS())) {
+    return envPython;
+  }
+  return null;
 }
 
 /**
@@ -1155,6 +1195,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   const [envInfo, setEnvInfo] = useState<EnvironmentInfo | null>(null);
   const [envError, setEnvError] = useState<string | null>(null);
   const [pythonOverride, setPythonOverride] = useState("");
+  // Saved (applied) override and managed interpreter backing Ultralytics
+  // readiness: automatic system-Python discovery never qualifies (ticket 12).
+  const [appliedPythonOverride, setAppliedPythonOverride] = useState("");
+  const [managedPythonPath, setManagedPythonPath] = useState<string | null>(null);
   const [redetecting, setRedetecting] = useState(false);
   const [stackEnvironments, setStackEnvironments] = useState<StackEnvironment[]>([]);
   const refreshStackEnvironmentCards = useCallback(
@@ -1178,7 +1222,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     cleanupAllowed: boolean;
     hasPythonOverride: boolean;
     removesLastManagedRuntime: boolean;
-    willReturnToSetup: boolean;
     isBulkCleanup: boolean;
   } | null>(null);
 
@@ -1632,6 +1675,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       .then((settings) => {
         const override = settings.python_path_override || "";
         if (override) setPythonOverride(override);
+        setAppliedPythonOverride(override);
+        setManagedPythonPath(getManagedPythonPath(settings.runtime_dir));
         const outOverride = settings.output_dir_override || "";
         if (outOverride) {
           setOutputDirOverride(outOverride);
@@ -1703,8 +1748,18 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Check dependencies whenever the selected route or resolved environment changes.
   // Observes the environment object (not just its python path) so a fresh
   // object published by setup completion refreshes whichever route is current.
+  // Ultralytics usability comes from its managed environment (or an explicit
+  // override) — never automatic system-Python discovery. RF-DETR checks
+  // resolve inside the backend to the selected stack (ticket 12).
+  const providerEnvPython = selectedProviderId === "ultralytics"
+    ? resolveUltralyticsRoutePython(envInfo?.python_path ?? null, appliedPythonOverride, managedPythonPath)
+    : envInfo?.python_path ?? null;
   useEffect(() => {
-    const pythonPath = envInfo?.python_path;
+    const pythonPath = resolveRoutePython(
+      selectedProviderId,
+      providerEnvPython,
+      selectedRouteId,
+    );
     if (!pythonPath || !selectedRouteId) {
       setRouteDepCheck(emptyRouteDepCheck());
       return;
@@ -1713,7 +1768,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     void refreshRouteDependencies(selectedRouteId, pythonPath).catch(() => {
       // State handled in helper; avoid unhandled promise noise.
     });
-  }, [selectedRouteId, envInfo, refreshRouteDependencies]);
+  }, [selectedRouteId, selectedProviderId, providerEnvPython, refreshRouteDependencies]);
 
   // On setup terminal, publish the managed environment and let the dependency
   // effect above refresh the currently selected route. The provider-wide
@@ -2357,8 +2412,20 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Core export invocation — call only when deps are satisfied
   const doStartExport = async (missingDepCount: number, envOverride?: EnvironmentInfo) => {
     const activeEnv = envOverride ?? envInfo;
-    if (!sourcePath || !activeEnv?.python_path) return;
-    if (selectedProviderId === "ultralytics" && !activeEnv.yolo_path) {
+    // Ticket 12: Ultralytics exports run only from its managed environment
+    // (or an explicit override) — never from automatic system-Python
+    // discovery, which would bypass route setup. RF-DETR exports resolve to
+    // the selected stack inside the backend.
+    const activeEnvPython = selectedProviderId === "ultralytics"
+      ? resolveUltralyticsRoutePython(activeEnv?.python_path ?? null, appliedPythonOverride, managedPythonPath)
+      : activeEnv?.python_path ?? null;
+    const exportPython = resolveRoutePython(
+      selectedProviderId,
+      activeEnvPython,
+      selectedRoute.id,
+    );
+    if (!sourcePath || !exportPython) return;
+    if (selectedProviderId === "ultralytics" && !activeEnv?.yolo_path) {
       setInvokeError("YOLO CLI not found. Install the Ultralytics runtime or re-detect the environment.");
       return;
     }
@@ -2424,8 +2491,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         routeId: selectedRoute.id,
         outputDir,
         providerId: selectedProviderId,
-        pythonPath: activeEnv.python_path,
-        yoloPath: activeEnv.yolo_path ?? "",
+        pythonPath: exportPython,
+        yoloPath: activeEnv?.yolo_path ?? "",
         imgsz: options.imgsz,
         batch: options.batch,
         precision: options.precision,
@@ -2475,7 +2542,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Export handler — gates on missing deps before starting
   const handleExport = async () => {
     if (blockOnSetupConflict(setInvokeError)) return;
-    if (cleanupBusy || !sourcePath || !envInfo?.python_path || exportStatus === "running" || exportStatus === "starting") return;
+    const exportPython = resolveRoutePython(
+      selectedProviderId,
+      providerEnvPython,
+      selectedRoute.id,
+    );
+    if (cleanupBusy || !sourcePath || !exportPython || exportStatus === "running" || exportStatus === "starting") return;
     const incompatibleMessage = getIncompatibleExportMessage(
       selectedRoute,
       appPlatform.os,
@@ -2495,7 +2567,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       });
       return;
     }
-    if (selectedProviderId === "ultralytics" && !envInfo.yolo_path) {
+    if (selectedProviderId === "ultralytics" && !envInfo?.yolo_path) {
       setInvokeError("Install the Ultralytics runtime before starting a YOLO export.");
       return;
     }
@@ -2541,8 +2613,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       setInvokeError("Another runtime operation is in progress. Wait for it to finish before installing dependencies.");
       return;
     }
-    const pythonPath = envInfo?.python_path;
-    if (!pythonPath) return;
     const incompatibleMessage = getIncompatibleExportMessage(
       selectedRoute,
       appPlatform.os,
@@ -2580,6 +2650,8 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       return;
     }
 
+    const pythonPath = providerEnvPython;
+    if (!pythonPath) return;
     setInstallPhase("installing");
     setLogLines([]);
 
@@ -2916,6 +2988,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
       setEnvironmentPanelError(String(error));
       return;
     }
+    setAppliedPythonOverride(val);
     handleRedetect(val);
   }, [cleanupBusy, pythonOverride, handleRedetect]);
 
@@ -2928,10 +3001,32 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
   // Clear python override
   const handleClearOverride = useCallback(async () => {
     if (cleanupBusy) return;
+    try {
+      await savePythonOverride(null);
+    } catch (error) {
+      setEnvironmentPanelError(String(error));
+      return;
+    }
     setPythonOverride("");
-    await savePythonOverride(null);
+    setAppliedPythonOverride("");
     handleRedetect();
   }, [cleanupBusy, handleRedetect]);
+
+  // Re-read the saved override after a setup-dialog action (choose, check
+  // again, clear) saves through the setup-task owner. The workspace no longer
+  // remounts afterward, so without this the displayed and applied override
+  // stay stale until restart. Detection refresh stays with the retried setup
+  // terminal effects; this only syncs the saved value.
+  const refreshPythonOverrideFromSettings = useCallback(async () => {
+    try {
+      const settings = await loadSettings();
+      const override = settings.python_path_override || "";
+      setPythonOverride(override);
+      setAppliedPythonOverride(override);
+    } catch {
+      // Keep the current text when settings cannot reload.
+    }
+  }, []);
 
   const prepareCleanup = useCallback(async (providerId: ProviderId, singleKey?: ManagedEnvironmentKey) => {
     if (blockOnSetupConflict(setEnvironmentPanelError)) return;
@@ -3309,7 +3404,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         <div className="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm">
           <div><p className="font-medium">What will be removed</p><p className="text-zinc-600">{cleanupConfirmation.environments.join(", ")}</p></div>
           <div><p className="font-medium">Approx. size</p><p className="text-zinc-600">{cleanupConfirmation.estimatedLogicalBytes === null ? "Unavailable" : formatManagedEnvironmentSize(cleanupConfirmation.estimatedLogicalBytes)}</p></div>
-          <div><p className="font-medium">What happens next</p><p className="text-zinc-600">{cleanupConfirmation.removesLastManagedRuntime && <><strong>This is your last managed runtime.</strong> </>}{cleanupConfirmation.willReturnToSetup ? "Vision Export Studio will return to Setup. You must set up an environment before exporting again." : cleanupConfirmation.removesLastManagedRuntime && cleanupConfirmation.hasPythonOverride ? "Your Python override will stay active. You can continue exporting with it." : cleanupConfirmation.provider === "Ultralytics YOLO" ? "Your Python override will stay active. You can continue exporting with it." : cleanupConfirmation.isBulkCleanup ? "These environments will be set up again when needed." : "This environment will be set up again when needed."}</p></div>
+          <div><p className="font-medium">What happens next</p><p className="text-zinc-600">{cleanupConfirmation.removesLastManagedRuntime && <><strong>This is your last managed runtime.</strong> </>}{cleanupConfirmation.removesLastManagedRuntime && cleanupConfirmation.hasPythonOverride ? "Your Python override will stay active. You can continue exporting with it." : cleanupConfirmation.provider === "Ultralytics YOLO" && cleanupConfirmation.hasPythonOverride ? "Your Python override will stay active. You can continue exporting with it." : cleanupConfirmation.isBulkCleanup ? "These environments will be set up again when needed." : "This environment will be set up again when needed."}</p></div>
           <div><p className="font-medium">What stays safe</p><p className="text-zinc-600">Your models, exported files, and settings will not be deleted.</p></div>
           <details>
             <summary className="cursor-pointer font-medium">Affected export formats ({cleanupConfirmation.routeIds.length})</summary>
@@ -3596,10 +3691,13 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
           onChoosePython={async () => {
             const expected = pythonRequiredState.pending;
             const picked = await openPythonExecutablePicker();
-            if (picked) await choosePythonRequired(picked, expected);
+            if (picked) {
+              await choosePythonRequired(picked, expected);
+              await refreshPythonOverrideFromSettings();
+            }
           }}
-          onCheckAgain={() => void checkAgainPythonRequired()}
-          onClearOverride={() => void clearPythonOverrideRequired()}
+          onCheckAgain={() => void checkAgainPythonRequired().then(() => refreshPythonOverrideFromSettings())}
+          onClearOverride={() => void clearPythonOverrideRequired().then(() => refreshPythonOverrideFromSettings())}
         />
       )}
     </div>

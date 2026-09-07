@@ -3,7 +3,6 @@ import { ExportWorkspace } from "@/features/export/export-workspace";
 import { UpdateAnnouncement } from "@/features/updater/update-announcement";
 import { useUpdaterController } from "@/features/updater/use-updater-controller";
 import { LandingScreen } from "@/features/landing-screen";
-import { SetupScreen } from "@/features/setup/setup-screen";
 import { SetupActivityBar } from "@/features/setup/setup-activity-bar";
 import { SetupTaskProvider, useSetupTask } from "@/features/setup/setup-task-context";
 import {
@@ -31,7 +30,7 @@ const TitleBarFill = () => (
   />
 );
 
-type AppState = "landing" | "setup" | "export";
+type AppState = "landing" | "export";
 
 function SetupActivityBarHost() {
   const { task, openDetails, closeDetails, dismissTask } = useSetupTask();
@@ -48,9 +47,10 @@ function SetupActivityBarHost() {
 function App() {
   const updatesEnabled = !import.meta.env.DEV;
   const [appState, setAppState] = useState<AppState>("landing");
-  const [runtimeDir, setRuntimeDir] = useState<string>("");
+  // Legacy global setup flag stays readable for analytics and older settings
+  // files, but navigation no longer depends on it (ticket 12). Its contract
+  // removal belongs to ticket 15.
   const [setupComplete, setSetupComplete] = useState(false);
-  const [setupError, setSetupError] = useState<string | null>(null);
   const [settingsReady, setSettingsReady] = useState(false);
   const [hasCheckedForUpdateThisLaunch, setHasCheckedForUpdateThisLaunch] = useState(false);
   const appOpenedSentRef = useRef(false);
@@ -69,7 +69,6 @@ function App() {
   useEffect(() => {
     loadSettings()
       .then((settings) => {
-        setRuntimeDir(settings.runtime_dir);
         setSetupComplete(settings.setup_complete);
       })
       .catch(() => {
@@ -110,11 +109,9 @@ function App() {
   }, [appState, settingsReady, setupComplete]);
 
   const handleGetStarted = () => {
-    if (setupComplete) {
-      setAppState("export");
-    } else {
-      setAppState("setup");
-    }
+    // Ticket 12: every user reaches model upload without first preparing a
+    // global runtime. Provider and route setup happens on demand.
+    setAppState("export");
   };
 
   const showUpdateAnnouncement =
@@ -133,30 +130,15 @@ function App() {
         updater={updater}
       />
     );
-  } else if (appState === "setup") {
-    content = (
-      <SetupScreen
-        defaultRuntimeDir={runtimeDir}
-        updatesEnabled={updatesEnabled}
-        updater={updater}
-        initialErrorMessage={setupError}
-        onComplete={() => {
-          setSetupError(null);
-          setSetupComplete(true);
-          setAppState("export");
-        }}
-      />
-    );
   } else {
     content = (
       <ExportWorkspace
         updatesEnabled={updatesEnabled}
         updater={updater}
         onBack={() => setAppState("landing")}
-        onSetupCompleteChange={(complete, errorMessage) => {
+        onSetupCompleteChange={(complete) => {
+          // Legacy field stays readable but never navigates (ticket 12).
           setSetupComplete(complete);
-          setSetupError(errorMessage ?? null);
-          if (!complete) setAppState("setup");
         }}
       />
     );

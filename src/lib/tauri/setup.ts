@@ -20,10 +20,6 @@ export function ultralyticsSetupReadiness(): Promise<UltralyticsSetupReadiness> 
   return invoke<UltralyticsSetupReadiness>("ultralytics_setup_readiness");
 }
 
-export function createRuntimeVenv(runtimeDir: string): Promise<string> {
-  return invoke<string>("create_runtime_venv", { runtimeDir });
-}
-
 export function getManagedRuntimeRebuildEligibility(): Promise<ManagedRuntimeRebuildEligibility> {
   return invoke<ManagedRuntimeRebuildEligibility>("get_managed_runtime_rebuild_eligibility");
 }

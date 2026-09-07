@@ -63,7 +63,6 @@ pub fn run() {
             commands::rfdetr::rfdetr_checkpoint_identity,
             commands::setup::load_settings,
             commands::setup::get_managed_runtime_rebuild_eligibility,
-            commands::setup::create_runtime_venv,
             commands::setup::rebuild_managed_runtime,
             commands::setup::mark_setup_complete,
             commands::setup::save_python_override,
