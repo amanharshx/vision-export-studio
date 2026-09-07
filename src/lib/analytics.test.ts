@@ -108,30 +108,6 @@ describe("sanitizeAnalyticsProperties", () => {
     });
   });
 
-  it("drops ticket-16 forbidden model, checkpoint, and error fields", () => {
-    expect(
-      sanitizeAnalyticsProperties({
-        provider: "ultralytics",
-        environment_key: "ultralytics-managed",
-        route_id: "ultralytics.pt.onnx",
-        setup_result: "success",
-        duration_ms: 10,
-        model_filename: "model.pt",
-        model_path: "/tmp/model.pt",
-        checkpoint_metadata: "base",
-        raw_error: "pip exploded",
-        error: "boom",
-        package_log: "collecting",
-      }),
-    ).toEqual({
-      provider: "ultralytics",
-      environment_key: "ultralytics-managed",
-      route_id: "ultralytics.pt.onnx",
-      setup_result: "success",
-      duration_ms: 10,
-    });
-  });
-
   it("keeps the environment-setup allowlist and export failure taxonomy", () => {
     expect(
       sanitizeAnalyticsProperties({

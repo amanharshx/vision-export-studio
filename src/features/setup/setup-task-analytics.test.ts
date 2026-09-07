@@ -151,8 +151,52 @@ describe("setup task terminal analytics (ticket 16)", () => {
     const promise = owner.startRuntimeInstall(baseRequest);
     fire(handlers, "install:finished", { session_id: "session-1" });
     expect(await promise).toEqual({ ok: true });
-    expect(owner.getState()?.status).toBe("succeeded");
+    // Route UI derives readiness from this terminal task state, so it must
+    // reflect the real install result, not the analytics failure.
+    const state = owner.getState()!;
+    expect(state.status).toBe("succeeded");
+    expect(state.phase).toBe("ready");
+    expect(state.error).toBeNull();
     expect(events).toHaveLength(0);
+  });
+
+  test("analytics failure on a failed setup preserves the real error for route readiness", async () => {
+    const { deps, handlers } = createFakeDeps();
+    const { events, analytics } = createCapture({ throwOnCapture: true });
+    const owner = createSetupTaskOwner(deps, { analytics });
+    const promise = owner.startRuntimeInstall(baseRequest);
+    fire(handlers, "install:failed", { session_id: "session-1", error: "pip exploded" });
+    expect(await promise).toEqual({ ok: false, error: "pip exploded" });
+    const state = owner.getState()!;
+    expect(state.status).toBe("failed");
+    expect(state.phase).toBe("failed");
+    expect(state.error).toBe("pip exploded");
+    expect(events).toHaveLength(0);
+  });
+
+  test("a throwing analytics clock never aborts setup or blocks the terminal event", async () => {
+    const { deps, handlers } = createFakeDeps();
+    const events: CapturedEvent[] = [];
+    const owner = createSetupTaskOwner(deps, {
+      analytics: {
+        capture: (eventName, properties) => {
+          events.push({ eventName, properties });
+        },
+        now: () => {
+          throw new Error("clock down");
+        },
+        enabled: () => true,
+      },
+    });
+    const promise = owner.startRuntimeInstall(baseRequest);
+    fire(handlers, "install:finished", { session_id: "session-1" });
+    expect(await promise).toEqual({ ok: true });
+    const state = owner.getState()!;
+    expect(state.status).toBe("succeeded");
+    expect(state.phase).toBe("ready");
+    expect(state.error).toBeNull();
+    expect(events).toHaveLength(1);
+    expect(events[0].properties).toMatchObject({ setup_result: "success", duration_ms: 0 });
   });
 
   test("emitted properties never contain forbidden fields", async () => {

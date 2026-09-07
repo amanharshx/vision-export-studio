@@ -584,7 +584,17 @@ export function createSetupTaskOwner(
       // and no session/model identifier is ever included.
       const analyticsSink = options?.analytics;
       const analyticsNow = analyticsSink?.now ?? Date.now;
-      const analyticsStart = analyticsNow();
+      // The clock is part of analytics: a throwing or non-finite clock must
+      // never abort setup. A null reading falls back to a zero duration.
+      const readAnalyticsClock = (): number | null => {
+        try {
+          const value = analyticsNow();
+          return Number.isFinite(value) ? value : null;
+        } catch {
+          return null;
+        }
+      };
+      const analyticsStart = readAnalyticsClock();
       let analyticsEmitted = false;
       const emitTerminal = (result: EnvironmentSetupResult): void => {
         if (analyticsEmitted) return;
@@ -592,12 +602,15 @@ export function createSetupTaskOwner(
         try {
           if (analyticsSink?.enabled && !analyticsSink.enabled()) return;
           if (!analyticsSink?.capture) return;
+          const analyticsEnd = readAnalyticsClock();
           const properties = buildEnvironmentSetupProperties({
             provider: request.provider,
             environmentKey: request.environmentKey,
             routeId: request.routeId,
             result,
-            durationMs: analyticsNow() - analyticsStart,
+            durationMs: analyticsEnd !== null && analyticsStart !== null
+              ? analyticsEnd - analyticsStart
+              : 0,
           });
           if (!properties) return;
           analyticsSink.capture(
@@ -657,7 +670,13 @@ export function createSetupTaskOwner(
       teardownInstallListeners();
 
       const current = task;
-      if (!current || current.status !== "active") return outcome;
+      if (!current || current.status !== "active") {
+        // Defensive and currently unreachable (nothing else leaves "active"
+        // mid-install), but a started setup must still emit exactly one
+        // terminal event. Never report success without verification.
+        emitTerminal("failure");
+        return outcome;
+      }
       if (!outcome.ok) {
         failActiveTask(outcome.error);
         emitTerminal("failure");
@@ -686,7 +705,11 @@ export function createSetupTaskOwner(
           return { ok: false, error: message };
         }
         const afterVerify = task;
-        if (!afterVerify || afterVerify.status !== "active") return outcome;
+        if (!afterVerify || afterVerify.status !== "active") {
+          // Same defensive exactly-once guarantee as above.
+          emitTerminal("failure");
+          return outcome;
+        }
         if (!verified.yoloPath) {
           const message =
             "Ultralytics runtime install finished, but YOLO CLI was still not detected.";
@@ -705,10 +728,18 @@ export function createSetupTaskOwner(
           return { ok: false, error: message };
         }
         const afterFinalize = task;
-        if (!afterFinalize || afterFinalize.status !== "active") return outcome;
+        if (!afterFinalize || afterFinalize.status !== "active") {
+          // Same defensive exactly-once guarantee as above.
+          emitTerminal("failure");
+          return outcome;
+        }
       }
       const afterVerify = task;
-      if (!afterVerify || afterVerify.status !== "active") return outcome;
+      if (!afterVerify || afterVerify.status !== "active") {
+        // Same defensive exactly-once guarantee as above.
+        emitTerminal("failure");
+        return outcome;
+      }
       setTask({
         ...afterVerify,
         phase: "ready",
