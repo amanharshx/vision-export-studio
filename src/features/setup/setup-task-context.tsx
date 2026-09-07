@@ -18,6 +18,12 @@ import {
   type RuntimeInstallRequest,
   type SetupTask,
 } from "./setup-task";
+import {
+  captureAnalyticsEvent,
+  isAnalyticsEnabled,
+  type AnalyticsEventName,
+  type AnalyticsProperties,
+} from "@/lib/analytics";
 
 export interface SetupTaskContextValue {
   task: SetupTask | null;
@@ -61,7 +67,22 @@ const realGateDeps: PythonRequiredDeps = {
 export function SetupTaskProvider({ children }: { children: React.ReactNode }) {
   const ownerRef = useRef<ReturnType<typeof createSetupTaskOwner> | null>(null);
   if (!ownerRef.current) {
-    ownerRef.current = createSetupTaskOwner(realDeps);
+    // Ticket 16: terminal environment-setup analytics flow through the same
+    // owner that owns setup readiness, so the event is emitted outside the
+    // UI and cannot be bypassed by UI-only paths. Disabled analytics skips
+    // capture; a throw never changes the setup outcome (see setup-task).
+    ownerRef.current = createSetupTaskOwner(realDeps, {
+      analytics: {
+        capture: (eventName, properties) => {
+          captureAnalyticsEvent(
+            eventName as AnalyticsEventName,
+            properties as AnalyticsProperties,
+          );
+        },
+        now: () => Date.now(),
+        enabled: () => isAnalyticsEnabled(),
+      },
+    });
   }
   const owner = ownerRef.current;
   const task = useSyncExternalStore(owner.subscribe, owner.getState, owner.getState);

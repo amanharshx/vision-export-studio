@@ -7,9 +7,7 @@ export type AnalyticsEventName =
   | "app_opened"
   | "first_run"
   | "settings_load_failed"
-  | "setup_started"
-  | "setup_completed"
-  | "setup_failed"
+  | "environment_setup_completed"
   | "export_started"
   | "export_completed"
   | "export_failed"
@@ -23,7 +21,21 @@ type StorageLike = Pick<Storage, "getItem" | "setItem">;
 const DISTINCT_ID_KEY = "analytics.distinct_id";
 const FIRST_RUN_KEY = "analytics.first_run_sent";
 const FORBIDDEN_KEYS = new Set(["source_path", "output_dir", "python_path", "file_path"]);
-const FORBIDDEN_KEY_PATTERNS = ["path", "file", "log", "command", "content"];
+const FORBIDDEN_KEY_PATTERNS = [
+  "path",
+  "file",
+  "log",
+  "command",
+  "content",
+  // Ticket 16: terminal environment-setup analytics must never carry model,
+  // checkpoint, or raw-error details. These patterns harden the shared
+  // sanitizer so a mistaken caller cannot leak them; the setup builder
+  // additionally allowlists only its five safe fields.
+  "model",
+  "checkpoint",
+  "metadata",
+  "error",
+];
 const FALLBACK_TELEMETRY_CONTEXT = { os: "unknown", arch: "unknown" };
 
 let initialized = false;
