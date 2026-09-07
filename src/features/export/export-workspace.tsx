@@ -1196,11 +1196,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     cleanupAllowed: boolean;
     hasPythonOverride: boolean;
     isBulkCleanup: boolean;
-    // Concise on-demand recreation copy for the dialog's "What happens
-    // next" row, snapshotted with the confirmation: every removal is
-    // recreated by an explicit `Set up` action later, with no navigation
-    // and no last-runtime warning (ticket 13).
-    nextStep: string;
   } | null>(null);
 
   // Output directory
@@ -3034,9 +3029,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       singleKey,
       hasPythonOverride: Boolean(appliedPythonOverride.trim()),
     });
-    const recreationCopy = cleanupState.isBulkCleanup
-      ? "These environments will be set up again when needed."
-      : "This environment will be set up again when needed.";
     setCleanupConfirmation({
       keys: selectedKeys,
       provider: isUltralytics ? "Ultralytics YOLO" : "Roboflow RF-DETR",
@@ -3051,9 +3043,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       sizeError,
       cleanupAllowed,
       ...cleanupState,
-      nextStep: cleanupState.hasPythonOverride
-        ? `Your Python override will stay active. ${recreationCopy}`
-        : recreationCopy,
     });
   }, [blockOnSetupConflict, cleanupActionsDisabled, appliedPythonOverride, managedEnvironmentSizes, scanProviderEnvironments, stackEnvironments]);
 
@@ -3384,7 +3373,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         <div className="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm">
           <div><p className="font-medium">What will be removed</p><p className="text-zinc-600">{cleanupConfirmation.environments.join(", ")}</p></div>
           <div><p className="font-medium">Approx. size</p><p className="text-zinc-600">{cleanupConfirmation.estimatedLogicalBytes === null ? "Unavailable" : formatManagedEnvironmentSize(cleanupConfirmation.estimatedLogicalBytes)}</p></div>
-          <div><p className="font-medium">What happens next</p><p className="text-zinc-600">{cleanupConfirmation.nextStep}</p></div>
+          <div><p className="font-medium">What happens next</p><p className="text-zinc-600">{cleanupConfirmation.hasPythonOverride && <>Your Python override will stay active. </>}{cleanupConfirmation.isBulkCleanup ? "These environments will be set up again when needed." : "This environment will be set up again when needed."}</p></div>
           <div><p className="font-medium">What stays safe</p><p className="text-zinc-600">Your models, exported files, and settings will not be deleted.</p></div>
           <details>
             <summary className="cursor-pointer font-medium">Affected export formats ({cleanupConfirmation.routeIds.length})</summary>
