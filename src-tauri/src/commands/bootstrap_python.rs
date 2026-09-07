@@ -657,6 +657,33 @@ mod tests {
         }
     }
 
+    /// Ticket 14: the saved override is judged against the requested route.
+    /// A 3.11 override bootstraps Ultralytics routes but is an incompatible
+    /// override for the TFLite route, which needs exactly Python 3.12.
+    #[test]
+    fn override_compatibility_is_judged_per_requested_route() {
+        let runtime = temp_runtime("per-route");
+        let override_exe = runtime.join("custom-python").to_string_lossy().into_owned();
+        touch(Path::new(&override_exe));
+        let env = FakeEnv::new().version(&override_exe, 3, 11, 9);
+
+        let ultralytics_result =
+            env.resolve("ultralytics.pt.onnx", Some(&override_exe), &runtime, vec![]);
+        let (path, source, _) = available(&ultralytics_result);
+        assert_eq!(source, "explicit-override");
+        assert_eq!(path, override_exe);
+
+        let tflite_result = env.resolve("rfdetr.pth.tflite", Some(&override_exe), &runtime, vec![]);
+        let (_, _, reason, _, requirement) = invalid(&tflite_result);
+        assert!(
+            reason.contains("not supported"),
+            "unexpected reason: {reason}"
+        );
+        assert_eq!(requirement, "Python 3.12");
+
+        let _ = fs::remove_dir_all(&runtime);
+    }
+
     /// Any unusable override is terminal: no fallback to the next source.
     #[test]
     fn invalid_override_never_falls_back() {

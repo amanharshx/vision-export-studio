@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 
+/** Bootstrap source reported when the saved override creates an environment. */
+export const BOOTSTRAP_SOURCE_EXPLICIT_OVERRIDE = "explicit-override";
+
 export interface BootstrapIncompatible {
   source: string;
   python_path: string;

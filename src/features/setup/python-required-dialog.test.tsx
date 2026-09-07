@@ -131,6 +131,16 @@ describe("python-required dialog copy (ticket 06)", () => {
     expect(missingHtml).toContain("Python required");
   });
 
+  test("explains bootstrap-only behavior when an override is used to create an environment (ticket 14)", () => {
+    const missingHtml = renderBody(missingResult());
+    expect(missingHtml).toContain("only creates isolated export environments");
+    expect(missingHtml).toContain("never modified");
+
+    const invalidHtml = renderBody(invalidResult());
+    expect(invalidHtml).toContain("only creates isolated export environments");
+    expect(invalidHtml).toContain("never modified");
+  });
+
   test("never downloads Python automatically: only links to the official installer", () => {
     const html = renderBody(missingResult());
     expect(html).toContain(`href="${PYTHON_DOWNLOAD_URL}"`);

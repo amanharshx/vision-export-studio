@@ -466,7 +466,7 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     expect(screen.getByRole("button", { name: /Roboflow RF-DETR 1 installed/ })).not.toBeNull();
     // Output settings and the (empty) Python selection survive cleanup.
     expect((screen.getByDisplayValue("/tmp/exports-out") as HTMLInputElement).value).toBe("/tmp/exports-out");
-    expect((screen.getByPlaceholderText("Use managed Vision Export Studio runtime") as HTMLInputElement).value).toBe("");
+    expect((screen.getByPlaceholderText("Auto-detect compatible Python") as HTMLInputElement).value).toBe("");
     expectStableWorkspaceWithModel("best.pt");
     await flushPendingUpdates();
   });
@@ -532,7 +532,7 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     await clickEnabledButton("Remove all");
     await screen.findByText("Remove RF-DETR environments?");
     expect(
-      screen.getByText("Your Python override will stay active. These environments will be set up again when needed."),
+      screen.getByText("Your bootstrap Python stays saved. These environments will be set up again when needed."),
     ).not.toBeNull();
     expect(screen.queryByText(/last managed runtime/i)).toBeNull();
     await confirmCleanupDialog("Remove RF-DETR environments?", "Remove all");
@@ -578,7 +578,7 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     await flushPendingUpdates();
   });
 
-  test("post-cleanup redetect uses the saved override, preserving unsaved edits", async () => {
+  test("post-cleanup redetect uses the managed runtime, preserving unsaved edits", async () => {
     settingsFile = baseSettings({
       setup_complete: true,
       python_path_override: "/custom/python",
@@ -595,7 +595,7 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     // Draft an unsaved override edit; the applied value stays saved.
     await act(async () => {
       fireEvent.change(
-        screen.getByPlaceholderText("Use managed Vision Export Studio runtime"),
+        screen.getByPlaceholderText("Auto-detect compatible Python"),
         { target: { value: "/custom/python-draft" } },
       );
     });
@@ -603,18 +603,65 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     await clickEnabledButton("Reset runtime");
     await screen.findByText("Reset Ultralytics runtime?");
     expect(
-      screen.getByText("Your Python override will stay active. This environment will be set up again when needed."),
+      screen.getByText("Your bootstrap Python stays saved. This environment will be set up again when needed."),
     ).not.toBeNull();
     await confirmCleanupDialog("Reset Ultralytics runtime?", "Reset runtime");
 
     await waitFor(() => expect(calls.cleanup).toEqual([[["ultralytics-managed"]]]));
-    // Probes refresh with the saved override, never the unsaved draft.
-    await waitFor(() => expect(calls.detect.at(-1)).toEqual(["/custom/python"]));
+    // Ticket 14: probes refresh with the managed runtime, never the saved
+    // bootstrap override or the unsaved draft.
+    await waitFor(() => expect(calls.detect.at(-1)).toEqual([MANAGED_PYTHON]));
     // Draft text, output settings, and the model all survive cleanup.
-    expect((screen.getByPlaceholderText("Use managed Vision Export Studio runtime") as HTMLInputElement).value)
+    expect((screen.getByPlaceholderText("Auto-detect compatible Python") as HTMLInputElement).value)
       .toBe("/custom/python-draft");
     expect((screen.getByDisplayValue("/tmp/exports-out") as HTMLInputElement).value).toBe("/tmp/exports-out");
     expectStableWorkspaceWithModel("best.pt");
+    await flushPendingUpdates();
+  });
+
+  test("ticket 14: a saved override loads but detection probes the managed runtime", async () => {
+    settingsFile = baseSettings({
+      setup_complete: true,
+      python_path_override: "/custom/python",
+    });
+    detectedEnv = MANAGED_ENV;
+    stacks = [];
+    pickedModelPath = "/tmp/best.pt";
+    await launchAndEnterWorkspace();
+    await uploadModel();
+
+    // Mount detection never runs through the saved override.
+    await waitFor(() => expect(calls.detect.length).toBeGreaterThan(0));
+    expect(calls.detect[0]).toEqual([MANAGED_PYTHON]);
+
+    await clickElement(screen.getByTitle("Environment & settings"));
+    // Migration preserves the saved path in the bootstrap field.
+    expect(
+      (screen.getByPlaceholderText("Auto-detect compatible Python") as HTMLInputElement).value,
+    ).toBe("/custom/python");
+    // New behavior is explained where the override is configured.
+    expect(screen.getByText("Bootstrap Python")).not.toBeNull();
+    expect(
+      screen.getByText(/only to create isolated export environments/),
+    ).not.toBeNull();
+    expect(
+      screen.getByText(/never into your Python/),
+    ).not.toBeNull();
+    await flushPendingUpdates();
+  });
+
+  test("ticket 14: managed routes stay ready with an override and dep checks use managed", async () => {
+    bothProvidersWithModel({ python_path_override: "/custom/python" });
+    await launchAndEnterWorkspace();
+    await uploadModel();
+
+    // Ultralytics stays Ready via its managed interpreter, independent of
+    // the saved bootstrap override.
+    await clickElement(screen.getByTitle("Environment & settings"));
+    expect(screen.getByRole("button", { name: /Ultralytics YOLO Ready/ })).not.toBeNull();
+    await waitFor(() =>
+      expect(calls.depCheck.at(-1)).toEqual(["ultralytics.pt.onnx", MANAGED_PYTHON]),
+    );
     await flushPendingUpdates();
   });
 });

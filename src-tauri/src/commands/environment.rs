@@ -455,7 +455,7 @@ fn resolve_effective_python(
     }
 }
 
-fn normalize_path_for_comparison(path: &str, is_windows: bool) -> String {
+pub(crate) fn normalize_path_for_comparison(path: &str, is_windows: bool) -> String {
     let normalized = path.trim().trim_end_matches(['/', '\\']);
     if is_windows {
         normalized.replace('\\', "/").to_lowercase()
@@ -464,9 +464,16 @@ fn normalize_path_for_comparison(path: &str, is_windows: bool) -> String {
     }
 }
 
-fn paths_equal(left: &str, right: &str, is_windows: bool) -> bool {
+pub(crate) fn paths_equal(left: &str, right: &str, is_windows: bool) -> bool {
     normalize_path_for_comparison(left, is_windows)
         == normalize_path_for_comparison(right, is_windows)
+}
+
+/// True when the given interpreter is the app-owned managed environment.
+/// Shared by the ticket-14 backend gates (detection, checks, exports) so
+/// the managed comparison cannot drift between them.
+pub(crate) fn is_managed_python(python_path: &str, runtime_dir: &str) -> bool {
+    paths_equal(python_path, &venv_python(runtime_dir), cfg!(windows))
 }
 
 fn detect_yolo_path(
@@ -495,6 +502,15 @@ pub async fn detect_environment(
 ) -> Result<EnvironmentInfo, String> {
     let mut warnings: Vec<String> = Vec::new();
     let settings = load_settings(app_handle.clone())?;
+
+    // Ticket 14: detection never runs through the selected override (or any
+    // other interpreter) — only the managed environment. Blank callers fall
+    // through to the existing managed/system resolution below.
+    if let Some(path) = python_path.as_deref() {
+        if !path.trim().is_empty() && !is_managed_python(path, &settings.runtime_dir) {
+            return Err("Environment detection runs only against the managed environment. Set up the managed runtime before detecting.".to_string());
+        }
+    }
 
     // Step 1: resolve the Python executable.
     let resolved = resolve_effective_python(&app_handle, python_path)?;

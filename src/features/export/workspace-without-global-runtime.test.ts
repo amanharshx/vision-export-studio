@@ -2,7 +2,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   resolveRoutePython,
-  resolveUltralyticsRoutePython,
 } from "@/features/export/export-workspace";
 
 // Ticket 12: Open the workspace without a global runtime.
@@ -52,24 +51,5 @@ describe("rfdetr independence without global runtime (ticket 12)", () => {
   });
 });
 
-describe("ultralytics managed-only readiness (ticket 12)", () => {
-  const MANAGED = "/tmp/runtime/.venv/bin/python";
-  const SYSTEM = "/usr/bin/python3";
-
-  test("a missing managed environment is never ready through system python", () => {
-    // Pre-fix behavior granted readiness whenever auto-discovered system
-    // python happened to contain the packages, bypassing route setup.
-    expect(resolveUltralyticsRoutePython(SYSTEM, "", MANAGED, "linux")).toBeNull();
-    expect(resolveUltralyticsRoutePython(SYSTEM, "", null, "linux")).toBeNull();
-    expect(resolveUltralyticsRoutePython(null, "", MANAGED, "linux")).toBeNull();
-  });
-
-  test("the managed interpreter is ready without an override", () => {
-    expect(resolveUltralyticsRoutePython(MANAGED, "", MANAGED, "linux")).toBe(MANAGED);
-  });
-
-  test("an explicit override keeps current behavior until ticket 14", () => {
-    expect(resolveUltralyticsRoutePython(SYSTEM, "/custom/python", MANAGED, "linux")).toBe(SYSTEM);
-    expect(resolveUltralyticsRoutePython(MANAGED, "/custom/python", MANAGED, "linux")).toBe(MANAGED);
-  });
-});
+// Ultralytics readiness (managed-only, override-independent) moved with
+// ticket 14 to bootstrap-only-python-overrides.test.ts — its single home.

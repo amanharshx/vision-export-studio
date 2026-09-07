@@ -225,6 +225,8 @@ export interface UltralyticsSetupModalState {
   canSetup: boolean;
   showRecovery: boolean;
   error: string | null;
+  /** First-use explanation while a saved override creates the environment. */
+  bootstrapNotice?: string | null;
 }
 
 export interface RfDetrSetupModalState extends UltralyticsSetupModalState {
@@ -247,6 +249,7 @@ function SetupPanelBase({
   tones,
   error,
   showRecovery,
+  notice,
   onRemoveEnvironment,
   onRecreateEnvironment,
 }: {
@@ -255,6 +258,7 @@ function SetupPanelBase({
   tones: { container: string; text: string };
   error: string | null;
   showRecovery: boolean;
+  notice: string | null;
   onRemoveEnvironment?: () => void;
   onRecreateEnvironment?: () => void;
 }) {
@@ -262,6 +266,7 @@ function SetupPanelBase({
     <div className={`rounded-md border p-3 ${tones.container}`}>
       <p className={`text-sm font-medium ${tones.text}`}>{title}</p>
       <p className={`mt-1 text-xs ${tones.text}`}>{body}</p>
+      {notice && <p className={`mt-1 text-xs ${tones.text}`}>{notice}</p>}
       {error && <p className="mt-2 text-xs text-red-700">{error}</p>}
       {showRecovery && (
         <div className="mt-2 flex flex-wrap gap-2">
@@ -286,6 +291,7 @@ export function UltralyticsSetupPanel({
   routeTitle,
   error,
   showRecovery,
+  bootstrapNotice,
   onRemoveEnvironment,
   onRecreateEnvironment,
 }: {
@@ -293,6 +299,7 @@ export function UltralyticsSetupPanel({
   routeTitle: string;
   error: string | null;
   showRecovery: boolean;
+  bootstrapNotice?: string | null;
   onRemoveEnvironment?: () => void;
   onRecreateEnvironment?: () => void;
 }) {
@@ -304,6 +311,7 @@ export function UltralyticsSetupPanel({
       tones={ultralyticsSetupTones(status)}
       error={error}
       showRecovery={showRecovery}
+      notice={status === "setting-up" ? (bootstrapNotice ?? null) : null}
       onRemoveEnvironment={onRemoveEnvironment}
       onRecreateEnvironment={onRecreateEnvironment}
     />
@@ -316,6 +324,7 @@ export function RfDetrSetupPanel({
   stackKey,
   error,
   showRecovery,
+  bootstrapNotice,
   onRemoveEnvironment,
   onRecreateEnvironment,
 }: {
@@ -324,6 +333,7 @@ export function RfDetrSetupPanel({
   stackKey: string | null;
   error: string | null;
   showRecovery: boolean;
+  bootstrapNotice?: string | null;
   onRemoveEnvironment?: () => void;
   onRecreateEnvironment?: () => void;
 }) {
@@ -335,6 +345,7 @@ export function RfDetrSetupPanel({
       tones={ultralyticsSetupTones(status)}
       error={error}
       showRecovery={showRecovery}
+      notice={status === "setting-up" ? (bootstrapNotice ?? null) : null}
       onRemoveEnvironment={onRemoveEnvironment}
       onRecreateEnvironment={onRecreateEnvironment}
     />
@@ -628,6 +639,7 @@ export function ExportModal({
                 routeTitle={route.title}
                 error={ultralyticsSetup.error}
                 showRecovery={ultralyticsSetup.showRecovery}
+                bootstrapNotice={ultralyticsSetup.bootstrapNotice ?? null}
                 onRemoveEnvironment={onRemoveEnvironment}
                 onRecreateEnvironment={onRecreateEnvironment}
               />
@@ -639,6 +651,7 @@ export function ExportModal({
                 stackKey={rfdetrSetup.stackKey}
                 error={rfdetrSetup.error}
                 showRecovery={rfdetrSetup.showRecovery}
+                bootstrapNotice={rfdetrSetup.bootstrapNotice ?? null}
                 onRemoveEnvironment={onRemoveEnvironment}
                 onRecreateEnvironment={onRecreateEnvironment}
               />
