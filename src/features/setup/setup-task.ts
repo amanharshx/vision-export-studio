@@ -612,7 +612,6 @@ export function createSetupTaskOwner(
               ? analyticsEnd - analyticsStart
               : 0,
           });
-          if (!properties) return;
           analyticsSink.capture(
             ENVIRONMENT_SETUP_EVENT,
             properties as unknown as Record<string, unknown>,

@@ -45,16 +45,15 @@ export interface EnvironmentSetupAnalyticsProperties {
 
 export function buildEnvironmentSetupProperties(
   input: EnvironmentSetupAnalyticsInput,
-): EnvironmentSetupAnalyticsProperties | null {
-  if (input.result !== "success" && input.result !== "failure") {
-    return null;
-  }
+): EnvironmentSetupAnalyticsProperties {
   const duration_ms = Number.isFinite(input.durationMs)
     ? Math.max(0, Math.round(input.durationMs))
     : 0;
-  // Unknown values map to "unknown" rather than dropping the event: every
-  // started setup emits exactly one terminal event, and "unknown" preserves
-  // measurement without leaking the unexpected value.
+  // Unknown values map to safe fallbacks rather than dropping the event:
+  // every started setup emits exactly one terminal event, and the fallbacks
+  // preserve measurement without leaking the unexpected value. Results fall
+  // back to failure so no path can claim an unverified success.
+  const setup_result: EnvironmentSetupResult = input.result === "success" ? "success" : "failure";
   const provider = input.provider === "ultralytics" || input.provider === "rfdetr"
     ? input.provider
     : "unknown";
@@ -66,7 +65,7 @@ export function buildEnvironmentSetupProperties(
     provider,
     environment_key,
     ...(routeId ? { route_id: routeId } : {}),
-    setup_result: input.result,
+    setup_result,
     duration_ms,
   };
 }

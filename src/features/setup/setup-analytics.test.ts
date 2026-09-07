@@ -123,4 +123,17 @@ describe("environment setup analytics vocabulary (ticket 16)", () => {
     });
     expect(props?.provider).toBe("unknown");
   });
+
+  test("maps an invalid result to failure instead of emitting nothing", () => {
+    const props = buildEnvironmentSetupProperties({
+      provider: "ultralytics",
+      environmentKey: "ultralytics-managed",
+      routeId: null,
+      // @ts-expect-error testing runtime mapping of an invalid result.
+      result: "exploded",
+      durationMs: 5,
+    });
+    expect(props).not.toBeNull();
+    expect(props?.setup_result).toBe("failure");
+  });
 });
