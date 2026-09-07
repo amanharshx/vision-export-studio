@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { createSetupTaskOwner, type InstallStreamDeps } from "./setup-task";
 import { ENVIRONMENT_SETUP_EVENT } from "./setup-analytics";
+import { expectNoForbiddenSetupAnalyticsKeys } from "./setup-analytics-assertions";
 
 function createFakeDeps(options?: {
   sessionId?: string;
@@ -29,7 +30,7 @@ function createFakeDeps(options?: {
   return { deps, handlers };
 }
 
-function fire(
+function fireInstallEvent(
   handlers: Map<string, Array<(ev: { payload: unknown }) => void>>,
   event: string,
   payload: unknown,
@@ -69,7 +70,7 @@ describe("setup task terminal analytics (ticket 16)", () => {
     const { events, analytics } = createCapture();
     const owner = createSetupTaskOwner(deps, { analytics });
     const promise = owner.startRuntimeInstall(baseRequest);
-    fire(handlers, "install:finished", { session_id: "session-1" });
+    fireInstallEvent(handlers, "install:finished", { session_id: "session-1" });
     expect(await promise).toEqual({ ok: true });
     expect(events).toHaveLength(1);
     expect(events[0].eventName).toBe(ENVIRONMENT_SETUP_EVENT);
@@ -87,7 +88,7 @@ describe("setup task terminal analytics (ticket 16)", () => {
     const { events, analytics } = createCapture();
     const owner = createSetupTaskOwner(deps, { analytics });
     const promise = owner.startRuntimeInstall(baseRequest);
-    fire(handlers, "install:failed", { session_id: "session-1", error: "pip exploded" });
+    fireInstallEvent(handlers, "install:failed", { session_id: "session-1", error: "pip exploded" });
     const outcome = await promise;
     expect(outcome.ok).toBe(false);
     expect(events).toHaveLength(1);
@@ -103,9 +104,9 @@ describe("setup task terminal analytics (ticket 16)", () => {
     const { events, analytics } = createCapture();
     const owner = createSetupTaskOwner(deps, { analytics });
     const promise = owner.startRuntimeInstall(baseRequest);
-    fire(handlers, "install:finished", { session_id: "session-1" });
-    fire(handlers, "install:finished", { session_id: "session-1" });
-    fire(handlers, "install:failed", { session_id: "session-1", error: "late failure" });
+    fireInstallEvent(handlers, "install:finished", { session_id: "session-1" });
+    fireInstallEvent(handlers, "install:finished", { session_id: "session-1" });
+    fireInstallEvent(handlers, "install:failed", { session_id: "session-1", error: "late failure" });
     expect(await promise).toEqual({ ok: true });
     expect(events).toHaveLength(1);
     expect(events[0].properties).toMatchObject({ setup_result: "success" });
@@ -116,12 +117,12 @@ describe("setup task terminal analytics (ticket 16)", () => {
     const { events, analytics } = createCapture();
     const owner = createSetupTaskOwner(deps, { analytics });
     const first = owner.startRuntimeInstall(baseRequest);
-    fire(handlers, "install:finished", { session_id: "session-1" });
+    fireInstallEvent(handlers, "install:finished", { session_id: "session-1" });
     expect(await first).toEqual({ ok: true });
     expect(events).toHaveLength(1);
     owner.dismissTask();
     const second = owner.startRuntimeInstall(baseRequest);
-    fire(handlers, "install:finished", { session_id: "session-1" });
+    fireInstallEvent(handlers, "install:finished", { session_id: "session-1" });
     expect(await second).toEqual({ ok: true });
     expect(events).toHaveLength(2);
     for (const event of events) {
@@ -138,7 +139,7 @@ describe("setup task terminal analytics (ticket 16)", () => {
     const { events, analytics } = createCapture({ enabled: false });
     const owner = createSetupTaskOwner(deps, { analytics });
     const promise = owner.startRuntimeInstall(baseRequest);
-    fire(handlers, "install:finished", { session_id: "session-1" });
+    fireInstallEvent(handlers, "install:finished", { session_id: "session-1" });
     expect(await promise).toEqual({ ok: true });
     expect(events).toHaveLength(0);
     expect(owner.getState()?.status).toBe("succeeded");
@@ -149,7 +150,7 @@ describe("setup task terminal analytics (ticket 16)", () => {
     const { events, analytics } = createCapture({ throwOnCapture: true });
     const owner = createSetupTaskOwner(deps, { analytics });
     const promise = owner.startRuntimeInstall(baseRequest);
-    fire(handlers, "install:finished", { session_id: "session-1" });
+    fireInstallEvent(handlers, "install:finished", { session_id: "session-1" });
     expect(await promise).toEqual({ ok: true });
     // Route UI derives readiness from this terminal task state, so it must
     // reflect the real install result, not the analytics failure.
@@ -165,7 +166,7 @@ describe("setup task terminal analytics (ticket 16)", () => {
     const { events, analytics } = createCapture({ throwOnCapture: true });
     const owner = createSetupTaskOwner(deps, { analytics });
     const promise = owner.startRuntimeInstall(baseRequest);
-    fire(handlers, "install:failed", { session_id: "session-1", error: "pip exploded" });
+    fireInstallEvent(handlers, "install:failed", { session_id: "session-1", error: "pip exploded" });
     expect(await promise).toEqual({ ok: false, error: "pip exploded" });
     const state = owner.getState()!;
     expect(state.status).toBe("failed");
@@ -189,7 +190,7 @@ describe("setup task terminal analytics (ticket 16)", () => {
       },
     });
     const promise = owner.startRuntimeInstall(baseRequest);
-    fire(handlers, "install:finished", { session_id: "session-1" });
+    fireInstallEvent(handlers, "install:finished", { session_id: "session-1" });
     expect(await promise).toEqual({ ok: true });
     const state = owner.getState()!;
     expect(state.status).toBe("succeeded");
@@ -209,21 +210,13 @@ describe("setup task terminal analytics (ticket 16)", () => {
       routeId: "rfdetr.pth.onnx",
       environmentKey: "rfdetr-default",
     });
-    fire(handlers, "install:finished", { session_id: "session-1" });
+    fireInstallEvent(handlers, "install:finished", { session_id: "session-1" });
     expect(await promise).toEqual({ ok: true });
     expect(events).toHaveLength(1);
     const props = events[0].properties as Record<string, unknown>;
     const serialized = JSON.stringify(props);
     expect(serialized).not.toContain("/tmp/sensitive-bootstrap-python");
     expect(serialized).not.toContain("session-1");
-    for (const key of Object.keys(props)) {
-      const lower = key.toLowerCase();
-      expect(lower).not.toContain("path");
-      expect(lower).not.toContain("python");
-      expect(lower).not.toContain("model");
-      expect(lower).not.toContain("checkpoint");
-      expect(lower).not.toContain("error");
-      expect(lower).not.toContain("log");
-    }
+    expectNoForbiddenSetupAnalyticsKeys(props);
   });
 });

@@ -669,13 +669,20 @@ export function createSetupTaskOwner(
       }
       teardownInstallListeners();
 
+      // Single exit for the defensive superseded-task guards below (currently
+      // unreachable: nothing else leaves "active" mid-install). The attempt
+      // did not reach verified success, so the returned outcome and the
+      // terminal event agree on failure — neither claims unverified success.
+      const abortUnverified = (): InstallOutcome => {
+        emitTerminal("failure");
+        return outcome.ok
+          ? { ok: false, error: "Setup ended before verification finished." }
+          : outcome;
+      };
+
       const current = task;
       if (!current || current.status !== "active") {
-        // Defensive and currently unreachable (nothing else leaves "active"
-        // mid-install), but a started setup must still emit exactly one
-        // terminal event. Never report success without verification.
-        emitTerminal("failure");
-        return outcome;
+        return abortUnverified();
       }
       if (!outcome.ok) {
         failActiveTask(outcome.error);
@@ -706,9 +713,7 @@ export function createSetupTaskOwner(
         }
         const afterVerify = task;
         if (!afterVerify || afterVerify.status !== "active") {
-          // Same defensive exactly-once guarantee as above.
-          emitTerminal("failure");
-          return outcome;
+          return abortUnverified();
         }
         if (!verified.yoloPath) {
           const message =
@@ -729,16 +734,12 @@ export function createSetupTaskOwner(
         }
         const afterFinalize = task;
         if (!afterFinalize || afterFinalize.status !== "active") {
-          // Same defensive exactly-once guarantee as above.
-          emitTerminal("failure");
-          return outcome;
+          return abortUnverified();
         }
       }
       const afterVerify = task;
       if (!afterVerify || afterVerify.status !== "active") {
-        // Same defensive exactly-once guarantee as above.
-        emitTerminal("failure");
-        return outcome;
+        return abortUnverified();
       }
       setTask({
         ...afterVerify,

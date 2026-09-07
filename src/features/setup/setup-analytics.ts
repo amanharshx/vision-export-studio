@@ -36,7 +36,7 @@ export interface EnvironmentSetupAnalyticsInput {
 }
 
 export interface EnvironmentSetupAnalyticsProperties {
-  provider: ProviderId;
+  provider: ProviderId | "unknown";
   environment_key: string;
   route_id?: string;
   setup_result: EnvironmentSetupResult;
@@ -46,21 +46,24 @@ export interface EnvironmentSetupAnalyticsProperties {
 export function buildEnvironmentSetupProperties(
   input: EnvironmentSetupAnalyticsInput,
 ): EnvironmentSetupAnalyticsProperties | null {
-  if (input.provider !== "ultralytics" && input.provider !== "rfdetr") {
-    return null;
-  }
   if (input.result !== "success" && input.result !== "failure") {
     return null;
   }
   const duration_ms = Number.isFinite(input.durationMs)
     ? Math.max(0, Math.round(input.durationMs))
     : 0;
+  // Unknown values map to "unknown" rather than dropping the event: every
+  // started setup emits exactly one terminal event, and "unknown" preserves
+  // measurement without leaking the unexpected value.
+  const provider = input.provider === "ultralytics" || input.provider === "rfdetr"
+    ? input.provider
+    : "unknown";
   const environment_key = isKnownEnvironmentSetupKey(input.environmentKey)
     ? input.environmentKey
     : "unknown";
   const routeId = input.routeId?.trim() ? input.routeId : null;
   return {
-    provider: input.provider,
+    provider,
     environment_key,
     ...(routeId ? { route_id: routeId } : {}),
     setup_result: input.result,

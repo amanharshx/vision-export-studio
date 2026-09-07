@@ -5,6 +5,7 @@ import {
   ENVIRONMENT_SETUP_EVENT,
   isKnownEnvironmentSetupKey,
 } from "./setup-analytics";
+import { expectNoForbiddenSetupAnalyticsKeys } from "./setup-analytics-assertions";
 
 describe("environment setup analytics vocabulary (ticket 16)", () => {
   test("uses a single terminal event, not global start/completion duplicates", () => {
@@ -74,25 +75,7 @@ describe("environment setup analytics vocabulary (ticket 16)", () => {
     expect(keys).toEqual(
       ["duration_ms", "environment_key", "provider", "route_id", "setup_result"].sort(),
     );
-    for (const key of keys) {
-      const lower = key.toLowerCase();
-      expect(lower).not.toContain("path");
-      expect(lower).not.toContain("file");
-      expect(lower).not.toContain("log");
-      expect(lower).not.toContain("command");
-      expect(lower).not.toContain("content");
-      expect(lower).not.toContain("model");
-      expect(lower).not.toContain("checkpoint");
-      expect(lower).not.toContain("metadata");
-      expect(lower).not.toContain("error");
-      expect(lower).not.toContain("python");
-      expect(lower).not.toContain("output");
-      expect(lower).not.toContain("session");
-    }
-    expect(props).not.toContainKey("session_id");
-    expect(props).not.toContainKey("python_path");
-    expect(props).not.toContainKey("source_path");
-    expect(props).not.toContainKey("model_filename");
+    expectNoForbiddenSetupAnalyticsKeys(props);
   });
 
   test("clamps duration to a non-negative integer", () => {
@@ -129,15 +112,15 @@ describe("environment setup analytics vocabulary (ticket 16)", () => {
     expect(props?.environment_key).toBe("unknown");
   });
 
-  test("rejects unknown providers instead of emitting them", () => {
+  test("maps unknown providers to unknown instead of emitting nothing", () => {
     const props = buildEnvironmentSetupProperties({
-      // @ts-expect-error testing runtime rejection of an unknown provider.
+      // @ts-expect-error testing runtime mapping of an unknown provider.
       provider: "tensorflow",
       environmentKey: "ultralytics-managed",
       routeId: null,
       result: "success",
       durationMs: 5,
     });
-    expect(props).toBeNull();
+    expect(props?.provider).toBe("unknown");
   });
 });
