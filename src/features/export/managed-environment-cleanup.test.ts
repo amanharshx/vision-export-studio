@@ -15,8 +15,6 @@ import {
   applyManagedEnvironmentSizeMutation,
   managedEnvironmentCleanupErrorMessage,
   managedEnvironmentDeletionSucceeded,
-  getManagedEnvironmentCleanupSetupAction,
-  applyManagedEnvironmentCleanupSetup,
   managedEnvironmentKeysForProvider,
   getManagedEnvironmentCleanupState,
   EnvironmentGroups,
@@ -47,60 +45,37 @@ describe("managed environment cleanup helpers", () => {
     expect(managedEnvironmentKeysForProvider("rfdetr", "rfdetr-coreml")).toEqual(["rfdetr-coreml"]);
   });
 
-  test("derives last-runtime state for Ultralytics without override", () => {
-    // Ticket 12 retired the required Setup screen: cleanup stays in the
-    // workspace, so the state no longer references Setup navigation.
-    expect(getManagedEnvironmentCleanupState({ providerId: "ultralytics", ultralyticsExists: true, rfdetrCount: 0, hasPythonOverride: false }))
-      .toEqual({ removesLastManagedRuntime: true, hasPythonOverride: false, isBulkCleanup: false });
+  test("ultralytics cleanup stays in the workspace with no last-runtime state", () => {
+    // Ticket 13 replaced last-runtime and Setup-redirect copy with concise
+    // on-demand recreation copy: cleanup reports only bulk/override flags and
+    // never navigates, so remaining-provider presence is not an input.
+    expect(getManagedEnvironmentCleanupState({ providerId: "ultralytics", hasPythonOverride: false }))
+      .toEqual({ hasPythonOverride: false, isBulkCleanup: false });
   });
 
-  test("keeps override active when removing last managed runtime", () => {
-    expect(getManagedEnvironmentCleanupState({ providerId: "ultralytics", ultralyticsExists: true, rfdetrCount: 0, hasPythonOverride: true }))
-      .toEqual({ removesLastManagedRuntime: true, hasPythonOverride: true, isBulkCleanup: false });
+  test("ultralytics cleanup keeps the override flag without last-runtime state", () => {
+    expect(getManagedEnvironmentCleanupState({ providerId: "ultralytics", hasPythonOverride: true }))
+      .toEqual({ hasPythonOverride: true, isBulkCleanup: false });
   });
 
-  test("Ultralytics stays in the workspace even while RF-DETR remains", () => {
-    expect(getManagedEnvironmentCleanupState({ providerId: "ultralytics", ultralyticsExists: true, rfdetrCount: 2, hasPythonOverride: false }))
-      .toEqual({ removesLastManagedRuntime: false, hasPythonOverride: false, isBulkCleanup: false });
+  test("single RF-DETR cleanup is never bulk and carries no last-runtime state", () => {
+    expect(getManagedEnvironmentCleanupState({ providerId: "rfdetr", singleKey: "rfdetr-coreml", hasPythonOverride: false }))
+      .toEqual({ hasPythonOverride: false, isBulkCleanup: false });
   });
 
-  test("marks RF-DETR bulk cleanup and last-runtime state", () => {
-    expect(getManagedEnvironmentCleanupState({ providerId: "rfdetr", ultralyticsExists: false, rfdetrCount: 2, hasPythonOverride: false }))
-      .toEqual({ removesLastManagedRuntime: true, hasPythonOverride: false, isBulkCleanup: true });
+  test("marks RF-DETR bulk cleanup without last-runtime state", () => {
+    expect(getManagedEnvironmentCleanupState({ providerId: "rfdetr", hasPythonOverride: false }))
+      .toEqual({ hasPythonOverride: false, isBulkCleanup: true });
   });
 
-  test("does not treat unknown Ultralytics presence as absent", () => {
-    expect(getManagedEnvironmentCleanupState({ providerId: "rfdetr", ultralyticsExists: null, rfdetrCount: 1, hasPythonOverride: false }))
-      .toEqual({ removesLastManagedRuntime: false, hasPythonOverride: false, isBulkCleanup: true });
-  });
-
-  test("last RF-DETR runtime with override keeps override active", () => {
-    expect(getManagedEnvironmentCleanupState({ providerId: "rfdetr", singleKey: "rfdetr-coreml", ultralyticsExists: false, rfdetrCount: 1, hasPythonOverride: true }))
-      .toEqual({ removesLastManagedRuntime: true, hasPythonOverride: true, isBulkCleanup: false });
+  test("single RF-DETR cleanup with override keeps the override flag", () => {
+    expect(getManagedEnvironmentCleanupState({ providerId: "rfdetr", singleKey: "rfdetr-coreml", hasPythonOverride: true }))
+      .toEqual({ hasPythonOverride: true, isBulkCleanup: false });
   });
   test("formats bytes, MiB, and GiB at readable boundaries", () => {
     expect(formatManagedEnvironmentSize(512)).toBe("512 B");
     expect(formatManagedEnvironmentSize(1024 * 1024)).toBe("1 MiB");
     expect(formatManagedEnvironmentSize(1024 * 1024 * 1024 * 2.5)).toBe("2.5 GiB");
-  });
-
-  test("applies one setup callback for each trustworthy reset outcome", () => {
-    const states: Array<{ complete: boolean; error?: string }> = [];
-    const report: ManagedEnvironmentCleanupReport = {
-      results: [{ status: "succeeded", key: "ultralytics-managed", estimated_logical_bytes: 1 }],
-      setup_complete: false,
-      setup_error: "failed to write settings",
-    };
-    expect(applyManagedEnvironmentCleanupSetup(report, (complete, error) => states.push({ complete, error })))
-      .toEqual({ setupComplete: false, redetect: false });
-    expect(states).toEqual([{ complete: false, error: "failed to write settings" }]);
-    const exportReport = { ...report, setup_complete: true as const, setup_error: null };
-    expect(applyManagedEnvironmentCleanupSetup(exportReport, (complete, error) => states.push({ complete, error })))
-      .toEqual({ setupComplete: true, redetect: true });
-    expect(states).toEqual([
-      { complete: false, error: "failed to write settings" },
-      { complete: true, error: undefined },
-    ]);
   });
 
   test("unknown-size cleanup remains confirmable and explains the failed calculation", () => {
@@ -232,19 +207,6 @@ describe("managed environment cleanup helpers", () => {
     });
   });
 
-  test("fails closed for a successful reset with an untrustworthy setup report", () => {
-    expect(getManagedEnvironmentCleanupSetupAction({
-      results: [{ status: "succeeded", key: "ultralytics-managed", estimated_logical_bytes: 1 }],
-      setup_complete: null,
-      setup_error: "failed to write settings",
-    })).toEqual({ setupComplete: false, redetect: false });
-    expect(getManagedEnvironmentCleanupSetupAction({
-      results: [{ status: "succeeded", key: "ultralytics-managed", estimated_logical_bytes: 1 }],
-      setup_complete: null,
-      setup_error: null,
-    })).toEqual({ setupComplete: false, redetect: false });
-  });
-
   test("allows the post-cleanup environment refresh while cleanup state is still busy", () => {
     expect(shouldSkipEnvironmentRedetection(true)).toBe(true);
     expect(shouldSkipEnvironmentRedetection(true, true)).toBe(false);
@@ -295,8 +257,6 @@ describe("managed environment cleanup helpers", () => {
         { status: "succeeded", key: "rfdetr-default", estimated_logical_bytes: 100 },
         { status: "failed", key: "rfdetr-coreml", error: "permission denied" },
       ],
-      setup_complete: null,
-      setup_error: null,
     };
     // Only the failing environment is named; the succeeded one is not.
     const message = managedEnvironmentCleanupErrorMessage(report);
@@ -319,36 +279,23 @@ describe("managed environment cleanup helpers", () => {
     expect(mutated.sizes).toEqual({});
   });
 
-  test("cleanup surfaces a separate setup-state persistence failure honestly", () => {
-    // Deletion succeeded but setup state could not be saved: report both the
-    // success (via deletion detection) and the persistence failure.
+  test("cleanup with multiple deletion failures names every failure", () => {
+    // Ticket 13: cleanup never rewrites setup state, so the error message
+    // reports only per-environment deletion failures.
     const report: ManagedEnvironmentCleanupReport = {
-      results: [{ status: "succeeded", key: "ultralytics-managed", estimated_logical_bytes: 2048 }],
-      setup_complete: null,
-      setup_error: "failed to write settings",
-    };
-    expect(managedEnvironmentDeletionSucceeded(report, "ultralytics-managed")).toBe(true);
-    expect(managedEnvironmentCleanupErrorMessage(report)).toBe(
-      "Environment removed, but saving setup state failed: failed to write settings",
-    );
-  });
-
-  test("cleanup with both deletion and setup-state failures combines messages", () => {
-    const report: ManagedEnvironmentCleanupReport = {
-      results: [{ status: "failed", key: "ultralytics-managed", error: "still exists" }],
-      setup_complete: null,
-      setup_error: "disk full",
+      results: [
+        { status: "failed", key: "rfdetr-default", error: "permission denied" },
+        { status: "failed", key: "rfdetr-coreml", error: "still exists" },
+      ],
     };
     expect(managedEnvironmentCleanupErrorMessage(report)).toBe(
-      "Some environments could not be removed: ultralytics-managed: still exists Environment removed, but saving setup state failed: disk full",
+      "Some environments could not be removed: rfdetr-default: permission denied; rfdetr-coreml: still exists",
     );
   });
 
   test("fully successful cleanup produces no error message", () => {
     const report: ManagedEnvironmentCleanupReport = {
       results: [{ status: "succeeded", key: "ultralytics-managed", estimated_logical_bytes: 10 }],
-      setup_complete: true,
-      setup_error: null,
     };
     expect(managedEnvironmentCleanupErrorMessage(report)).toBeNull();
   });

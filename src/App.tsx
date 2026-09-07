@@ -136,10 +136,6 @@ function App() {
         updatesEnabled={updatesEnabled}
         updater={updater}
         onBack={() => setAppState("landing")}
-        onSetupCompleteChange={(complete) => {
-          // Legacy field stays readable but never navigates (ticket 12).
-          setSetupComplete(complete);
-        }}
       />
     );
   }
