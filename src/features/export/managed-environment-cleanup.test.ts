@@ -299,35 +299,26 @@ describe("managed environment cleanup helpers", () => {
     expect(mutated.sizes).toEqual({});
   });
 
-  test("cleanup surfaces a separate setup-state persistence failure honestly", () => {
-    // Deletion succeeded but setup state could not be saved: report both the
-    // success (via deletion detection) and the persistence failure.
+  test("cleanup with multiple deletion failures names every failure", () => {
+    // Ticket 13: cleanup never rewrites setup state, so the error message
+    // reports only per-environment deletion failures.
     const report: ManagedEnvironmentCleanupReport = {
-      results: [{ status: "succeeded", key: "ultralytics-managed", estimated_logical_bytes: 2048 }],
+      results: [
+        { status: "failed", key: "rfdetr-default", error: "permission denied" },
+        { status: "failed", key: "rfdetr-coreml", error: "still exists" },
+      ],
       setup_complete: null,
-      setup_error: "failed to write settings",
-    };
-    expect(managedEnvironmentDeletionSucceeded(report, "ultralytics-managed")).toBe(true);
-    expect(managedEnvironmentCleanupErrorMessage(report)).toBe(
-      "Environment removed, but saving setup state failed: failed to write settings",
-    );
-  });
-
-  test("cleanup with both deletion and setup-state failures combines messages", () => {
-    const report: ManagedEnvironmentCleanupReport = {
-      results: [{ status: "failed", key: "ultralytics-managed", error: "still exists" }],
-      setup_complete: null,
-      setup_error: "disk full",
+      setup_error: null,
     };
     expect(managedEnvironmentCleanupErrorMessage(report)).toBe(
-      "Some environments could not be removed: ultralytics-managed: still exists Environment removed, but saving setup state failed: disk full",
+      "Some environments could not be removed: rfdetr-default: permission denied; rfdetr-coreml: still exists",
     );
   });
 
   test("fully successful cleanup produces no error message", () => {
     const report: ManagedEnvironmentCleanupReport = {
       results: [{ status: "succeeded", key: "ultralytics-managed", estimated_logical_bytes: 10 }],
-      setup_complete: true,
+      setup_complete: null,
       setup_error: null,
     };
     expect(managedEnvironmentCleanupErrorMessage(report)).toBeNull();

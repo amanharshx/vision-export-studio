@@ -440,20 +440,18 @@ export function resolveUltralyticsRoutePython(
 }
 
 /**
- * Builds the user-facing cleanup error, combining per-environment deletion
- * failures with a separate setup-state persistence failure. Returns null when
- * the cleanup fully succeeded.
+ * Builds the user-facing cleanup error from per-environment deletion
+ * failures. Returns null when the cleanup fully succeeded. Ticket 13:
+ * cleanup never rewrites setup state, so no setup persistence is reported.
  */
 export function managedEnvironmentCleanupErrorMessage(
   report: ManagedEnvironmentCleanupReport,
 ): string | null {
-  const parts: string[] = [];
   const failures = report.results
     .filter((result): result is Extract<ManagedEnvironmentCleanupResult, { status: "failed" }> => result.status === "failed")
     .map((result) => `${result.key}: ${result.error}`);
-  if (failures.length > 0) parts.push(`Some environments could not be removed: ${failures.join("; ")}`);
-  if (report.setup_error) parts.push(`Environment removed, but saving setup state failed: ${report.setup_error}`);
-  return parts.length > 0 ? parts.join(" ") : null;
+  if (failures.length > 0) return `Some environments could not be removed: ${failures.join("; ")}`;
+  return null;
 }
 
 /** True when the report confirms the given key's environment was deleted. */
@@ -1147,9 +1145,6 @@ interface ExportWorkspaceProps {
   onBack: () => void;
   updatesEnabled: boolean;
   updater: UpdaterController;
-  // Legacy global-setup callback kept readable until ticket 15 removes the
-  // contract. Cleanup no longer invokes it (ticket 13).
-  onSetupCompleteChange?: (complete: boolean, errorMessage?: string) => void;
 }
 
 export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorkspaceProps) {
@@ -3050,7 +3045,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     const cleanupState = getManagedEnvironmentCleanupState({
       providerId,
       singleKey,
-      hasPythonOverride: Boolean(pythonOverride.trim()),
+      hasPythonOverride: Boolean(appliedPythonOverride.trim()),
     });
     setCleanupConfirmation({
       keys: selectedKeys,
@@ -3067,7 +3062,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       cleanupAllowed,
       ...cleanupState,
     });
-  }, [blockOnSetupConflict, cleanupActionsDisabled, managedEnvironmentSizes, pythonOverride, scanProviderEnvironments, stackEnvironments]);
+  }, [blockOnSetupConflict, cleanupActionsDisabled, appliedPythonOverride, managedEnvironmentSizes, scanProviderEnvironments, stackEnvironments]);
 
   const confirmCleanup = useCallback(async () => {
     if (!cleanupConfirmation || !cleanupConfirmation.cleanupAllowed || cleanupBusy) return;
@@ -3098,10 +3093,11 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         // runtime on every successful deletion (not only when an override
         // survives) so affected Ultralytics routes report their honest
         // missing state while healthy RF-DETR routes keep resolving through
-        // their own stacks. Cleanup never touches legacy setup state.
+        // their own stacks. Detection uses the saved override, never
+        // unsaved input text, and cleanup never touches legacy setup state.
         if (managedEnvironmentDeletionSucceeded(report, "ultralytics-managed")) {
           setEnvInfo(null);
-          await handleRedetect(pythonOverride.trim() || undefined, true);
+          await handleRedetect(appliedPythonOverride.trim() || undefined, true);
         }
       } else {
         await refreshStackEnvironmentCards();
@@ -3127,7 +3123,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     } finally {
       setCleanupBusy(false);
     }
-  }, [blockOnSetupConflict, cleanupBusy, cleanupConfirmation, dismissTask, handleRedetect, invalidateManagedEnvironmentSizesForMutation, providerEnvPython, pythonOverride, refreshRouteDependencies, refreshStackEnvironmentCards, selectedProviderId, selectedRouteId, setupTask, stackEnvironments]);
+  }, [appliedPythonOverride, blockOnSetupConflict, cleanupBusy, cleanupConfirmation, dismissTask, handleRedetect, invalidateManagedEnvironmentSizesForMutation, providerEnvPython, refreshRouteDependencies, refreshStackEnvironmentCards, selectedProviderId, selectedRouteId, setupTask, stackEnvironments]);
 
   // Save output dir override
   const handleSaveOutputDir = useCallback(async () => {

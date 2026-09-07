@@ -70,6 +70,7 @@ const calls = {
   markComplete: [] as unknown[],
   resolveBootstrap: [] as unknown[],
   detect: [] as unknown[],
+  depCheck: [] as unknown[],
 };
 
 function resetScenario() {
@@ -210,7 +211,11 @@ mock.module("@/lib/tauri/stack-environments", () => ({
 
 mock.module("@/lib/tauri/managed-environments", () => ({
   scanManagedEnvironments: (keys: string[]): Promise<ManagedEnvironmentScanResult[]> =>
-    Promise.resolve((scanRows ?? []).filter((row) => keys.includes(row.key))),
+    Promise.resolve(
+      (scanRows ?? []).filter(
+        (row) => keys.includes(row.key) || (keys.includes("rfdetr-all") && row.key.startsWith("rfdetr-")),
+      ),
+    ),
   cleanupManagedEnvironments: (keys: string[]) => {
     calls.cleanup.push([keys]);
     // Faithful deletion simulation: the fake backend removes exactly the
@@ -229,7 +234,10 @@ mock.module("@/lib/tauri/managed-environments", () => ({
 }));
 
 mock.module("@/lib/tauri/deps", () => ({
-  checkDependencies: () => Promise.resolve({ results: readyResults() }),
+  checkDependencies: (...args: unknown[]) => {
+    calls.depCheck.push(args);
+    return Promise.resolve({ results: readyResults() });
+  },
   installDependencies: (...args: unknown[]) => {
     calls.install.push(args);
     return Promise.resolve("session-1");
@@ -376,17 +384,17 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
   };
 
   function bothProvidersWithModel() {
-    settingsFile = baseSettings({ setup_complete: true });
+    settingsFile = baseSettings({ setup_complete: true, output_dir_override: "/tmp/exports-out" });
     detectedEnv = MANAGED_ENV;
     stacks = [DEFAULT_STACK];
     pickedModelPath = "/tmp/best.pt";
     scanRows = [ultraRow, rfdetrRow];
   }
 
-  async function uploadModel() {
+  async function uploadModel(expectedBase = "best.pt") {
     fireEvent.click(screen.getByRole("button", { name: "Browse file" }));
     await screen.findByText("Export Target");
-    expect(screen.getByText("best.pt")).not.toBeNull();
+    expect(screen.getByText(expectedBase)).not.toBeNull();
   }
 
   async function clickEnabledButton(name: string | RegExp) {
@@ -436,6 +444,9 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     // healthy RF-DETR stack is untouched.
     await screen.findByRole("button", { name: /Ultralytics YOLO Missing/ });
     expect(screen.getByRole("button", { name: /Roboflow RF-DETR 1 installed/ })).not.toBeNull();
+    // Output settings and the (empty) Python selection survive cleanup.
+    expect((screen.getByDisplayValue("/tmp/exports-out") as HTMLInputElement).value).toBe("/tmp/exports-out");
+    expect((screen.getByPlaceholderText("Use managed Vision Export Studio runtime") as HTMLInputElement).value).toBe("");
     // Legacy global setup state is never rewritten by cleanup.
     expect(calls.markComplete).toEqual([]);
     expect(calls.saveOverride).toEqual([]);
@@ -461,6 +472,10 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     expect(
       screen.getByRole("button", { name: /Ultralytics YOLO Ready/ }),
     ).not.toBeNull();
+    // The untouched provider was re-probed with its own interpreter.
+    await waitFor(() =>
+      expect(calls.depCheck.at(-1)).toEqual(["ultralytics.pt.onnx", MANAGED_PYTHON]),
+    );
     expect(calls.markComplete).toEqual([]);
     expect(calls.saveOverride).toEqual([]);
   });
@@ -490,5 +505,108 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     expect(screen.getByText("best.pt")).not.toBeNull();
     expect(screen.queryByText("Set up Vision Export Studio")).toBeNull();
     expect(calls.markComplete).toEqual([]);
+  });
+
+  test("removing all RF-DETR stacks re-probes the untouched Ultralytics routes", async () => {
+    bothProvidersWithModel();
+    await launchAndEnterWorkspace();
+    await uploadModel();
+
+    fireEvent.click(screen.getByTitle("Environment & settings"));
+    await clickEnabledButton(/Roboflow RF-DETR 1 installed/);
+    await clickEnabledButton("Remove all");
+    await screen.findByText("Remove RF-DETR environments?");
+    expect(
+      screen.getByText("These environments will be set up again when needed."),
+    ).not.toBeNull();
+    expect(screen.queryByText(/last managed runtime/i)).toBeNull();
+    await confirmCleanupDialog("Remove RF-DETR environments?", "Remove all");
+
+    await waitFor(() => expect(calls.cleanup).toEqual([[["rfdetr-all"]]]));
+    expect(screen.getByText("Export Target")).not.toBeNull();
+    expect(screen.getByText("best.pt")).not.toBeNull();
+    expect(screen.queryByText("Set up Vision Export Studio")).toBeNull();
+    await screen.findByText("No RF-DETR environments installed");
+    expect(
+      screen.getByRole("button", { name: /Ultralytics YOLO Ready/ }),
+    ).not.toBeNull();
+    // The untouched provider was re-probed with its own interpreter.
+    await waitFor(() =>
+      expect(calls.depCheck.at(-1)).toEqual(["ultralytics.pt.onnx", MANAGED_PYTHON]),
+    );
+    expect(calls.markComplete).toEqual([]);
+    expect(calls.saveOverride).toEqual([]);
+  });
+
+  test("removing the selected RF-DETR stack re-probes the affected route", async () => {
+    settingsFile = baseSettings({ setup_complete: false });
+    detectError = "no python";
+    stacks = [DEFAULT_STACK];
+    pickedModelPath = "/tmp/model.pth";
+    scanRows = [rfdetrRow];
+    await launchAndEnterWorkspace();
+    fireEvent.click(screen.getByRole("button", { name: "Roboflow RF-DETR" }));
+    await uploadModel("model.pth");
+
+    fireEvent.click(screen.getByTitle("Environment & settings"));
+    await clickEnabledButton(/Roboflow RF-DETR 1 installed/);
+    await clickEnabledButton(/RF-DETR 1\.9\.0/);
+    await clickEnabledButton("Remove");
+    await confirmCleanupDialog("Remove RF-DETR environment?", "Remove");
+
+    await waitFor(() => expect(calls.cleanup).toEqual([[["rfdetr-default"]]]));
+    expect(screen.getByText("Export Target")).not.toBeNull();
+    expect(screen.getByText("model.pth")).not.toBeNull();
+    expect(screen.queryByText("Set up Vision Export Studio")).toBeNull();
+    await screen.findByText("No RF-DETR environments installed");
+    // The affected route is re-probed through its own stack mapping (the
+    // route id doubles as the interpreter argument), even with no
+    // Ultralytics environment present.
+    await waitFor(() =>
+      expect(calls.depCheck.at(-1)).toEqual(["rfdetr.pth.onnx", "rfdetr.pth.onnx"]),
+    );
+    expect(calls.markComplete).toEqual([]);
+    expect(calls.saveOverride).toEqual([]);
+  });
+
+  test("post-cleanup redetect uses the saved override, preserving unsaved edits", async () => {
+    settingsFile = baseSettings({
+      setup_complete: true,
+      python_path_override: "/custom/python",
+      output_dir_override: "/tmp/exports-out",
+    });
+    detectedEnv = MANAGED_ENV;
+    stacks = [];
+    pickedModelPath = "/tmp/best.pt";
+    scanRows = [ultraRow];
+    await launchAndEnterWorkspace();
+    await uploadModel();
+
+    fireEvent.click(screen.getByTitle("Environment & settings"));
+    // Draft an unsaved override edit; the applied value stays saved.
+    fireEvent.change(
+      screen.getByPlaceholderText("Use managed Vision Export Studio runtime"),
+      { target: { value: "/custom/python-draft" } },
+    );
+    await clickEnabledButton(/Ultralytics YOLO Ready/);
+    await clickEnabledButton("Reset runtime");
+    await screen.findByText("Reset Ultralytics runtime?");
+    expect(
+      screen.getByText("Your Python override will stay active. This environment will be set up again when needed."),
+    ).not.toBeNull();
+    await confirmCleanupDialog("Reset Ultralytics runtime?", "Reset runtime");
+
+    await waitFor(() => expect(calls.cleanup).toEqual([[["ultralytics-managed"]]]));
+    // Probes refresh with the saved override, never the unsaved draft.
+    await waitFor(() => expect(calls.detect.at(-1)).toEqual(["/custom/python"]));
+    // Draft text, output settings, and the model all survive cleanup.
+    expect((screen.getByPlaceholderText("Use managed Vision Export Studio runtime") as HTMLInputElement).value)
+      .toBe("/custom/python-draft");
+    expect((screen.getByDisplayValue("/tmp/exports-out") as HTMLInputElement).value).toBe("/tmp/exports-out");
+    expect(screen.getByText("Export Target")).not.toBeNull();
+    expect(screen.getByText("best.pt")).not.toBeNull();
+    expect(screen.queryByText("Set up Vision Export Studio")).toBeNull();
+    expect(calls.markComplete).toEqual([]);
+    expect(calls.saveOverride).toEqual([]);
   });
 });

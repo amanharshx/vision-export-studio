@@ -946,24 +946,33 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
-    fn ultralytics_cleanup_preserves_rfdetr_stacks_and_settings_bytes() {
-        // Ticket 13: removing the Ultralytics environment updates only the
-        // affected provider. Healthy RF-DETR stacks, user settings (including
-        // the legacy setup flag, whose contract removal belongs to ticket 15),
-        // and exported artifacts all survive byte-identical.
-        let root = temp_root("cleanup-ultra-keeps-rfdetr");
+    /// Ticket 13 cross-provider fixture: Ultralytics runtime plus one RF-DETR
+    /// stack, user settings with the legacy setup flag set, and an export
+    /// artifact. Every automated deletion test uses a temporary runtime
+    /// root; real environments are never touched.
+    fn seed_cross_provider_cleanup_root(label: &str) -> (PathBuf, Vec<u8>) {
+        let root = temp_root(label);
         fs::create_dir_all(root.join(".venv")).unwrap();
         fs::write(root.join(".venv/keep"), b"ultra").unwrap();
         let stack = root.join("envs/rfdetr-default/.venv");
         fs::create_dir_all(&stack).unwrap();
         fs::write(stack.join("payload"), b"stack").unwrap();
         let settings_path = root.join("vision-export-studio-settings.json");
-        let settings_bytes =
-            br#"{"runtime_dir":"/tmp/runtime","setup_complete":true,"python_path_override":null,"output_dir_override":null}"#;
-        fs::write(&settings_path, settings_bytes).unwrap();
+        let settings_bytes = br#"{"runtime_dir":"/tmp/runtime","setup_complete":true,"python_path_override":null,"output_dir_override":null}"#.to_vec();
+        fs::write(&settings_path, &settings_bytes).unwrap();
         fs::create_dir_all(root.join("exports")).unwrap();
         fs::write(root.join("exports/result.onnx"), b"output").unwrap();
+        (root, settings_bytes)
+    }
+
+    #[test]
+    fn ultralytics_cleanup_preserves_rfdetr_stacks_and_settings_bytes() {
+        // Ticket 13: removing the Ultralytics environment updates only the
+        // affected provider. Healthy RF-DETR stacks, user settings (including
+        // the legacy setup flag, whose contract removal belongs to ticket 15),
+        // and exported artifacts all survive byte-identical.
+        let (root, settings_bytes) = seed_cross_provider_cleanup_root("cleanup-ultra-keeps-rfdetr");
+        let stack = root.join("envs/rfdetr-default/.venv");
 
         let report = cleanup_sync(
             &ManagedEnvironments::default(),
@@ -981,7 +990,10 @@ mod tests {
         assert!(report.setup_error.is_none());
         assert!(!root.join(".venv").exists());
         assert_eq!(fs::read(stack.join("payload")).unwrap(), b"stack");
-        assert_eq!(fs::read(&settings_path).unwrap(), settings_bytes);
+        assert_eq!(
+            fs::read(root.join("vision-export-studio-settings.json")).unwrap(),
+            settings_bytes
+        );
         assert_eq!(
             fs::read(root.join("exports/result.onnx")).unwrap(),
             b"output"
@@ -993,18 +1005,8 @@ mod tests {
     fn rfdetr_cleanup_preserves_ultralytics_runtime_and_settings_bytes() {
         // Ticket 13: removing RF-DETR stacks leaves the healthy Ultralytics
         // runtime, user settings, and exported artifacts untouched.
-        let root = temp_root("cleanup-rfdetr-keeps-ultra");
-        fs::create_dir_all(root.join(".venv")).unwrap();
-        fs::write(root.join(".venv/keep"), b"ultra").unwrap();
+        let (root, settings_bytes) = seed_cross_provider_cleanup_root("cleanup-rfdetr-keeps-ultra");
         let stack = root.join("envs/rfdetr-default/.venv");
-        fs::create_dir_all(&stack).unwrap();
-        fs::write(stack.join("payload"), b"stack").unwrap();
-        let settings_path = root.join("vision-export-studio-settings.json");
-        let settings_bytes =
-            br#"{"runtime_dir":"/tmp/runtime","setup_complete":true,"python_path_override":null,"output_dir_override":null}"#;
-        fs::write(&settings_path, settings_bytes).unwrap();
-        fs::create_dir_all(root.join("exports")).unwrap();
-        fs::write(root.join("exports/result.onnx"), b"output").unwrap();
 
         let report = cleanup_sync(
             &ManagedEnvironments::default(),
@@ -1022,7 +1024,55 @@ mod tests {
         assert!(report.setup_error.is_none());
         assert!(!stack.exists());
         assert_eq!(fs::read(root.join(".venv/keep")).unwrap(), b"ultra");
-        assert_eq!(fs::read(&settings_path).unwrap(), settings_bytes);
+        assert_eq!(
+            fs::read(root.join("vision-export-studio-settings.json")).unwrap(),
+            settings_bytes
+        );
+        assert_eq!(
+            fs::read(root.join("exports/result.onnx")).unwrap(),
+            b"output"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rfdetr_all_cleanup_preserves_ultralytics_runtime_and_settings_bytes() {
+        // Ticket 13: bulk removal fans out to every existing known stack and
+        // still touches only the affected provider.
+        let (root, settings_bytes) =
+            seed_cross_provider_cleanup_root("cleanup-rfdetr-all-keeps-ultra");
+        let second = root.join("envs/rfdetr-coreml/.venv");
+        fs::create_dir_all(&second).unwrap();
+        fs::write(second.join("payload"), b"coreml").unwrap();
+
+        let report = cleanup_sync(
+            &ManagedEnvironments::default(),
+            &root,
+            &[RFDETR_ALL_KEY.to_string()],
+        )
+        .unwrap();
+
+        let mut removed: Vec<&str> = report
+            .results
+            .iter()
+            .map(|result| match result {
+                ManagedEnvironmentCleanupResult::Succeeded { key, .. } => key.as_str(),
+                ManagedEnvironmentCleanupResult::Failed { key, error } => {
+                    panic!("bulk cleanup failed for {key}: {error}")
+                }
+            })
+            .collect();
+        removed.sort_unstable();
+        assert_eq!(removed, ["rfdetr-coreml", "rfdetr-default"]);
+        assert!(report.setup_complete.is_none());
+        assert!(report.setup_error.is_none());
+        assert!(!root.join("envs/rfdetr-default/.venv").exists());
+        assert!(!second.exists());
+        assert_eq!(fs::read(root.join(".venv/keep")).unwrap(), b"ultra");
+        assert_eq!(
+            fs::read(root.join("vision-export-studio-settings.json")).unwrap(),
+            settings_bytes
+        );
         assert_eq!(
             fs::read(root.join("exports/result.onnx")).unwrap(),
             b"output"
