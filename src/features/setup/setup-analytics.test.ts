@@ -46,6 +46,29 @@ describe("environment setup analytics vocabulary (ticket 16)", () => {
     });
   });
 
+  test("omits path-like route IDs instead of leaking them", () => {
+    const props = buildEnvironmentSetupProperties({
+      provider: "ultralytics",
+      environmentKey: "ultralytics-managed",
+      routeId: "/Users/example/private/model.pt",
+      result: "success",
+      durationMs: 5,
+    }) as unknown as Record<string, unknown>;
+    expect(props).not.toContainKey("route_id");
+    expect(JSON.stringify(props)).not.toContain("/Users/example/private/model.pt");
+  });
+
+  test("omits unknown route IDs that are not in the route registry", () => {
+    const props = buildEnvironmentSetupProperties({
+      provider: "ultralytics",
+      environmentKey: "ultralytics-managed",
+      routeId: "ultralytics.pt.not-a-route",
+      result: "success",
+      durationMs: 5,
+    });
+    expect(props).not.toContainKey("route_id");
+  });
+
   test("omits route_id when the setup has no route", () => {
     const props = buildEnvironmentSetupProperties({
       provider: "ultralytics",

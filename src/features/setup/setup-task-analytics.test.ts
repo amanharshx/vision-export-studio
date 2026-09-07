@@ -40,14 +40,13 @@ function fireInstallEvent(
 
 type CapturedEvent = { eventName: string; properties: Record<string, unknown> };
 
-function createCapture(options?: { enabled?: boolean; throwOnCapture?: boolean }) {
+function createCapture(options?: { throwOnCapture?: boolean }) {
   const events: CapturedEvent[] = [];
   const analytics = {
     now: (() => {
       let t = 1000;
       return () => (t += 250);
     })(),
-    enabled: () => options?.enabled ?? true,
     capture: (eventName: string, properties: Record<string, unknown>) => {
       if (options?.throwOnCapture) throw new Error("posthog down");
       events.push({ eventName, properties });
@@ -134,10 +133,17 @@ describe("setup task terminal analytics (ticket 16)", () => {
     }
   });
 
-  test("disabled analytics emits nothing but setup still succeeds", async () => {
+  test("disabled analytics runs setup normally without recording anything", async () => {
     const { deps, handlers } = createFakeDeps();
-    const { events, analytics } = createCapture({ enabled: false });
-    const owner = createSetupTaskOwner(deps, { analytics });
+    const events: CapturedEvent[] = [];
+    const owner = createSetupTaskOwner(deps, {
+      analytics: {
+        // Models production disabled analytics: captureAnalyticsEvent no-ops,
+        // so the owner observes a capture that records nothing.
+        capture: () => {},
+        now: () => 1000,
+      },
+    });
     const promise = owner.startRuntimeInstall(baseRequest);
     fireInstallEvent(handlers, "install:finished", { session_id: "session-1" });
     expect(await promise).toEqual({ ok: true });
@@ -186,7 +192,6 @@ describe("setup task terminal analytics (ticket 16)", () => {
         now: () => {
           throw new Error("clock down");
         },
-        enabled: () => true,
       },
     });
     const promise = owner.startRuntimeInstall(baseRequest);

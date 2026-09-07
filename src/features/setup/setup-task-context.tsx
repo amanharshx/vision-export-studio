@@ -20,7 +20,6 @@ import {
 } from "./setup-task";
 import {
   captureAnalyticsEvent,
-  isAnalyticsEnabled,
   type AnalyticsEventName,
   type AnalyticsProperties,
 } from "@/lib/analytics";
@@ -69,8 +68,9 @@ export function SetupTaskProvider({ children }: { children: React.ReactNode }) {
   if (!ownerRef.current) {
     // Ticket 16: terminal environment-setup analytics flow through the same
     // owner that owns setup readiness, so the event is emitted outside the
-    // UI and cannot be bypassed by UI-only paths. Disabled analytics skips
-    // capture; a throw never changes the setup outcome (see setup-task).
+    // UI and cannot be bypassed by UI-only paths. Enablement stays owned by
+    // captureAnalyticsEvent, which no-ops when disabled; a throw never
+    // changes the setup outcome (see setup-task).
     ownerRef.current = createSetupTaskOwner(realDeps, {
       analytics: {
         capture: (eventName, properties) => {
@@ -80,7 +80,6 @@ export function SetupTaskProvider({ children }: { children: React.ReactNode }) {
           );
         },
         now: () => Date.now(),
-        enabled: () => isAnalyticsEnabled(),
       },
     });
   }

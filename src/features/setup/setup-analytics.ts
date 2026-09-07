@@ -10,6 +10,7 @@
 // attempts together.
 
 import type { ProviderId } from "@/lib/types";
+import { findRoute } from "@/lib/providers";
 
 export const ENVIRONMENT_SETUP_EVENT = "environment_setup_completed" as const;
 
@@ -60,7 +61,10 @@ export function buildEnvironmentSetupProperties(
   const environment_key = isKnownEnvironmentSetupKey(input.environmentKey)
     ? input.environmentKey
     : "unknown";
-  const routeId = input.routeId?.trim() ? input.routeId : null;
+  // route_id must name a route in the registry: anything else (including a
+  // path passed by mistake) is omitted rather than emitted verbatim.
+  const trimmedRouteId = input.routeId?.trim();
+  const routeId = trimmedRouteId && findRoute(trimmedRouteId) ? trimmedRouteId : null;
   return {
     provider,
     environment_key,

@@ -294,13 +294,12 @@ export interface InstallStreamDeps extends InstallEventDeps {
 // Ticket 16: injectable terminal-analytics sink. The owner emits exactly one
 // `environment_setup_completed` event per started setup with only the
 // allowlisted fields (provider, known environment key, route ID, terminal
-// result, duration). `enabled` models disabled analytics (no event, no
-// error); any throw from `enabled` or `capture` is swallowed so analytics
-// failure never changes setup or route readiness.
+// result, duration). Enablement stays owned by `captureAnalyticsEvent`
+// (a no-op capture models disabled analytics); any throw from `capture` is
+// swallowed so analytics failure never changes setup or route readiness.
 export interface SetupTaskAnalyticsSink {
   capture?: (eventName: string, properties: Record<string, unknown>) => void;
   now?: () => number;
-  enabled?: () => boolean;
 }
 
 export interface SetupTaskOwnerOptions {
@@ -600,7 +599,6 @@ export function createSetupTaskOwner(
         if (analyticsEmitted) return;
         analyticsEmitted = true;
         try {
-          if (analyticsSink?.enabled && !analyticsSink.enabled()) return;
           if (!analyticsSink?.capture) return;
           const analyticsEnd = readAnalyticsClock();
           const properties = buildEnvironmentSetupProperties({
@@ -668,20 +666,13 @@ export function createSetupTaskOwner(
       }
       teardownInstallListeners();
 
-      // Single exit for the defensive superseded-task guards below (currently
-      // unreachable: nothing else leaves "active" mid-install). The attempt
-      // did not reach verified success, so the returned outcome and the
-      // terminal event agree on failure — neither claims unverified success.
-      const abortUnverified = (): InstallOutcome => {
-        emitTerminal("failure");
-        return outcome.ok
-          ? { ok: false, error: "Setup ended before verification finished." }
-          : outcome;
-      };
-
       const current = task;
       if (!current || current.status !== "active") {
-        return abortUnverified();
+        // Defensive and currently unreachable (nothing else leaves "active"
+        // mid-install): the install outcome is returned unchanged, and the
+        // terminal event reports the same result so return and event agree.
+        emitTerminal(outcome.ok ? "success" : "failure");
+        return outcome;
       }
       if (!outcome.ok) {
         failActiveTask(outcome.error);
@@ -712,7 +703,8 @@ export function createSetupTaskOwner(
         }
         const afterVerify = task;
         if (!afterVerify || afterVerify.status !== "active") {
-          return abortUnverified();
+          emitTerminal(outcome.ok ? "success" : "failure");
+          return outcome;
         }
         if (!verified.yoloPath) {
           const message =
@@ -733,12 +725,14 @@ export function createSetupTaskOwner(
         }
         const afterFinalize = task;
         if (!afterFinalize || afterFinalize.status !== "active") {
-          return abortUnverified();
+          emitTerminal(outcome.ok ? "success" : "failure");
+          return outcome;
         }
       }
       const afterVerify = task;
       if (!afterVerify || afterVerify.status !== "active") {
-        return abortUnverified();
+        emitTerminal(outcome.ok ? "success" : "failure");
+        return outcome;
       }
       setTask({
         ...afterVerify,
