@@ -476,16 +476,6 @@ pub(crate) fn is_managed_python(python_path: &str, runtime_dir: &str) -> bool {
     paths_equal(python_path, &venv_python(runtime_dir), cfg!(windows))
 }
 
-/// Ticket 14: an explicit detection probe must target the managed
-/// environment. A saved bootstrap override (or any other interpreter) never
-/// runs detection directly: the workspace always probes managed, and RF-DETR
-/// setup verification is a dependency check rather than a detection probe,
-/// so no production caller passes anything else. This gate holds for direct
-/// invokes.
-pub(crate) fn explicit_detect_path_allowed(explicit: &str, runtime_dir: &str) -> bool {
-    is_managed_python(explicit, runtime_dir)
-}
-
 fn detect_yolo_path(
     python_path: &str,
     managed_runtime_dir: Option<&str>,
@@ -514,11 +504,11 @@ pub async fn detect_environment(
     let settings = load_settings(app_handle.clone())?;
 
     // Ticket 14: detection never runs through the selected override (or any
-    // other user-owned interpreter). Blank callers fall through to the
-    // existing managed/system resolution below.
+    // other interpreter) — only the managed environment. Blank callers fall
+    // through to the existing managed/system resolution below.
     if let Some(path) = python_path.as_deref() {
-        if !path.trim().is_empty() && !explicit_detect_path_allowed(path, &settings.runtime_dir) {
-            return Err("Environment detection runs only against app-owned environments. Set up the managed runtime before detecting.".to_string());
+        if !path.trim().is_empty() && !is_managed_python(path, &settings.runtime_dir) {
+            return Err("Environment detection runs only against the managed environment. Set up the managed runtime before detecting.".to_string());
         }
     }
 
@@ -977,30 +967,5 @@ mod tests {
             Some("/managed/.venv/bin/python".to_string()),
         );
         assert_eq!(selected, Some("/managed/.venv/bin/python".to_string()));
-    }
-
-    #[test]
-    fn explicit_detect_probe_allows_only_managed_python() {
-        // Ticket 14: detection never runs through a saved bootstrap override
-        // or any other interpreter — only the managed environment. No
-        // production detection caller passes anything else: the workspace
-        // always probes managed, and RF-DETR setup verification is a
-        // dependency check, not a detection probe (setup-task.ts skips
-        // verifyEnvironment for RF-DETR stacks).
-        let runtime = "/tmp/runtime";
-        assert!(explicit_detect_path_allowed(
-            "/tmp/runtime/.venv/bin/python",
-            runtime
-        ));
-        assert!(!explicit_detect_path_allowed("/custom/python", runtime));
-        assert!(!explicit_detect_path_allowed("/usr/bin/python3", runtime));
-        assert!(!explicit_detect_path_allowed(
-            "/tmp/other-runtime/.venv/bin/python",
-            runtime
-        ));
-        assert!(!explicit_detect_path_allowed(
-            "/tmp/runtime/envs/rfdetr-default/.venv/bin/python",
-            runtime
-        ));
     }
 }

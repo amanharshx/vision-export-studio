@@ -1259,17 +1259,28 @@ fn resolve_saved_override_bootstrap(
     }
 }
 
+/// Fail fast when the chosen bootstrap cannot satisfy the route, before any
+/// environment mutation. Without this, an incompatible bootstrap would
+/// create a broken environment that only post-install validation rejects.
+fn validate_bootstrap_for_route(route_id: &str, bootstrap_python: &str) -> Result<(), String> {
+    let version = probe_python_version(bootstrap_python)?;
+    if let Some(result) = route_python_version_result(route_id, &version) {
+        return Err(result.reason);
+    }
+    Ok(())
+}
+
 /// Resolve the install target for the shared Ultralytics environment: install
 /// only into the app-owned managed interpreter — never into the bootstrap or
 /// saved-override interpreter (a chosen Python is bootstrap-only). A healthy
 /// managed environment installs in place even when the saved override is
 /// invalid or missing. When work is actually needed, the bootstrap comes
-/// authoritatively from the saved override (highest priority, with its
-/// invalid-override error surfacing); only without a saved override is the
-/// passed interpreter used as the bootstrap candidate. Used by both the
-/// provider-wide setup (route_id = None) and route-scoped Ultralytics
-/// installs so the two entry points cannot disagree on where packages land.
+/// authoritatively from the saved override (highest priority, judged against
+/// this route, with its invalid-override error surfacing); only without a
+/// saved override is the passed interpreter used, after proving it satisfies
+/// the route.
 fn resolve_ultralytics_install_python(
+    route_id: &str,
     passed_python: &str,
     runtime_root: &str,
     settings_override: Option<&str>,
@@ -1279,10 +1290,10 @@ fn resolve_ultralytics_install_python(
     }
     let override_opt = settings_override.filter(|path| !path.trim().is_empty());
     if let Some(override_path) = override_opt {
-        let bootstrap =
-            resolve_saved_override_bootstrap(DEFAULT_SETUP_ROUTE_ID, override_path, runtime_root)?;
+        let bootstrap = resolve_saved_override_bootstrap(route_id, override_path, runtime_root)?;
         return ensure_ultralytics_managed_environment(&bootstrap, runtime_root);
     }
+    validate_bootstrap_for_route(route_id, passed_python)?;
     ensure_ultralytics_managed_environment(passed_python, runtime_root)
 }
 
@@ -1452,8 +1463,8 @@ fn resolve_stack_venv_for_setup(
 /// override is invalid or missing. When work is actually needed, the
 /// bootstrap comes authoritatively from the saved override (highest
 /// priority, with its invalid-override error surfacing); only without a
-/// saved override is the passed interpreter used as the bootstrap
-/// candidate.
+/// saved override is the passed interpreter used, after proving it
+/// satisfies the route.
 fn resolve_rfdetr_install_python(
     passed_python: &str,
     runtime_root: &str,
@@ -1469,6 +1480,7 @@ fn resolve_rfdetr_install_python(
         let bootstrap = resolve_saved_override_bootstrap(route_id, override_path, runtime_root)?;
         return ensure_rfdetr_stack_environment(&bootstrap, runtime_root, route_id);
     }
+    validate_bootstrap_for_route(route_id, passed_python)?;
     ensure_rfdetr_stack_environment(passed_python, runtime_root, route_id)
 }
 
@@ -1757,10 +1769,18 @@ fn resolve_install_python(
         Some(route) if stack_for_route(route).is_some() => {
             resolve_rfdetr_install_python(passed_python, runtime_root, route, settings_override)?
         }
-        Some(route) if is_ultralytics_route(route) => {
-            resolve_ultralytics_install_python(passed_python, runtime_root, settings_override)?
-        }
-        None => resolve_ultralytics_install_python(passed_python, runtime_root, settings_override)?,
+        Some(route) if is_ultralytics_route(route) => resolve_ultralytics_install_python(
+            route,
+            passed_python,
+            runtime_root,
+            settings_override,
+        )?,
+        None => resolve_ultralytics_install_python(
+            DEFAULT_SETUP_ROUTE_ID,
+            passed_python,
+            runtime_root,
+            settings_override,
+        )?,
         Some(_) => passed_python.to_string(),
     };
     validate_selected_install_python(route_id, &selected)?;
@@ -2893,6 +2913,18 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn write_old_venv_bootstrap(path: &std::path::Path, template: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        // Fake route-incompatible bootstrap: reports 3.9.6 but otherwise
+        // creates venvs like a real interpreter, so tests can prove
+        // rejection happens before any filesystem work.
+        let script = venv_bootstrap_script("echo \"3.9.6\"", template);
+        std::fs::write(path, script).expect("write old bootstrap");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .expect("make old bootstrap executable");
+    }
+
+    #[cfg(unix)]
     #[test]
     fn managed_python_usability_requires_running_interpreter_and_pip() {
         // The shared readiness predicate behind both the readiness query
@@ -3312,6 +3344,7 @@ mod tests {
         write_python_stub(managed_path, true);
 
         let reused = resolve_ultralytics_install_python(
+            "ultralytics.pt.onnx",
             "/missing/override-python",
             &runtime,
             Some("/missing/override-python"),
@@ -3336,8 +3369,13 @@ mod tests {
         write_venv_bootstrap(&bootstrap, Some(&template));
         let bootstrap_str = bootstrap.to_string_lossy().into_owned();
 
-        let managed = resolve_ultralytics_install_python(&bootstrap_str, &runtime, None)
-            .expect("route setup creates the shared environment");
+        let managed = resolve_ultralytics_install_python(
+            "ultralytics.pt.onnx",
+            &bootstrap_str,
+            &runtime,
+            None,
+        )
+        .expect("route setup creates the shared environment");
         assert_eq!(managed, venv_python(&runtime));
         assert_ne!(managed, bootstrap_str);
         assert!(Path::new(&managed).exists(), "managed python created");
@@ -3366,6 +3404,7 @@ mod tests {
         let bootstrap_str = bootstrap.to_string_lossy().into_owned();
 
         let managed = resolve_ultralytics_install_python(
+            "ultralytics.pt.onnx",
             &venv_python(&runtime),
             &runtime,
             Some(&bootstrap_str),
@@ -3406,8 +3445,13 @@ mod tests {
         let saved_str = saved.to_string_lossy().into_owned();
         let other_str = other.to_string_lossy().into_owned();
 
-        let managed = resolve_ultralytics_install_python(&other_str, &runtime, Some(&saved_str))
-            .expect("install resolves the saved override first");
+        let managed = resolve_ultralytics_install_python(
+            "ultralytics.pt.onnx",
+            &other_str,
+            &runtime,
+            Some(&saved_str),
+        )
+        .expect("install resolves the saved override first");
         assert_eq!(managed, venv_python(&runtime));
         assert_eq!(
             std::fs::read(Path::new(&managed)).expect("read managed"),
@@ -3434,6 +3478,7 @@ mod tests {
         let other_str = other.to_string_lossy().into_owned();
 
         let error = resolve_ultralytics_install_python(
+            "ultralytics.pt.onnx",
             &other_str,
             &runtime,
             Some("/missing/override-python"),
@@ -3470,6 +3515,7 @@ mod tests {
         write_python_stub(managed_path, false);
 
         let repaired = resolve_ultralytics_install_python(
+            "ultralytics.pt.onnx",
             bootstrap.to_str().expect("bootstrap path"),
             &runtime,
             None,
@@ -4463,11 +4509,7 @@ possible problem with your settings or a recent ultralytics package update.\n8.4
         let template = root.join("old-template");
         write_old_python_stub(&template);
         let old = root.join("old-python");
-        let script = venv_bootstrap_script("echo \"3.9.6\"", &template);
-        std::fs::write(&old, script).expect("write old bootstrap");
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o755))
-            .expect("make old bootstrap executable");
+        write_old_venv_bootstrap(&old, &template);
         let old_str = old.to_string_lossy().into_owned();
 
         let error = resolve_install_python(Some("rfdetr.pth.tflite"), &old_str, &runtime, None)
@@ -4475,6 +4517,64 @@ possible problem with your settings or a recent ultralytics package update.\n8.4
         assert!(
             error.contains("TFLite requires Python 3.12"),
             "unexpected error: {error}"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ultralytics_install_rejects_incompatible_bootstrap_before_creating() {
+        // A route-incompatible bootstrap must fail before any filesystem
+        // work — not create a broken environment that post-validation
+        // rejects.
+        let root =
+            std::env::temp_dir().join(format!("ultralytics-bootstrap-floor-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let template = root.join("old-template");
+        write_old_python_stub(&template);
+        let old = root.join("old-python");
+        write_old_venv_bootstrap(&old, &template);
+        let old_str = old.to_string_lossy().into_owned();
+
+        let error =
+            resolve_ultralytics_install_python("ultralytics.pt.litert", &old_str, &runtime, None)
+                .expect_err("incompatible bootstrap fails before creating");
+        assert!(
+            error.contains("LiteRT requires Python 3.10 or newer"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !Path::new(&venv_python(&runtime)).exists(),
+            "no environment created from the rejected bootstrap"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rfdetr_install_rejects_incompatible_bootstrap_before_creating() {
+        // A route-incompatible bootstrap must fail before any filesystem
+        // work — not create a broken stack that post-validation rejects.
+        let root = std::env::temp_dir().join(format!("rfdetr-bootstrap-floor-{}", Uuid::new_v4()));
+        let runtime = root.join("runtime").to_string_lossy().into_owned();
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let template = root.join("old-template");
+        write_old_python_stub(&template);
+        let old = root.join("old-python");
+        write_old_venv_bootstrap(&old, &template);
+        let old_str = old.to_string_lossy().into_owned();
+
+        let error = resolve_rfdetr_install_python(&old_str, &runtime, "rfdetr.pth.tflite", None)
+            .expect_err("incompatible bootstrap fails before creating");
+        assert!(
+            error.contains("TFLite requires Python 3.12"),
+            "unexpected error: {error}"
+        );
+        let stack = stack_python(&runtime, "rfdetr.pth.tflite").expect("stack python");
+        assert!(
+            !Path::new(&stack).exists(),
+            "no stack created from the rejected bootstrap"
         );
         std::fs::remove_dir_all(root).expect("remove temp root");
     }
