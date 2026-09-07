@@ -365,28 +365,40 @@ export function managedEnvironmentKeysForProvider(
 export function getManagedEnvironmentCleanupState({
   providerId,
   singleKey,
-  ultralyticsExists,
-  rfdetrCount,
   hasPythonOverride,
 }: {
   providerId: ProviderId;
   singleKey?: ManagedEnvironmentKey;
-  ultralyticsExists: boolean | null;
-  rfdetrCount: number;
   hasPythonOverride: boolean;
 }) {
   const isBulkCleanup = providerId === "rfdetr" && !singleKey;
-  const removesLastManagedRuntime = providerId === "ultralytics"
-    ? rfdetrCount === 0
-    : ultralyticsExists === false && (isBulkCleanup ? rfdetrCount > 0 : rfdetrCount === 1);
-  // Ticket 12 retired the required full-page Setup screen, so cleanup stays
-  // in the workspace and reports no Setup navigation. Concise on-demand
-  // recreation copy belongs to ticket 13.
+  // Ticket 13 replaced last-runtime and Setup-redirect copy with concise
+  // on-demand recreation copy: cleanup stays in the workspace and reports no
+  // navigation, so remaining-provider presence is not an input.
   return {
-    removesLastManagedRuntime,
     hasPythonOverride,
     isBulkCleanup,
   };
+}
+
+/**
+ * Concise on-demand recreation copy for the cleanup dialog's "What happens
+ * next" row (ticket 13). Every removal is recreated by an explicit `Set up`
+ * action later; nothing navigates and no last-runtime warning is shown.
+ */
+export function getManagedEnvironmentCleanupNextStepCopy({
+  hasPythonOverride,
+  isBulkCleanup,
+}: {
+  hasPythonOverride: boolean;
+  isBulkCleanup: boolean;
+}): string {
+  const recreation = isBulkCleanup
+    ? "These environments will be set up again when needed."
+    : "This environment will be set up again when needed.";
+  return hasPythonOverride
+    ? `Your Python override will stay active. ${recreation}`
+    : recreation;
 }
 
 /**
@@ -452,24 +464,6 @@ export function managedEnvironmentDeletionSucceeded(
   return report.results.some((result) => result.status === "succeeded" && result.key === key);
 }
 
-export function getManagedEnvironmentCleanupSetupAction(
-  report: ManagedEnvironmentCleanupReport,
-): { setupComplete: boolean; redetect: boolean } | null {
-  if (!managedEnvironmentDeletionSucceeded(report, "ultralytics-managed")) return null;
-  if (report.setup_complete === false) return { setupComplete: false, redetect: false };
-  if (report.setup_complete === true) return { setupComplete: true, redetect: true };
-  if (report.setup_complete === null) return { setupComplete: false, redetect: false };
-  return null;
-}
-
-export function applyManagedEnvironmentCleanupSetup(
-  report: ManagedEnvironmentCleanupReport,
-  onSetupCompleteChange?: (complete: boolean, errorMessage?: string) => void,
-): { setupComplete: boolean; redetect: boolean } | null {
-  const action = getManagedEnvironmentCleanupSetupAction(report);
-  if (action) onSetupCompleteChange?.(action.setupComplete, report.setup_error ?? undefined);
-  return action;
-}
 export function shouldSkipEnvironmentRedetection(
   cleanupBusy: boolean,
   allowDuringCleanup = false,
@@ -1153,10 +1147,12 @@ interface ExportWorkspaceProps {
   onBack: () => void;
   updatesEnabled: boolean;
   updater: UpdaterController;
+  // Legacy global-setup callback kept readable until ticket 15 removes the
+  // contract. Cleanup no longer invokes it (ticket 13).
   onSetupCompleteChange?: (complete: boolean, errorMessage?: string) => void;
 }
 
-export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupCompleteChange }: ExportWorkspaceProps) {
+export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorkspaceProps) {
   const {
     task: setupTask,
     startRuntimeInstall,
@@ -1221,7 +1217,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     sizeError: string | null;
     cleanupAllowed: boolean;
     hasPythonOverride: boolean;
-    removesLastManagedRuntime: boolean;
     isBulkCleanup: boolean;
   } | null>(null);
 
@@ -3042,14 +3037,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     }
     const scannedByKey = Object.fromEntries(scanned.map((row) => [row.key, row]));
     const isUltralytics = providerId === "ultralytics";
-    const ultralyticsPresence = isUltralytics
-      ? scannedByKey["ultralytics-managed"]?.exists ?? null
-      : managedEnvironmentSizes["ultralytics-managed"]?.exists ?? null;
-    if (!isUltralytics && ultralyticsPresence === null) {
-      const ultralyticsScan = await scanProviderEnvironments("ultralytics").catch(() => []);
-      const result = ultralyticsScan.find((row) => row.key === "ultralytics-managed");
-      if (result) scannedByKey[result.key] = result;
-    }
     const rows = isUltralytics
       ? [scannedByKey["ultralytics-managed"] ?? managedEnvironmentSizes["ultralytics-managed"]]
       : scanned.filter((row) => row.key !== "rfdetr-all");
@@ -3063,8 +3050,6 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     const cleanupState = getManagedEnvironmentCleanupState({
       providerId,
       singleKey,
-      ultralyticsExists: scannedByKey["ultralytics-managed"]?.exists ?? ultralyticsPresence,
-      rfdetrCount: stackEnvironments.length,
       hasPythonOverride: Boolean(pythonOverride.trim()),
     });
     setCleanupConfirmation({
@@ -3108,20 +3093,26 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         managedEnvironmentCacheKeysForCleanup(confirmation.keys, stackEnvironments.map((stack) => stack.key)),
       );
       if (confirmation.keys.includes("ultralytics-managed")) {
-        // Deletion succeeds independently of setup-state persistence, so refresh
-        // the managed runtime card whenever the .venv was actually removed, even
-        // if saving setup state failed (surfaced via cleanupMessage above).
+        // Ticket 13: the workspace stays put with the model, output
+        // settings, and Python selection intact. Re-detect the managed
+        // runtime on every successful deletion (not only when an override
+        // survives) so affected Ultralytics routes report their honest
+        // missing state while healthy RF-DETR routes keep resolving through
+        // their own stacks. Cleanup never touches legacy setup state.
         if (managedEnvironmentDeletionSucceeded(report, "ultralytics-managed")) {
           setEnvInfo(null);
-          const setupAction = applyManagedEnvironmentCleanupSetup(report, onSetupCompleteChange);
-          if (setupAction?.redetect) {
-            const settings = await loadSettings();
-            await handleRedetect(settings.python_path_override || undefined, true);
-          }
+          await handleRedetect(pythonOverride.trim() || undefined, true);
         }
       } else {
         await refreshStackEnvironmentCards();
-        await refreshRouteDependencies(selectedRouteId, envInfo?.python_path ?? null).catch(() => {});
+        // Re-check the selected route through the same interpreter resolution
+        // as the dependency effect: RF-DETR checks carry the route id (the
+        // backend resolves the selected stack), so a removed stack reports
+        // Not set up while untouched providers keep their readiness.
+        await refreshRouteDependencies(
+          selectedRouteId,
+          resolveRoutePython(selectedProviderId, providerEnvPython, selectedRouteId),
+        ).catch(() => {});
       }
       if (report.results.some((result) => result.status === "failed")) {
         // Deletion failed: keep the confirmation open so the in-dialog
@@ -3136,7 +3127,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
     } finally {
       setCleanupBusy(false);
     }
-  }, [blockOnSetupConflict, cleanupBusy, cleanupConfirmation, dismissTask, envInfo?.python_path, handleRedetect, invalidateManagedEnvironmentSizesForMutation, onSetupCompleteChange, pythonOverride, refreshRouteDependencies, refreshStackEnvironmentCards, selectedRouteId, setupTask, stackEnvironments]);
+  }, [blockOnSetupConflict, cleanupBusy, cleanupConfirmation, dismissTask, handleRedetect, invalidateManagedEnvironmentSizesForMutation, providerEnvPython, pythonOverride, refreshRouteDependencies, refreshStackEnvironmentCards, selectedProviderId, selectedRouteId, setupTask, stackEnvironments]);
 
   // Save output dir override
   const handleSaveOutputDir = useCallback(async () => {
@@ -3404,7 +3395,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater, onSetupComple
         <div className="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm">
           <div><p className="font-medium">What will be removed</p><p className="text-zinc-600">{cleanupConfirmation.environments.join(", ")}</p></div>
           <div><p className="font-medium">Approx. size</p><p className="text-zinc-600">{cleanupConfirmation.estimatedLogicalBytes === null ? "Unavailable" : formatManagedEnvironmentSize(cleanupConfirmation.estimatedLogicalBytes)}</p></div>
-          <div><p className="font-medium">What happens next</p><p className="text-zinc-600">{cleanupConfirmation.removesLastManagedRuntime && <><strong>This is your last managed runtime.</strong> </>}{cleanupConfirmation.removesLastManagedRuntime && cleanupConfirmation.hasPythonOverride ? "Your Python override will stay active. You can continue exporting with it." : cleanupConfirmation.provider === "Ultralytics YOLO" && cleanupConfirmation.hasPythonOverride ? "Your Python override will stay active. You can continue exporting with it." : cleanupConfirmation.isBulkCleanup ? "These environments will be set up again when needed." : "This environment will be set up again when needed."}</p></div>
+          <div><p className="font-medium">What happens next</p><p className="text-zinc-600">{getManagedEnvironmentCleanupNextStepCopy(cleanupConfirmation)}</p></div>
           <div><p className="font-medium">What stays safe</p><p className="text-zinc-600">Your models, exported files, and settings will not be deleted.</p></div>
           <details>
             <summary className="cursor-pointer font-medium">Affected export formats ({cleanupConfirmation.routeIds.length})</summary>

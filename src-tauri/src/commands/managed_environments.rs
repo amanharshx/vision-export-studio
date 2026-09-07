@@ -9,9 +9,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::commands::runtime_operations::{RuntimeOperation, RuntimeOperationCoordinator};
-use crate::commands::setup::{
-    load_settings, normalize_setup_after_managed_runtime_cleanup, SettingsState,
-};
+use crate::commands::setup::load_settings;
 use crate::commands::stack_environments::{known_stacks, stack_venv_dir_for_key};
 
 pub const ULTRALYTICS_MANAGED_KEY: &str = "ultralytics-managed";
@@ -482,16 +480,6 @@ pub(crate) fn cleanup_sync(
     })
 }
 
-fn cleanup_report_confirms_ultralytics(report: &ManagedEnvironmentCleanupReport) -> bool {
-    report.results.iter().any(|result| {
-        matches!(
-            result,
-            ManagedEnvironmentCleanupResult::Succeeded { key, .. }
-                if key == ULTRALYTICS_MANAGED_KEY
-        )
-    })
-}
-
 #[tauri::command]
 pub async fn scan_managed_environments(
     app_handle: tauri::AppHandle,
@@ -509,33 +497,27 @@ pub async fn scan_managed_environments(
 pub async fn cleanup_managed_environments(
     app_handle: tauri::AppHandle,
     owner: State<'_, ManagedEnvironments>,
-    settings: State<'_, SettingsState>,
     runtime_operations: State<'_, RuntimeOperationCoordinator>,
     keys: Vec<String>,
 ) -> Result<ManagedEnvironmentCleanupReport, String> {
     if keys.is_empty() {
         return Err("managed environment keys must not be empty".to_string());
     }
-    let root = PathBuf::from(load_settings(app_handle.clone())?.runtime_dir);
+    let root = PathBuf::from(load_settings(app_handle)?.runtime_dir);
     for key in &keys {
         target_keys(&root, key)?;
     }
-    let includes_ultralytics = keys.iter().any(|key| key == ULTRALYTICS_MANAGED_KEY);
+    // Ticket 13: cleanup updates only the affected provider. The runtime
+    // guard stays held through removal and report construction, but cleanup
+    // never rewrites the legacy global setup flag (its contract removal
+    // belongs to ticket 15): surviving readiness comes from refreshed
+    // provider probes in the UI.
     let guard = runtime_operations.acquire(RuntimeOperation::Cleanup)?;
     let owner = owner.inner().clone();
-    let mut report =
-        tauri::async_runtime::spawn_blocking(move || cleanup_sync(&owner, &root, &keys))
-            .await
-            .map_err(|error| format!("managed environment cleanup task failed: {error}"))??;
+    let report = tauri::async_runtime::spawn_blocking(move || cleanup_sync(&owner, &root, &keys))
+        .await
+        .map_err(|error| format!("managed environment cleanup task failed: {error}"))??;
 
-    if includes_ultralytics && cleanup_report_confirms_ultralytics(&report) {
-        match normalize_setup_after_managed_runtime_cleanup(&app_handle, settings.inner()) {
-            Ok(setup_complete) => report.setup_complete = Some(setup_complete),
-            // Deletion already succeeded; surface the persistence failure
-            // separately instead of discarding the successful deletion report.
-            Err(error) => report.setup_error = Some(error),
-        }
-    }
     drop(guard);
     Ok(report)
 }
@@ -921,19 +903,6 @@ mod tests {
     }
 
     #[test]
-    fn failed_ultralytics_cleanup_report_does_not_confirm_setup_normalization() {
-        let report = ManagedEnvironmentCleanupReport {
-            results: vec![ManagedEnvironmentCleanupResult::Failed {
-                key: ULTRALYTICS_MANAGED_KEY.to_string(),
-                error: "remove failed".to_string(),
-            }],
-            setup_complete: None,
-            setup_error: None,
-        };
-        assert!(!cleanup_report_confirms_ultralytics(&report));
-    }
-
-    #[test]
     fn cleanup_reports_confirmed_absence_as_success() {
         let root = temp_root("cleanup-absent");
         let report = cleanup_sync(
@@ -978,9 +947,91 @@ mod tests {
     }
 
     #[test]
-    fn ultralytics_reset_preserves_config_and_persists_setup_state_with_and_without_override() {
-        use crate::commands::setup::setup_complete_after_managed_runtime_cleanup;
+    fn ultralytics_cleanup_preserves_rfdetr_stacks_and_settings_bytes() {
+        // Ticket 13: removing the Ultralytics environment updates only the
+        // affected provider. Healthy RF-DETR stacks, user settings (including
+        // the legacy setup flag, whose contract removal belongs to ticket 15),
+        // and exported artifacts all survive byte-identical.
+        let root = temp_root("cleanup-ultra-keeps-rfdetr");
+        fs::create_dir_all(root.join(".venv")).unwrap();
+        fs::write(root.join(".venv/keep"), b"ultra").unwrap();
+        let stack = root.join("envs/rfdetr-default/.venv");
+        fs::create_dir_all(&stack).unwrap();
+        fs::write(stack.join("payload"), b"stack").unwrap();
+        let settings_path = root.join("vision-export-studio-settings.json");
+        let settings_bytes =
+            br#"{"runtime_dir":"/tmp/runtime","setup_complete":true,"python_path_override":null,"output_dir_override":null}"#;
+        fs::write(&settings_path, settings_bytes).unwrap();
+        fs::create_dir_all(root.join("exports")).unwrap();
+        fs::write(root.join("exports/result.onnx"), b"output").unwrap();
 
+        let report = cleanup_sync(
+            &ManagedEnvironments::default(),
+            &root,
+            &[ULTRALYTICS_MANAGED_KEY.to_string()],
+        )
+        .unwrap();
+
+        assert!(matches!(
+            &report.results[..],
+            [ManagedEnvironmentCleanupResult::Succeeded { key, .. }]
+                if key == ULTRALYTICS_MANAGED_KEY
+        ));
+        assert!(report.setup_complete.is_none());
+        assert!(report.setup_error.is_none());
+        assert!(!root.join(".venv").exists());
+        assert_eq!(fs::read(stack.join("payload")).unwrap(), b"stack");
+        assert_eq!(fs::read(&settings_path).unwrap(), settings_bytes);
+        assert_eq!(
+            fs::read(root.join("exports/result.onnx")).unwrap(),
+            b"output"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rfdetr_cleanup_preserves_ultralytics_runtime_and_settings_bytes() {
+        // Ticket 13: removing RF-DETR stacks leaves the healthy Ultralytics
+        // runtime, user settings, and exported artifacts untouched.
+        let root = temp_root("cleanup-rfdetr-keeps-ultra");
+        fs::create_dir_all(root.join(".venv")).unwrap();
+        fs::write(root.join(".venv/keep"), b"ultra").unwrap();
+        let stack = root.join("envs/rfdetr-default/.venv");
+        fs::create_dir_all(&stack).unwrap();
+        fs::write(stack.join("payload"), b"stack").unwrap();
+        let settings_path = root.join("vision-export-studio-settings.json");
+        let settings_bytes =
+            br#"{"runtime_dir":"/tmp/runtime","setup_complete":true,"python_path_override":null,"output_dir_override":null}"#;
+        fs::write(&settings_path, settings_bytes).unwrap();
+        fs::create_dir_all(root.join("exports")).unwrap();
+        fs::write(root.join("exports/result.onnx"), b"output").unwrap();
+
+        let report = cleanup_sync(
+            &ManagedEnvironments::default(),
+            &root,
+            &["rfdetr-default".to_string()],
+        )
+        .unwrap();
+
+        assert!(matches!(
+            &report.results[..],
+            [ManagedEnvironmentCleanupResult::Succeeded { key, .. }]
+                if key == "rfdetr-default"
+        ));
+        assert!(report.setup_complete.is_none());
+        assert!(report.setup_error.is_none());
+        assert!(!stack.exists());
+        assert_eq!(fs::read(root.join(".venv/keep")).unwrap(), b"ultra");
+        assert_eq!(fs::read(&settings_path).unwrap(), settings_bytes);
+        assert_eq!(
+            fs::read(root.join("exports/result.onnx")).unwrap(),
+            b"output"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ultralytics_reset_preserves_config_without_touching_setup_state() {
         let root = temp_root("cleanup-reset-setup-state");
         // Managed runtime plus user config and exported artifacts.
         fs::create_dir_all(root.join(".venv/lib")).unwrap();
@@ -1018,21 +1069,10 @@ mod tests {
             b"artifact"
         );
 
-        // After the reset the managed runtime is gone, so setup completion now
-        // depends solely on whether an explicit Python override remains.
-        let managed_runtime_ready = false;
-        assert!(!setup_complete_after_managed_runtime_cleanup(
-            managed_runtime_ready,
-            None
-        ));
-        assert!(!setup_complete_after_managed_runtime_cleanup(
-            managed_runtime_ready,
-            Some("   ")
-        ));
-        assert!(setup_complete_after_managed_runtime_cleanup(
-            managed_runtime_ready,
-            Some("/custom/python")
-        ));
+        // Ticket 13: cleanup never derives or persists setup state. The
+        // report carries no setup values, so surviving readiness comes only
+        // from refreshed provider probes in the UI.
+        assert!(report.setup_complete.is_none());
 
         let _ = fs::remove_dir_all(root);
     }
