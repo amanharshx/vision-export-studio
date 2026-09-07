@@ -108,6 +108,28 @@ describe("sanitizeAnalyticsProperties", () => {
     });
   });
 
+  it("keeps the environment-setup allowlist and export failure taxonomy", () => {
+    expect(
+      sanitizeAnalyticsProperties({
+        provider: "rfdetr",
+        environment_key: "rfdetr-default",
+        route_id: "rfdetr.pth.onnx",
+        setup_result: "failure",
+        duration_ms: 5,
+        failure_kind: "install_failed",
+        failure_stage: "install_dependencies",
+      }),
+    ).toEqual({
+      provider: "rfdetr",
+      environment_key: "rfdetr-default",
+      route_id: "rfdetr.pth.onnx",
+      setup_result: "failure",
+      duration_ms: 5,
+      failure_kind: "install_failed",
+      failure_stage: "install_dependencies",
+    });
+  });
+
   it("drops undefined values", () => {
     expect(
       sanitizeAnalyticsProperties({

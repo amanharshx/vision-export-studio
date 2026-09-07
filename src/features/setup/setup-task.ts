@@ -18,6 +18,11 @@ import type {
 import { createListenerGroup, type ListenerGroup } from "@/lib/tauri/listener-group";
 import type { BootstrapPythonResult, PythonRequiredResult } from "@/lib/tauri/bootstrap-python";
 import { isPythonRequiredResult } from "@/lib/tauri/bootstrap-python";
+import {
+  buildEnvironmentSetupProperties,
+  ENVIRONMENT_SETUP_EVENT,
+  type EnvironmentSetupResult,
+} from "./setup-analytics";
 
 export type SetupTaskPhase =
   | "finding-python"
@@ -286,6 +291,21 @@ export interface InstallStreamDeps extends InstallEventDeps {
   verifyEnvironment: (pythonPath: string) => Promise<{ yoloPath: string | null }>;
 }
 
+// Ticket 16: injectable terminal-analytics sink. The owner emits exactly one
+// `environment_setup_completed` event per started setup with only the
+// allowlisted fields (provider, known environment key, route ID, terminal
+// result, duration). Enablement stays owned by `captureAnalyticsEvent`
+// (a no-op capture models disabled analytics); any throw from `capture` is
+// swallowed so analytics failure never changes setup or route readiness.
+export interface SetupTaskAnalyticsSink {
+  capture?: (eventName: string, properties: Record<string, unknown>) => void;
+  now?: () => number;
+}
+
+export interface SetupTaskOwnerOptions {
+  analytics?: SetupTaskAnalyticsSink;
+}
+
 export interface SetupTaskOwner {
   getState: () => SetupTask | null;
   subscribe: (listener: () => void) => () => void;
@@ -315,7 +335,10 @@ export interface SetupTaskOwner {
   clearPythonGateOverride: (gateDeps: PythonRequiredDeps) => Promise<void>;
 }
 
-export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
+export function createSetupTaskOwner(
+  deps: InstallStreamDeps,
+  options?: SetupTaskOwnerOptions,
+): SetupTaskOwner {
   let task: SetupTask | null = null;
   const subscribers = new Set<() => void>();
   let installGroup: ReturnType<typeof createListenerGroup> | null = null;
@@ -552,6 +575,50 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
         summary: request.summary ?? initial.summary,
       });
 
+      // Ticket 16: one terminal analytics event per started setup. Buffered
+      // or repeated install notifications resolve the stream once, and every
+      // terminal path below funnels through emitTerminal exactly once, so a
+      // setup task never emits duplicate start/completion records. Each retry
+      // is a new startRuntimeInstall call with its own start time and duration,
+      // and no session/model identifier is ever included.
+      const analyticsSink = options?.analytics;
+      const analyticsNow = analyticsSink?.now ?? Date.now;
+      // The clock is part of analytics: a throwing or non-finite clock must
+      // never abort setup. A null reading falls back to a zero duration.
+      const readAnalyticsClock = (): number | null => {
+        try {
+          const value = analyticsNow();
+          return Number.isFinite(value) ? value : null;
+        } catch {
+          return null;
+        }
+      };
+      const analyticsStart = readAnalyticsClock();
+      let analyticsEmitted = false;
+      const emitTerminal = (result: EnvironmentSetupResult): void => {
+        if (analyticsEmitted) return;
+        analyticsEmitted = true;
+        try {
+          if (!analyticsSink?.capture) return;
+          const analyticsEnd = readAnalyticsClock();
+          const properties = buildEnvironmentSetupProperties({
+            provider: request.provider,
+            environmentKey: request.environmentKey,
+            routeId: request.routeId,
+            result,
+            durationMs: analyticsEnd !== null && analyticsStart !== null
+              ? analyticsEnd - analyticsStart
+              : 0,
+          });
+          analyticsSink.capture(
+            ENVIRONMENT_SETUP_EVENT,
+            properties as unknown as Record<string, unknown>,
+          );
+        } catch {
+          // Analytics failure never changes setup or route readiness.
+        }
+      };
+
       const group = createListenerGroup();
       installGroup = group;
       let outcome: InstallOutcome;
@@ -594,14 +661,22 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
         teardownInstallListeners();
         const message = String(error);
         failActiveTask(message);
+        emitTerminal("failure");
         return { ok: false, error: message };
       }
       teardownInstallListeners();
 
       const current = task;
-      if (!current || current.status !== "active") return outcome;
+      if (!current || current.status !== "active") {
+        // Defensive and currently unreachable (nothing else leaves "active"
+        // mid-install): the install outcome is returned unchanged, and the
+        // terminal event reports the same result so return and event agree.
+        emitTerminal(outcome.ok ? "success" : "failure");
+        return outcome;
+      }
       if (!outcome.ok) {
         failActiveTask(outcome.error);
+        emitTerminal("failure");
         return outcome;
       }
       // Own the full install → verify → terminal lifecycle so an unmounted
@@ -623,14 +698,19 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
         } catch (error) {
           const message = String(error);
           failActiveTask(message);
+          emitTerminal("failure");
           return { ok: false, error: message };
         }
         const afterVerify = task;
-        if (!afterVerify || afterVerify.status !== "active") return outcome;
+        if (!afterVerify || afterVerify.status !== "active") {
+          emitTerminal(outcome.ok ? "success" : "failure");
+          return outcome;
+        }
         if (!verified.yoloPath) {
           const message =
             "Ultralytics runtime install finished, but YOLO CLI was still not detected.";
           failActiveTask(message);
+          emitTerminal("failure");
           return { ok: false, error: message };
         }
       }
@@ -640,13 +720,20 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
         } catch (error) {
           const message = String(error);
           failActiveTask(message);
+          emitTerminal("failure");
           return { ok: false, error: message };
         }
         const afterFinalize = task;
-        if (!afterFinalize || afterFinalize.status !== "active") return outcome;
+        if (!afterFinalize || afterFinalize.status !== "active") {
+          emitTerminal(outcome.ok ? "success" : "failure");
+          return outcome;
+        }
       }
       const afterVerify = task;
-      if (!afterVerify || afterVerify.status !== "active") return outcome;
+      if (!afterVerify || afterVerify.status !== "active") {
+        emitTerminal(outcome.ok ? "success" : "failure");
+        return outcome;
+      }
       setTask({
         ...afterVerify,
         phase: "ready",
@@ -654,6 +741,7 @@ export function createSetupTaskOwner(deps: InstallStreamDeps): SetupTaskOwner {
         error: null,
         summary: setupTaskSummaryForPhase("ready", afterVerify.provider),
       });
+      emitTerminal("success");
       return { ok: true };
     },
 

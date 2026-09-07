@@ -279,17 +279,22 @@ Vision Export Studio uses PostHog for install-scoped pseudonymous usage analytic
 Current analytics covers:
 
 - app launches
-- setup completion and setup failures
+- environment setup results (`environment_setup_completed` with provider, environment key, route ID, success or failure, and setup duration)
 - export started, completed, failed, and cancelled
 - app and device metadata such as app version, OS, architecture, install channel, and route/event metadata
 
 Collected analytics excludes:
 
 - model files
+- model paths or filenames
+- checkpoint metadata
 - dataset contents
 - file contents
 - export logs
+- package logs
 - local file paths
+- Python paths or output paths
+- raw error text
 - personal identity such as email address or username
 
 More detail lives in [PRIVACY.md](PRIVACY.md).
