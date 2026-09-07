@@ -500,8 +500,7 @@ pub async fn cleanup_managed_environments(
     }
     // Ticket 13: cleanup updates only the affected provider. The runtime
     // guard stays held through removal and report construction, but cleanup
-    // never rewrites the legacy global setup flag (its contract removal
-    // belongs to ticket 15): surviving readiness comes from refreshed
+    // never rewrites settings: surviving readiness comes from refreshed
     // provider probes in the UI.
     let guard = runtime_operations.acquire(RuntimeOperation::Cleanup)?;
     let owner = owner.inner().clone();
@@ -951,7 +950,7 @@ mod tests {
     }
 
     /// Ticket 13 cross-provider fixture: Ultralytics runtime plus one RF-DETR
-    /// stack, user settings with the legacy setup flag set, and an export
+    /// stack, user settings without the retired global flag, and an export
     /// artifact. Every automated deletion test uses a temporary runtime
     /// root; real environments are never touched.
     fn seed_cross_provider_cleanup_root(label: &str) -> (PathBuf, Vec<u8>) {
@@ -962,7 +961,7 @@ mod tests {
         fs::create_dir_all(&stack).unwrap();
         fs::write(stack.join("payload"), b"stack").unwrap();
         let settings_path = root.join("vision-export-studio-settings.json");
-        let settings_bytes = br#"{"runtime_dir":"/tmp/runtime","setup_complete":true,"python_path_override":null,"output_dir_override":null}"#.to_vec();
+        let settings_bytes = br#"{"runtime_dir":"/tmp/runtime","python_path_override":null,"output_dir_override":null}"#.to_vec();
         fs::write(&settings_path, &settings_bytes).unwrap();
         fs::create_dir_all(root.join("exports")).unwrap();
         fs::write(root.join("exports/result.onnx"), b"output").unwrap();
@@ -970,11 +969,40 @@ mod tests {
     }
 
     #[test]
+    fn legacy_settings_with_setup_complete_survive_cleanup_byte_identical() {
+        // Ticket 15: older settings files still carrying the retired
+        // setup_complete flag must survive cleanup untouched; cleanup never
+        // rewrites settings.
+        let root = temp_root("cleanup-legacy-settings");
+        fs::create_dir_all(root.join(".venv")).unwrap();
+        fs::write(root.join(".venv/keep"), b"ultra").unwrap();
+        let settings_path = root.join("vision-export-studio-settings.json");
+        let settings_bytes = br#"{"runtime_dir":"/tmp/runtime","setup_complete":true,"python_path_override":null,"output_dir_override":null}"#.to_vec();
+        fs::write(&settings_path, &settings_bytes).unwrap();
+        fs::create_dir_all(root.join("exports")).unwrap();
+        fs::write(root.join("exports/result.onnx"), b"output").unwrap();
+
+        let report = cleanup_sync(
+            &ManagedEnvironments::default(),
+            &root,
+            &[ULTRALYTICS_MANAGED_KEY.to_string()],
+        )
+        .unwrap();
+
+        assert!(matches!(
+            &report.results[..],
+            [ManagedEnvironmentCleanupResult::Succeeded { key, .. }]
+                if key == ULTRALYTICS_MANAGED_KEY
+        ));
+        assert_cleanup_preserved_user_files(&root, &settings_bytes);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn ultralytics_cleanup_preserves_rfdetr_stacks_and_settings_bytes() {
         // Ticket 13: removing the Ultralytics environment updates only the
-        // affected provider. Healthy RF-DETR stacks, user settings (including
-        // the legacy setup flag, whose contract removal belongs to ticket 15),
-        // and exported artifacts all survive byte-identical.
+        // affected provider. Healthy RF-DETR stacks, user settings, and
+        // exported artifacts all survive byte-identical.
         let (root, settings_bytes) = seed_cross_provider_cleanup_root("cleanup-ultra-keeps-rfdetr");
         let stack = root.join("envs/rfdetr-default/.venv");
 

@@ -1,7 +1,6 @@
 export type ManagedEnvironmentKey = "ultralytics-managed" | "rfdetr-all" | "rfdetr-default" | "rfdetr-tensorrt" | "rfdetr-coreml" | "rfdetr-tflite";
 export interface AppSettings {
   runtime_dir: string;
-  setup_complete: boolean;
   python_path_override?: string;
   output_dir_override?: string;
 }
