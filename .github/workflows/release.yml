@@ -183,6 +183,29 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+      - name: Patch updater manifest notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag || github.ref_name }}"
+          RELEASE_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}")"
+          RELEASE_ID="$(jq -r '.id // empty' <<< "$RELEASE_JSON")"
+          test -n "$RELEASE_ID"
+          TARGET="$(jq -r '.target_commitish // empty' <<< "$RELEASE_JSON")"
+          test -n "$TARGET"
+          NOTES="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" -f tag_name="$TAG" -f target_commitish="$TARGET" --jq .body)"
+          test -n "$NOTES"
+          ASSET_ID="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets" --jq 'map(select(.name == "latest.json")) | first.id // empty')"
+          test -n "$ASSET_ID"
+          gh api -H "Accept: application/octet-stream" "repos/${GITHUB_REPOSITORY}/releases/assets/${ASSET_ID}" > "${RUNNER_TEMP}/latest.json"
+          jq --arg notes "$NOTES" '.notes = $notes' "${RUNNER_TEMP}/latest.json" > "${RUNNER_TEMP}/latest-with-notes.json"
+          test "$(jq -c 'del(.notes)' "${RUNNER_TEMP}/latest.json")" = "$(jq -c 'del(.notes)' "${RUNNER_TEMP}/latest-with-notes.json")"
+          jq -e '.notes | type == "string" and length > 0' "${RUNNER_TEMP}/latest-with-notes.json" >/dev/null
+          gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${ASSET_ID}"
+          gh api --method POST "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=latest.json" -H "Content-Type: application/json" --input "${RUNNER_TEMP}/latest-with-notes.json" >/dev/null
+
       - name: Publish draft release
         uses: softprops/action-gh-release@v2
         with:
