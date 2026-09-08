@@ -6,7 +6,7 @@ import {
   resolveUltralyticsRoutePython,
 } from "@/features/export/export-workspace";
 
-// Ticket 14: Make saved Python overrides bootstrap-only.
+// Saved Python overrides are bootstrap-only.
 // The saved Python only creates isolated export environments; it never
 // grants readiness, runs checks, or runs exports directly. Readiness is a
 // pure function of the managed environment, so the resolver takes no
@@ -15,7 +15,7 @@ import {
 const MANAGED = "/tmp/runtime/.venv/bin/python";
 const SYSTEM = "/usr/bin/python3";
 
-describe("bootstrap-only python overrides (ticket 14)", () => {
+describe("bootstrap-only python overrides", () => {
   test("a non-managed interpreter never grants readiness", () => {
     expect(resolveUltralyticsRoutePython(SYSTEM, MANAGED, "linux")).toBeNull();
   });
@@ -30,7 +30,7 @@ describe("bootstrap-only python overrides (ticket 14)", () => {
   });
 });
 
-describe("bootstrap first-use notice (ticket 14)", () => {
+describe("bootstrap first-use notice", () => {
   test("an existing saved override used to create an environment explains the new behavior", () => {
     const notice = getBootstrapFirstUseNotice("/custom/python", "explicit-override");
     expect(notice).toBe(BOOTSTRAP_FIRST_USE_NOTICE);

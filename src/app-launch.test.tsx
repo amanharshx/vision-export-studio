@@ -23,7 +23,7 @@ import type {
 import type { HostSupportResult } from "@/lib/tauri/app";
 import type { UpdaterController } from "@/features/updater/use-updater-controller";
 
-// Ticket 15 launch contract, exercised through the real App: landing renders
+// Launch contract, exercised through the real App: landing renders
 // without the retired Setup screen, Get Started opens model upload for every
 // provider inventory, settings restore, and no setup work starts on launch,
 // upload, or entry. The retired setup_complete flag is gone from the
@@ -312,7 +312,7 @@ function expectNoSetupStarted() {
   expect(calls.resolveBootstrap).toEqual([]);
 }
 
-describe("workspace launch without global runtime (ticket 12, contract removed in 15)", () => {
+describe("workspace launch without global runtime", () => {
   beforeEach(() => {
     resetScenario();
   });
@@ -380,7 +380,7 @@ describe("workspace launch without global runtime (ticket 12, contract removed i
   });
 });
 
-describe("workspace stability after environment cleanup (ticket 13)", () => {
+describe("workspace stability after environment cleanup", () => {
   beforeEach(() => {
     resetScenario();
   });
@@ -624,7 +624,7 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     await confirmCleanupDialog("Reset Ultralytics runtime?", "Reset runtime");
 
     await waitFor(() => expect(calls.cleanup).toEqual([[["ultralytics-managed"]]]));
-    // Ticket 14: probes refresh with the managed runtime, never the saved
+    // Probes refresh with the managed runtime, never the saved
     // bootstrap override or the unsaved draft.
     await waitFor(() => expect(calls.detect.at(-1)).toEqual([MANAGED_PYTHON]));
     // Draft text, output settings, and the model all survive cleanup.
@@ -635,7 +635,7 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     await flushPendingUpdates();
   });
 
-  test("ticket 14: a saved override loads but detection probes the managed runtime", async () => {
+  test("a saved override loads but detection probes the managed runtime", async () => {
     settingsFile = baseSettings({
       python_path_override: "/custom/python",
     });
@@ -665,7 +665,7 @@ describe("workspace stability after environment cleanup (ticket 13)", () => {
     await flushPendingUpdates();
   });
 
-  test("ticket 14: managed routes stay ready with an override and dep checks use managed", async () => {
+  test("managed routes stay ready with an override and dep checks use managed", async () => {
     bothProvidersWithModel({ python_path_override: "/custom/python" });
     await launchAndEnterWorkspace();
     await uploadModel();

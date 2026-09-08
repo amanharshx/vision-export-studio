@@ -1,4 +1,4 @@
-// Route-owned RF-DETR setup state for ticket 10.
+// Route-owned RF-DETR setup state.
 //
 // Each export route maps to exactly one isolated stack environment
 // (ONNX and ExecuTorch share `rfdetr-default` but keep per-route readiness:
@@ -184,7 +184,7 @@ export function getRfDetrSetupVerifyError(results: DepCheckResult[] | null): str
 }
 
 // ---------------------------------------------------------------------------
-// Ticket 11: resume RF-DETR inspection after the selected stack becomes ready.
+// Resume RF-DETR inspection after the selected stack becomes ready.
 // ---------------------------------------------------------------------------
 
 export interface RfDetrInspectionResumeInput {

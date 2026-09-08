@@ -437,9 +437,8 @@ fn resolve_effective_python(
     explicit_override: Option<String>,
 ) -> Result<String, String> {
     let settings = load_settings(app_handle.clone())?;
-    // Ticket 15: readiness is inventory-driven. The managed interpreter
-    // qualifies whenever its file exists; the retired global setup flag no
-    // longer gates it.
+    // Readiness is inventory-driven. The managed interpreter
+    // qualifies whenever its file exists; no global setup flag gates it.
     let candidate = venv_python(&settings.runtime_dir);
     let managed_python = Path::new(&candidate).exists().then_some(candidate);
 
@@ -464,7 +463,7 @@ pub(crate) fn paths_equal(left: &str, right: &str, is_windows: bool) -> bool {
 }
 
 /// True when the given interpreter is the app-owned managed environment.
-/// Shared by the ticket-14 backend gates (detection, checks, exports) so
+/// Shared by the backend gates (detection, checks, exports) so
 /// the managed comparison cannot drift between them.
 pub(crate) fn is_managed_python(python_path: &str, runtime_dir: &str) -> bool {
     paths_equal(python_path, &venv_python(runtime_dir), cfg!(windows))
@@ -497,7 +496,7 @@ pub async fn detect_environment(
     let mut warnings: Vec<String> = Vec::new();
     let settings = load_settings(app_handle.clone())?;
 
-    // Ticket 14: detection never runs through the selected override (or any
+    // Detection never runs through the selected override (or any
     // other interpreter) — only the managed environment. Blank callers fall
     // through to the existing managed/system resolution below.
     if let Some(path) = python_path.as_deref() {
@@ -940,8 +939,8 @@ mod tests {
 
     #[test]
     fn managed_runtime_used_from_inventory_without_override() {
-        // Ticket 15: the managed interpreter qualifies by file inventory,
-        // not by the retired global setup flag.
+        // The managed interpreter qualifies by file inventory,
+        // not by any global setup flag.
         let selected = pick_python_candidate(None, Some("/managed/.venv/bin/python".to_string()));
         assert_eq!(selected, Some("/managed/.venv/bin/python".to_string()));
     }

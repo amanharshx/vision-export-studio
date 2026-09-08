@@ -63,7 +63,7 @@ const baseRequest = {
   pythonPath: "/tmp/sensitive-bootstrap-python",
 };
 
-describe("setup task terminal analytics (ticket 16)", () => {
+describe("setup task terminal analytics", () => {
   test("success emits exactly one terminal event with the allowed fields", async () => {
     const { deps, handlers } = createFakeDeps();
     const { events, analytics } = createCapture();

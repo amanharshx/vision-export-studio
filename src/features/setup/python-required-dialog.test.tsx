@@ -60,7 +60,7 @@ function renderBody(result: RequiredResult, overrides?: Partial<Parameters<typeo
   );
 }
 
-describe("python-required dialog copy (ticket 06)", () => {
+describe("python-required dialog copy", () => {
   test("states the selected route requirement in short user-facing language", () => {
     const html = renderBody(missingResult(), { routeId: "rfdetr.pth.tflite" });
     expect(html).toContain("rfdetr.pth.tflite");
@@ -131,7 +131,7 @@ describe("python-required dialog copy (ticket 06)", () => {
     expect(missingHtml).toContain("Python required");
   });
 
-  test("explains bootstrap-only behavior when an override is used to create an environment (ticket 14)", () => {
+  test("explains bootstrap-only behavior when an override is used to create an environment", () => {
     const missingHtml = renderBody(missingResult());
     expect(missingHtml).toContain("only creates isolated export environments");
     expect(missingHtml).toContain("never modified");

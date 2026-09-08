@@ -4,7 +4,7 @@ import {
   resolveRoutePython,
 } from "@/features/export/export-workspace";
 
-// Ticket 12: Open the workspace without a global runtime.
+// Open the workspace without a global runtime.
 // Check and export calls share one argument rule: Ultralytics passes its
 // managed python, while mapped RF-DETR routes pass the route id because both
 // backend commands resolve the route's stack themselves. A missing
@@ -25,7 +25,7 @@ function envPythonFor(combo: InventoryCombo) {
   }
 }
 
-describe("rfdetr independence without global runtime (ticket 12)", () => {
+describe("rfdetr independence without global runtime", () => {
   test("every provider-presence combination resolves a route python or fails closed", () => {
     const expectations: Record<InventoryCombo, { ultralytics: string | null; rfdetr: string | null }> = {
       "no-env": { ultralytics: null, rfdetr: "rfdetr.pth.onnx" },
@@ -51,5 +51,5 @@ describe("rfdetr independence without global runtime (ticket 12)", () => {
   });
 });
 
-// Ultralytics readiness (managed-only, override-independent) moved with
-// ticket 14 to bootstrap-only-python-overrides.test.ts — its single home.
+// Ultralytics readiness (managed-only, override-independent) lives in
+// bootstrap-only-python-overrides.test.ts — its single home.

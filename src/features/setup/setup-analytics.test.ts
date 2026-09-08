@@ -7,7 +7,7 @@ import {
 } from "./setup-analytics";
 import { expectNoForbiddenSetupAnalyticsKeys } from "./setup-analytics-assertions";
 
-describe("environment setup analytics vocabulary (ticket 16)", () => {
+describe("environment setup analytics vocabulary", () => {
   test("uses a single terminal event, not global start/completion duplicates", () => {
     expect(ENVIRONMENT_SETUP_EVENT).toBe("environment_setup_completed");
   });

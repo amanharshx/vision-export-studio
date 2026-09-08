@@ -367,9 +367,8 @@ export function getManagedEnvironmentCleanupState({
   isBulkCleanup: boolean;
 } {
   const isBulkCleanup = providerId === "rfdetr" && !singleKey;
-  // Ticket 13 replaced last-runtime and Setup-redirect copy with concise
-  // on-demand recreation copy: cleanup stays in the workspace and reports no
-  // navigation, so remaining-provider presence is not an input.
+  // Cleanup stays in the workspace with concise on-demand recreation copy
+  // and never navigates, so remaining-provider presence is not an input.
   return {
     hasPythonOverride,
     isBulkCleanup,
@@ -394,9 +393,9 @@ export function resolveRoutePython(
 
 /**
  * Ultralytics interpreter eligible for checks and exports: only the managed
- * environment. Ticket 14: a saved Python override is bootstrap-only — it
+ * environment. A saved Python override is bootstrap-only — it
  * creates isolated export environments and never runs checks or exports
- * directly, so it no longer grants readiness through another interpreter.
+ * directly, so it never grants readiness through another interpreter.
  * Automatically discovered system Python never qualifies: it would mark
  * routes Ready and export through it with no route setup and no app-owned
  * environment, bypassing provider inventory.
@@ -414,8 +413,8 @@ export function resolveUltralyticsRoutePython(
 }
 
 /** First-use explanation shown when a setup run creates an environment from
- * a pre-existing saved override. Ticket 14: migrated users meet the new
- * bootstrap-only behavior exactly when their saved Python is first used. */
+ * a pre-existing saved override: users meet the bootstrap-only behavior
+ * exactly when their saved Python is first used. */
 export const BOOTSTRAP_FIRST_USE_NOTICE =
   "Setting up from your saved Python: it only creates the isolated export environment and is never modified.";
 
@@ -1176,10 +1175,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   const [envError, setEnvError] = useState<string | null>(null);
   const [pythonOverride, setPythonOverride] = useState("");
   // Saved (applied) override and managed interpreter backing Ultralytics
-  // readiness: automatic system-Python discovery never qualifies (ticket 12).
+  // readiness: automatic system-Python discovery never qualifies.
   const [appliedPythonOverride, setAppliedPythonOverride] = useState("");
   // First-use explanation for a setup run creating an environment from a
-  // pre-existing saved override (ticket 14). Set when the creation request
+  // pre-existing saved override. Set when the creation request
   // is built, cleared when a setup starts without an override bootstrap or
   // the saved override changes.
   const [bootstrapFirstUseNotice, setBootstrapFirstUseNotice] = useState<string | null>(null);
@@ -1402,7 +1401,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     managedRuntimeUpgrade,
     mayStartRuntimeUpgrade,
   );
-  // Route-owned setup (tickets 08 and 10): the selected route's own check
+  // Route-owned setup: the selected route's own check
   // drives the modal's setup-only mode, so a stale check from another route
   // can never leak in. A task marks setting-up only the route it runs for
   // and setup-incomplete only the route it failed for (a null task route
@@ -1486,7 +1485,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   // export chrome: it also blocks the setup action itself.
   const ultralyticsSetupHidesExport = ultralyticsRouteSetupStatus != null
     && shouldHideUltralyticsExportControls(selectedProviderId, ultralyticsRouteSetupStatus);
-  // Ticket 11: RF-DETR export configuration additionally requires usable
+  // RF-DETR export configuration additionally requires usable
   // checkpoint inspection data. The environment stays Ready when inspection
   // fails; only the export chrome hides until inspection succeeds (or a
   // manual variant is explicitly selected, with Plus still blocked).
@@ -1669,7 +1668,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
           setOutputDirOverride(outOverride);
           setOutputDirInput(outOverride);
         }
-        // Ticket 14: detection never runs through the saved bootstrap
+        // Detection never runs through the saved bootstrap
         // override; it always probes the managed environment so routes stay
         // independent of whether an override exists.
         return environmentPublisher.publish(managedPython);
@@ -1738,10 +1737,10 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   // Check dependencies whenever the selected route or resolved environment changes.
   // Observes the environment object (not just its python path) so a fresh
   // object published by setup completion refreshes whichever route is current.
-  // Ultralytics usability comes only from its managed environment (ticket
-  // 14: a saved override is bootstrap-only) — never automatic system-Python
+  // Ultralytics usability comes only from its managed environment
+  // (a saved override is bootstrap-only) — never automatic system-Python
   // discovery. RF-DETR checks resolve inside the backend to the selected
-  // stack (ticket 12).
+  // stack.
   const providerEnvPython = selectedProviderId === "ultralytics"
     ? resolveUltralyticsRoutePython(envInfo?.python_path ?? null, managedPythonPath)
     : envInfo?.python_path ?? null;
@@ -1797,7 +1796,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     })();
   }, [environmentPublisher, invalidateManagedEnvironmentSizesForMutation, scanProviderEnvironments, selectedRouteId, setRouteDepCheckError, setupTerminalDismissed, setupTerminalError, setupTerminalRoute, setupTerminalSession, setupTerminalStatus]);
 
-  // RF-DETR terminal (ticket 10): refresh the stack inventory, the selected
+  // RF-DETR terminal: refresh the stack inventory, the selected
   // route's dependency readiness, and size state after the app-wide task.
   // Failed setup keeps the partial stack as `Setup incomplete`; success
   // refreshes the same route that was set up so shared-stack readiness
@@ -1846,7 +1845,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
           // State handled in helper; avoid unhandled promise noise.
         }
       }
-      // Ticket 11 resume: the selected stack is ready, so inspect the same
+      // Inspection resume: the selected stack is ready, so inspect the same
       // previously trusted checkpoint and move the route into export
       // configuration. Each terminal session is consumed once: a repeat
       // visit of the same session (for example navigating away and back
@@ -2123,7 +2122,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
           setRouteDepCheckError(routeId, bootstrap.reason);
           return false;
         }
-        // Ticket 14: when a pre-existing saved override is first used to
+        // When a pre-existing saved override is first used to
         // create the environment, explain the bootstrap-only behavior.
         setBootstrapFirstUseNotice(
           getBootstrapFirstUseNotice(appliedPythonOverride, bootstrap.source),
@@ -2212,7 +2211,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     }
   }, [blockOnSetupConflict, cleanupBusy, invalidateManagedEnvironmentSizesForMutation, runUltralyticsRouteSetup, setRouteDepCheckError, stackEnvironments]);
 
-  // Shared core installer for route-owned RF-DETR setup (ticket 10): resolve
+  // Shared core installer for route-owned RF-DETR setup: resolve
   // the selected route to its backend-owned stack mapping, resolve a
   // compatible bootstrap only when the stack needs work, and run one install
   // call for the selected stack only. Only the selected stack is ever
@@ -2309,7 +2308,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
           setRouteDepCheckError(routeId, bootstrap.reason);
           return false;
         }
-        // Ticket 14: when a pre-existing saved override is first used to
+        // When a pre-existing saved override is first used to
         // create the stack, explain the bootstrap-only behavior.
         setBootstrapFirstUseNotice(
           getBootstrapFirstUseNotice(appliedPythonOverride, bootstrap.source),
@@ -2405,7 +2404,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   // Core export invocation — call only when deps are satisfied
   const doStartExport = async (missingDepCount: number, envOverride?: EnvironmentInfo) => {
     const activeEnv = envOverride ?? envInfo;
-    // Ticket 12 + 14: Ultralytics exports run only from its managed
+    // Ultralytics exports run only from its managed
     // environment (a saved override is bootstrap-only) — never from
     // automatic system-Python discovery, which would bypass route setup.
     // RF-DETR exports resolve to the selected stack inside the backend.
@@ -2717,7 +2716,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
       }
 
       if (selectedProviderId === "ultralytics") {
-        // Ticket 14: re-detect the managed environment after install, never
+        // Re-detect the managed environment after install, never
         // the saved bootstrap override. pythonPath is already the managed
         // interpreter (backend installs only into app-owned environments).
         const published = await environmentPublisher.publish(pythonPath);
@@ -2899,7 +2898,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
     currentExportOutputDirRef.current = null;
   };
 
-  // Re-detect the managed environment. Ticket 14: detection never runs
+  // Re-detect the managed environment. Detection never runs
   // through the saved bootstrap override; the override only creates
   // isolated environments at setup time. Detection and loading-state
   // publication go through the shared generation-owning path; the envInfo
@@ -2975,7 +2974,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
   }, [blockOnSetupConflict, mayStartRuntimeUpgrade]);
 
   // Save bootstrap python and re-detect the managed environment.
-  // Ticket 14: saving only records the bootstrap candidate; detection
+  // Saving only records the bootstrap candidate; detection
   // always probes the managed interpreter so the override never runs
   // checks directly.
   const handleSaveAndRedetect = useCallback(async () => {
@@ -3100,12 +3099,12 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
         managedEnvironmentCacheKeysForCleanup(confirmation.keys, stackEnvironments.map((stack) => stack.key)),
       );
       if (confirmation.keys.includes("ultralytics-managed")) {
-        // Ticket 13: the workspace stays put with the model, output
+        // The workspace stays put with the model, output
         // settings, and Python selection intact. Re-detect the managed
         // runtime on every successful deletion (not only when an override
         // survives) so affected Ultralytics routes report their honest
         // missing state while healthy RF-DETR routes keep resolving through
-        // their own stacks. Ticket 14: detection always probes the managed
+        // their own stacks. Detection always probes the managed
         // interpreter, never the saved bootstrap override or unsaved input
         // text, and cleanup never touches settings.
         if (managedEnvironmentDeletionSucceeded(report, "ultralytics-managed")) {

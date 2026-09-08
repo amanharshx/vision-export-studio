@@ -1,4 +1,4 @@
-// Route-owned Ultralytics setup state for ticket 08.
+// Route-owned Ultralytics setup state.
 //
 // One shared Ultralytics environment serves every Ultralytics route, but
 // readiness is per route: the base environment alone never marks a route

@@ -657,7 +657,7 @@ mod tests {
         }
     }
 
-    /// Ticket 14: the saved override is judged against the requested route.
+    /// The saved override is judged against the requested route.
     /// A 3.11 override bootstraps Ultralytics routes but is an incompatible
     /// override for the TFLite route, which needs exactly Python 3.12.
     #[test]

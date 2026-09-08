@@ -1,4 +1,4 @@
-// Terminal environment-setup analytics for ticket 16.
+// Terminal environment-setup analytics.
 //
 // Replaces the retired one-time global setup events (`setup_started`,
 // `setup_completed`, `setup_failed`) with a single terminal event emitted

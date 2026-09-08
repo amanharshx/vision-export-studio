@@ -470,7 +470,7 @@ function inspectFailure(overrides: Record<string, unknown> = {}) {
   } as never;
 }
 
-describe("shouldResumeRfDetrInspectionAfterSetup (ticket 11)", () => {
+describe("shouldResumeRfDetrInspectionAfterSetup", () => {
   const liveSession = {
     terminalSessionId: "terminal-1" as string | null,
     consumedSessionId: null as string | null,
@@ -599,7 +599,7 @@ describe("shouldResumeRfDetrInspectionAfterSetup (ticket 11)", () => {
   });
 });
 
-describe("isRfDetrInspectionReadyForExport (ticket 11)", () => {
+describe("isRfDetrInspectionReadyForExport", () => {
   test("is ready after successful inspection", () => {
     expect(
       isRfDetrInspectionReadyForExport({
@@ -680,7 +680,7 @@ describe("isRfDetrInspectionReadyForExport (ticket 11)", () => {
   });
 });
 
-describe("inspection failure actions (ticket 11)", () => {
+describe("inspection failure actions", () => {
   test("load failure offers retry, manual variant, and file action without guessed defaults", () => {
     const actions = getRfDetrInspectionFailureActions({ status: "failed", result: inspectFailure() });
     expect(actions.canRetry).toBe(true);

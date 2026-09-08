@@ -8,7 +8,7 @@ const identity = {
   modified_ms: 1700000000000,
 };
 
-describe("rfdetr trust binding (ticket 09)", () => {
+describe("rfdetr trust binding", () => {
   test("trust is valid for the same file identity", () => {
     const trusted = { sourcePath: "/tmp/model.pth", identity };
     expect(isRfDetrTrustValid(trusted, "/tmp/model.pth", identity)).toBe(true);
