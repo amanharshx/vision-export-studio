@@ -18,7 +18,6 @@ pub fn run() {
         .manage(RuntimeOperationCoordinator::default())
         .manage(ManagedEnvironments::default())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_focus();
