@@ -57,6 +57,10 @@ export function AboutDialog({
     onOpenChange(false);
     void updater.checkForUpdates();
   };
+  // Build-time constant from package.json; read at render so test setups
+  // that define it can observe it. The controller no longer carries the
+  // installed version over IPC.
+  const installedVersion = typeof __APP_VERSION__ === "undefined" ? "" : __APP_VERSION__;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -81,7 +85,7 @@ export function AboutDialog({
               onClick={updatesEnabled ? checkForUpdates : undefined}
               disabled={!updatesEnabled}
             >
-              {updater.appVersion || "—"}
+              {installedVersion || "—"}
             </button>
           </div>
           <p className="mt-1 max-w-md text-sm text-muted-foreground">

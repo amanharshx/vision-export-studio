@@ -30,11 +30,6 @@ pub fn build_date() -> Option<&'static str> {
 }
 
 #[tauri::command]
-pub fn app_version(app: tauri::AppHandle) -> String {
-    app.package_info().version.to_string()
-}
-
-#[tauri::command]
 pub fn open_url(url: String) -> Result<(), String> {
     if !url.starts_with("https://") && !url.starts_with("http://") {
         return Err("Only web links can be opened".to_string());

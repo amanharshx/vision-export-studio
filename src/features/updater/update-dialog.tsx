@@ -74,6 +74,10 @@ export function UpdateDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const { state, version, releaseDate, releaseNotes, progress, error } = updater;
+  // Build-time constant from package.json; read at render so test setups
+  // that define it can observe it. The controller no longer carries the
+  // installed version over IPC.
+  const installedVersion = typeof __APP_VERSION__ === "undefined" ? "" : __APP_VERSION__;
   const blocking = state === "checking" || state === "installing";
 
   // One branch per dialog state; each state owns its description, body, and
@@ -136,7 +140,7 @@ export function UpdateDialog({
       description = "You have the latest version of Vision Export Studio.";
       body = (
         <ReleaseDetails
-          version={updater.appVersion}
+          version={installedVersion}
           releaseDate={releaseDate}
           releaseNotes={releaseNotes}
           buildDate={updater.buildDate}

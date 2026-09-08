@@ -38,7 +38,6 @@ function resetUpdaterFakes() {
   // never leak in here (and vice versa).
   mock.module("@tauri-apps/api/core", () => ({
     invoke: (command: string) => {
-      if (command === "app_version") return Promise.resolve("0.1.13");
       if (command === "build_date") return Promise.resolve("2026-09-03");
       if (command === "open_url") return Promise.resolve();
       if (command === "check_update") {
@@ -163,6 +162,10 @@ mock.module("@tauri-apps/api/event", () => ({
     };
   },
 }));
+
+// The installed version comes from the Vite build constant in the app.
+// Define it here so the dialogs render it under Bun like vite does.
+(globalThis as Record<string, unknown>).__APP_VERSION__ = "0.1.13";
 
 const { cleanup, fireEvent, render, screen, waitFor } = await import("@testing-library/react");
 const { AboutButton, AboutDialog } = await import("./about-dialog");
