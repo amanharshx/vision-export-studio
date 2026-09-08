@@ -46,9 +46,8 @@ describe("managed environment cleanup helpers", () => {
   });
 
   test("ultralytics cleanup stays in the workspace with no last-runtime state", () => {
-    // Ticket 13 replaced last-runtime and Setup-redirect copy with concise
-    // on-demand recreation copy: cleanup reports only bulk/override flags and
-    // never navigates, so remaining-provider presence is not an input.
+    // Cleanup reports only bulk/override flags and never navigates, so
+    // remaining-provider presence is not an input.
     expect(getManagedEnvironmentCleanupState({ providerId: "ultralytics", hasPythonOverride: false }))
       .toEqual({ hasPythonOverride: false, isBulkCleanup: false });
   });
@@ -280,7 +279,7 @@ describe("managed environment cleanup helpers", () => {
   });
 
   test("cleanup with multiple deletion failures names every failure", () => {
-    // Ticket 13: cleanup never rewrites setup state, so the error message
+    // Cleanup never rewrites setup state, so the error message
     // reports only per-environment deletion failures.
     const report: ManagedEnvironmentCleanupReport = {
       results: [

@@ -1,4 +1,4 @@
-// App-wide environment-setup task model for ticket 03.
+// App-wide environment-setup task model.
 //
 // Represents one active setup operation (provider, route, environment key,
 // honest named phase, summary, logs, terminal result). The install event
@@ -64,8 +64,8 @@ export interface SetupTask {
   dismissed: boolean;
 }
 
-// Named future phases stay declared (the ticket names them explicitly); only
-// the phases a flow reaches are ever assigned.
+// All named phases stay declared; only the phases a flow reaches are ever
+// assigned.
 const SETUP_TASK_PHASE_META: Record<
   SetupTaskPhase,
   { label: string; summary: (provider: string) => string }
@@ -291,7 +291,7 @@ export interface InstallStreamDeps extends InstallEventDeps {
   verifyEnvironment: (pythonPath: string) => Promise<{ yoloPath: string | null }>;
 }
 
-// Ticket 16: injectable terminal-analytics sink. The owner emits exactly one
+// Injectable terminal-analytics sink. The owner emits exactly one
 // `environment_setup_completed` event per started setup with only the
 // allowlisted fields (provider, known environment key, route ID, terminal
 // result, duration). Enablement stays owned by `captureAnalyticsEvent`
@@ -368,7 +368,7 @@ export function createSetupTaskOwner(
     });
   };
 
-  // Python-required pending gate (ticket 06). Lives in this owner so there
+  // Python-required pending gate. Lives in this owner so there
   // is one app-wide setup store, not a parallel one. A generation token plus
   // pending identity rejects stale async completions: cancel or replacement
   // bumps the generation, and any in-flight validation/redetection that
@@ -575,7 +575,7 @@ export function createSetupTaskOwner(
         summary: request.summary ?? initial.summary,
       });
 
-      // Ticket 16: one terminal analytics event per started setup. Buffered
+      // One terminal analytics event per started setup. Buffered
       // or repeated install notifications resolve the stream once, and every
       // terminal path below funnels through emitTerminal exactly once, so a
       // setup task never emits duplicate start/completion records. Each retry
@@ -845,7 +845,7 @@ export function createSetupTaskOwner(
 }
 
 // ---------------------------------------------------------------------------
-// Python-required pending gate (ticket 06): holds at most one
+// Python-required pending gate: holds at most one
 // Python-blocked setup action. The dialog opens only after an explicit setup
 // attempt reports missing/incompatible Python, never on launch or upload. A
 // valid choice or successful redetection retries the stored action exactly

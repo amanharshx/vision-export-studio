@@ -498,7 +498,7 @@ pub async fn cleanup_managed_environments(
     for key in &keys {
         target_keys(&root, key)?;
     }
-    // Ticket 13: cleanup updates only the affected provider. The runtime
+    // Cleanup updates only the affected provider. The runtime
     // guard stays held through removal and report construction, but cleanup
     // never rewrites settings: surviving readiness comes from refreshed
     // provider probes in the UI.
@@ -949,7 +949,7 @@ mod tests {
         );
     }
 
-    /// Ticket 13 cross-provider fixture: Ultralytics runtime plus one RF-DETR
+    /// Cross-provider fixture: Ultralytics runtime plus one RF-DETR
     /// stack, user settings without the retired global flag, and an export
     /// artifact. Every automated deletion test uses a temporary runtime
     /// root; real environments are never touched.
@@ -970,7 +970,7 @@ mod tests {
 
     #[test]
     fn legacy_settings_with_setup_complete_survive_cleanup_byte_identical() {
-        // Ticket 15: older settings files still carrying the retired
+        // Older settings files still carrying the retired
         // setup_complete flag must survive cleanup untouched; cleanup never
         // rewrites settings.
         let root = temp_root("cleanup-legacy-settings");
@@ -1000,7 +1000,7 @@ mod tests {
 
     #[test]
     fn ultralytics_cleanup_preserves_rfdetr_stacks_and_settings_bytes() {
-        // Ticket 13: removing the Ultralytics environment updates only the
+        // Removing the Ultralytics environment updates only the
         // affected provider. Healthy RF-DETR stacks, user settings, and
         // exported artifacts all survive byte-identical.
         let (root, settings_bytes) = seed_cross_provider_cleanup_root("cleanup-ultra-keeps-rfdetr");
@@ -1026,7 +1026,7 @@ mod tests {
 
     #[test]
     fn rfdetr_cleanup_preserves_ultralytics_runtime_and_settings_bytes() {
-        // Ticket 13: removing RF-DETR stacks leaves the healthy Ultralytics
+        // Removing RF-DETR stacks leaves the healthy Ultralytics
         // runtime, user settings, and exported artifacts untouched.
         let (root, settings_bytes) = seed_cross_provider_cleanup_root("cleanup-rfdetr-keeps-ultra");
         let stack = root.join("envs/rfdetr-default/.venv");
@@ -1051,7 +1051,7 @@ mod tests {
 
     #[test]
     fn rfdetr_all_cleanup_preserves_ultralytics_runtime_and_settings_bytes() {
-        // Ticket 13: bulk removal fans out to every existing known stack and
+        // Bulk removal fans out to every existing known stack and
         // still touches only the affected provider.
         let (root, settings_bytes) =
             seed_cross_provider_cleanup_root("cleanup-rfdetr-all-keeps-ultra");

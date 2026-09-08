@@ -832,7 +832,7 @@ mod tests {
             normalized.runtime_dir,
             "/Users/tester/.vision-export-studio"
         );
-        // Ticket 14: existing saved executable paths survive migration so a
+        // Existing saved executable paths survive migration so a
         // bootstrap-only override keeps working as a creation candidate.
         assert_eq!(
             normalized.python_path_override.as_deref(),
@@ -882,7 +882,7 @@ mod tests {
 
     #[test]
     fn legacy_setup_complete_field_is_ignored_without_forced_rewrite() {
-        // Ticket 15: older files carry the retired global flag. Deserialization
+        // Older files carry the retired global flag. Deserialization
         // must tolerate it (present true/false) and normalization must not
         // derive or preserve it, so loading never forces a rewrite.
         for legacy in ["true", "false"] {

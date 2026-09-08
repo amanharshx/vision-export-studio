@@ -1,4 +1,4 @@
-// Shared ticket-16 assertion used by the builder and owner-emission tests:
+// Shared assertion used by the builder and owner-emission tests:
 // an environment-setup event payload must never carry model, filesystem,
 // log, checkpoint, error, or identifier details.
 // @ts-expect-error Bun provides this module at test runtime.

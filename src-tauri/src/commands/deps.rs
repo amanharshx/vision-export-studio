@@ -1034,7 +1034,7 @@ fn check_rfdetr_probe_dep(python: &str, route_id: &str) -> Vec<DepCheckResult> {
 // check_dependencies command
 // ---------------------------------------------------------------------------
 
-/// Ticket 14: Ultralytics dependency checks run only against the app-owned
+/// Ultralytics dependency checks run only against the app-owned
 /// managed environment. A saved bootstrap override (or any other user-owned
 /// interpreter) never runs checks directly: the frontend only checks
 /// managed, and this gate holds for direct invokes. Returns an actionable
@@ -1228,17 +1228,17 @@ fn missing_stack_results_if_absent(
 }
 
 // ---------------------------------------------------------------------------
-// Ultralytics managed environment on-demand creation (ticket 07)
+// Ultralytics managed environment on-demand creation
 // ---------------------------------------------------------------------------
 
-/// True for the shared-environment Ultralytics routes (ticket 08). RF-DETR
+/// True for the shared-environment Ultralytics routes. RF-DETR
 /// routes resolve to isolated stack interpreters instead.
 pub(crate) fn is_ultralytics_route(route_id: &str) -> bool {
     route_id.starts_with("ultralytics.")
 }
 
 /// Resolve the authoritative bootstrap from the saved override for
-/// environment creation or repair. Ticket 14: the saved override is the
+/// environment creation or repair. The saved override is the
 /// highest-priority bootstrap candidate when compatible — a direct invoke
 /// passing another interpreter must neither bypass it nor dodge its
 /// invalid-override error.
@@ -1755,7 +1755,7 @@ fn validate_package_name(name: &str) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 /// Resolve the install target for any install entry point, then validate
-/// only the selected interpreter. Ticket 14: a missing or
+/// only the selected interpreter. A missing or
 /// route-incompatible caller path must not reject setup when the saved
 /// override resolves — the caller path is just a bootstrap candidate, and
 /// validation applies to whatever was actually selected.
@@ -1825,7 +1825,7 @@ pub async fn install_dependencies(
     if python_path.is_empty() {
         return Err("python_path must not be empty".to_string());
     }
-    // Ticket 14: the caller path is only a bootstrap candidate. Existence
+    // The caller path is only a bootstrap candidate. Existence
     // and route-compatibility are validated against the selected
     // interpreter after authoritative resolution (see
     // resolve_install_python), so a missing or incompatible caller path
@@ -1861,7 +1861,7 @@ pub async fn install_dependencies(
         if route_id.starts_with("rfdetr.") && stack_for_route(route_id).is_none() {
             return Err(format!("unknown route_id: {}", route_id));
         }
-        // Route-owned setup (tickets 08 and 10): the target resolves through
+        // Route-owned setup: the target resolves through
         // the authoritative bootstrap path (see resolve_install_python), so a
         // direct invoke cannot bypass the saved override. Only the selected
         // stack or the shared environment is ever created or repaired; the
@@ -2751,7 +2751,7 @@ mod tests {
 
     #[test]
     fn ultralytics_check_gate_allows_only_managed_python() {
-        // Ticket 14: checks never run through a saved bootstrap override or
+        // Checks never run through a saved bootstrap override or
         // any other user-owned interpreter — only the managed environment.
         let managed = venv_python("/tmp/runtime");
         assert!(ultralytics_check_python_error(&managed, "/tmp/runtime").is_none());
@@ -3385,7 +3385,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn ultralytics_route_install_leaves_bootstrap_untouched() {
-        // Ticket 14: creating the shared environment from the saved override
+        // Creating the shared environment from the saved override
         // must never mutate that interpreter's files. Mirrors the frontend
         // flow: the passed Python is the still-missing managed interpreter,
         // so resolution falls back to the saved override as bootstrap.
@@ -3427,7 +3427,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn ultralytics_install_uses_saved_override_over_passed_bootstrap() {
-        // Ticket 14: the saved override is the highest-priority bootstrap
+        // The saved override is the highest-priority bootstrap
         // candidate. A direct invoke passing another interpreter must not
         // bypass it when the managed environment needs work.
         let root =
@@ -3464,7 +3464,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn ultralytics_install_surfaces_invalid_saved_override() {
-        // Ticket 14: an invalid saved override is a visible error when
+        // An invalid saved override is a visible error when
         // creation needs a bootstrap — a direct invoke must not dodge it by
         // passing a working interpreter.
         let root =
@@ -3533,7 +3533,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn ultralytics_route_check_reports_missing_despite_present_interpreter() {
-        // Shared-environment readiness (ticket 08): a present interpreter
+        // Shared-environment readiness: a present interpreter
         // alone never marks a route ready. Route packages missing from it
         // still report missing_package with installable remedies.
         let root = std::env::temp_dir().join(format!("ultralytics-route-check-{}", Uuid::new_v4()));
@@ -3925,7 +3925,7 @@ possible problem with your settings or a recent ultralytics package update.\n8.4
     }
 
     // -----------------------------------------------------------------------
-    // Ticket 10: selected RF-DETR stack creation
+    // Selected RF-DETR stack creation
     // -----------------------------------------------------------------------
 
     #[test]
@@ -4352,7 +4352,7 @@ possible problem with your settings or a recent ultralytics package update.\n8.4
     #[cfg(unix)]
     #[test]
     fn rfdetr_install_uses_saved_override_over_passed_bootstrap() {
-        // Ticket 14: the saved override is the highest-priority bootstrap
+        // The saved override is the highest-priority bootstrap
         // candidate. A direct invoke passing another interpreter must not
         // bypass it when the stack needs work.
         let root =
@@ -4390,7 +4390,7 @@ possible problem with your settings or a recent ultralytics package update.\n8.4
     #[cfg(unix)]
     #[test]
     fn rfdetr_install_surfaces_invalid_saved_override() {
-        // Ticket 14: an invalid saved override is a visible error when stack
+        // An invalid saved override is a visible error when stack
         // creation needs a bootstrap — a direct invoke must not dodge it by
         // passing a working interpreter.
         let root = std::env::temp_dir().join(format!("rfdetr-invalid-override-{}", Uuid::new_v4()));
@@ -4438,7 +4438,7 @@ possible problem with your settings or a recent ultralytics package update.\n8.4
     #[cfg(unix)]
     #[test]
     fn install_selects_override_bootstrap_despite_missing_passed_python() {
-        // Ticket 14: a missing caller path must not reject setup when the
+        // A missing caller path must not reject setup when the
         // saved override is valid — only the selected interpreter is
         // validated.
         let root = std::env::temp_dir().join(format!("install-missing-passed-{}", Uuid::new_v4()));
@@ -4469,7 +4469,7 @@ possible problem with your settings or a recent ultralytics package update.\n8.4
     #[cfg(unix)]
     #[test]
     fn install_selects_override_bootstrap_despite_incompatible_passed_python() {
-        // Ticket 14: a route-incompatible caller path must not reject setup
+        // A route-incompatible caller path must not reject setup
         // when the saved override is compatible.
         let root =
             std::env::temp_dir().join(format!("install-incompatible-passed-{}", Uuid::new_v4()));

@@ -321,7 +321,7 @@ describe("stack environment refresh", () => {
   });
 });
 
-describe("safe setup navigation (ticket 04)", () => {
+describe("safe setup navigation", () => {
   function testEnv(yoloPath: string): EnvironmentInfo {
     return {
       python_path: "/tmp/python",

@@ -244,7 +244,7 @@ describe("RfDetrSetupPanel", () => {
   });
 });
 
-describe("setup panels bootstrap notice (ticket 14)", () => {
+describe("setup panels bootstrap notice", () => {
   const notice =
     "Setting up from your saved Python: it only creates the isolated export environment and is never modified.";
 
@@ -309,7 +309,7 @@ describe("setup panels bootstrap notice (ticket 14)", () => {
   });
 });
 
-describe("RfDetrInspectionFailurePanel (ticket 11)", () => {
+describe("RfDetrInspectionFailurePanel", () => {
   const loadFailure = { canRetry: true, showManualVariant: true, showFileAction: true };
   const plusFailure = { canRetry: false, showManualVariant: false, showFileAction: true };
 

@@ -478,7 +478,7 @@ describe("setup task visibility and details", () => {
   });
 });
 
-describe("safe setup navigation (ticket 04)", () => {
+describe("safe setup navigation", () => {
   test("owner holds install listeners across screen subscribe and unsubscribe", async () => {
     const { deps, handlers } = createFakeDeps({ yoloPath: "/tmp/yolo" });
     const owner = createSetupTaskOwner(deps);
@@ -554,7 +554,7 @@ describe("safe setup navigation (ticket 04)", () => {
   });
 });
 
-describe("python-required pending setup (ticket 06)", () => {
+describe("python-required pending setup", () => {
   function missingResult(
     requirement = "Python 3.10 through 3.13",
   ): BootstrapPythonResult {

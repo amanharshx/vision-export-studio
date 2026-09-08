@@ -570,7 +570,7 @@ fn wait_for_export_child(
     result
 }
 
-/// Ticket 14: Ultralytics exports run only from the app-owned managed
+/// Ultralytics exports run only from the app-owned managed
 /// environment. A saved bootstrap Python only creates that environment and
 /// never runs exports directly, so a direct invoke with another interpreter
 /// (including a saved override) is rejected outside the UI.
@@ -779,7 +779,7 @@ mod tests {
 
     #[test]
     fn unmapped_route_never_exports_through_base_python() {
-        // Ticket 14: no route may export through the caller's interpreter.
+        // No route may export through the caller's interpreter.
         // A route without a mapped stack fails closed instead of running
         // through the passed (possibly override) Python.
         let (root, runtime_str, _) = temp_export_runtime(false);

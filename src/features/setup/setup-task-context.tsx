@@ -66,7 +66,7 @@ const realGateDeps: PythonRequiredDeps = {
 export function SetupTaskProvider({ children }: { children: React.ReactNode }) {
   const ownerRef = useRef<ReturnType<typeof createSetupTaskOwner> | null>(null);
   if (!ownerRef.current) {
-    // Ticket 16: terminal environment-setup analytics flow through the same
+    // Terminal environment-setup analytics flow through the same
     // owner that owns setup readiness, so the event is emitted outside the
     // UI and cannot be bypassed by UI-only paths. Enablement stays owned by
     // captureAnalyticsEvent, which no-ops when disabled; a throw never

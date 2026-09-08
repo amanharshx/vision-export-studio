@@ -457,11 +457,11 @@ export function ExportModal({
   // Missing inspection data fails closed for RF-DETR: export configuration
   // requires both a Ready environment and usable checkpoint inspection.
   const inspectionReady = rfdetrInspection?.ready ?? false;
-  // Route-owned setup (tickets 08 and 10): the same modal opens in a
+  // Route-owned setup: the same modal opens in a
   // setup-only mode until the exact route is ready, then transforms into the
   // export configuration below. Ultralytics owns the shared environment;
-  // each RF-DETR route owns its isolated stack. Ticket 11 adds inspection
-  // readiness on top for RF-DETR, tracked separately so a Ready environment
+  // each RF-DETR route owns its isolated stack. RF-DETR adds inspection
+  // readiness on top, tracked separately so a Ready environment
   // with pending or failed inspection never falls back into setup copy.
   const ultralyticsHides = ultralyticsSetup != null
     && shouldHideUltralyticsExportControls(provider.id, ultralyticsSetup.status);
@@ -657,7 +657,7 @@ export function ExportModal({
               />
             )}
 
-            {/* Ticket 11 follow-up: environment Ready, checkpoint inspection running */}
+            {/* Follow-up: environment Ready, checkpoint inspection running */}
             {rfdetrFollowUpActive && (
               <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
                 <p className="text-sm font-medium text-blue-800">Inspecting checkpoint…</p>
@@ -665,7 +665,7 @@ export function ExportModal({
               </div>
             )}
 
-            {/* Ticket 11 failure: environment stays Ready; Retry, file, and manual-variant recovery */}
+            {/* Failure: environment stays Ready; Retry, file, and manual-variant recovery */}
             {rfdetrFailureActive && rfdetrInspection && (
               <RfDetrInspectionFailurePanel
                 error={rfdetrInspection.error}
@@ -676,7 +676,7 @@ export function ExportModal({
               />
             )}
 
-            {/* Ticket 11 required: environment Ready without inspection data
+            {/* Required: environment Ready without inspection data
                 yet (for example before the checkpoint is trusted). Export
                 stays hidden; the workspace trust step owns the next action. */}
             {rfdetrInspectionRequiredActive && (

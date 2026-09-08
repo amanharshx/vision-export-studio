@@ -47,7 +47,7 @@ function SetupActivityBarHost() {
 function App() {
   const updatesEnabled = !import.meta.env.DEV;
   const [appState, setAppState] = useState<AppState>("landing");
-  // Ticket 15: the retired global setup flag is gone. Navigation and
+  // The retired global setup flag is gone. Navigation and
   // readiness are inventory-driven; only settings load gates first-run and
   // update checks.
   const [settingsReady, setSettingsReady] = useState(false);
@@ -104,7 +104,7 @@ function App() {
   }, [appState, settingsReady]);
 
   const handleGetStarted = () => {
-    // Ticket 12: every user reaches model upload without first preparing a
+    // Every user reaches model upload without first preparing a
     // global runtime. Provider and route setup happens on demand.
     setAppState("export");
   };
