@@ -85,11 +85,15 @@ function resetScenario() {
   // Re-assert this suite's updater fakes before every test: Bun shares
   // module mocks across files in one process, so the updater suite's
   // counting fakes must never leak in here (and vice versa).
-  mock.module("@tauri-apps/plugin-updater", () => ({
-    check: async () => null,
+  mock.module("@tauri-apps/api/core", () => ({
+    invoke: (command: string) => {
+      if (command === "check_update") return Promise.resolve(null);
+      if (command === "install_update") return Promise.resolve();
+      throw new Error(`unexpected invoke: ${command}`);
+    },
   }));
-  mock.module("@tauri-apps/plugin-process", () => ({
-    relaunch: async () => {},
+  mock.module("@tauri-apps/api/event", () => ({
+    listen: async () => () => {},
   }));
 }
 
@@ -97,12 +101,12 @@ function resetScenario() {
 // silent check against this fake (no update available), which stays idle
 // with the dialog closed, so launch and Environment flows observe the same
 // quiet updater state the idle stub used to provide.
-mock.module("@tauri-apps/plugin-updater", () => ({
-  check: async () => null,
-}));
-
-mock.module("@tauri-apps/plugin-process", () => ({
-  relaunch: async () => {},
+mock.module("@tauri-apps/api/core", () => ({
+  invoke: (command: string) => {
+    if (command === "check_update") return Promise.resolve(null);
+    if (command === "install_update") return Promise.resolve();
+    throw new Error(`unexpected invoke: ${command}`);
+  },
 }));
 
 mock.module("@tauri-apps/api/event", () => ({

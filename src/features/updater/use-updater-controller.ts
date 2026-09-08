@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import { relaunch } from "@tauri-apps/plugin-process";
-import { check, type Update } from "@tauri-apps/plugin-updater";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 export type UpdateState =
   | "idle"
@@ -36,16 +36,17 @@ export function formatReleaseDate(raw: string): string | null {
 
 type ReleaseSnapshot = { version: string; date: string; notes: string };
 
-function captureRelease(update: {
-  version?: string | null;
-  date?: string | null;
-  body?: string | null;
-}): ReleaseSnapshot {
-  return {
-    version: update.version ?? "",
-    date: update.date ?? "",
-    notes: update.body ?? "",
-  };
+interface BackendUpdateInfo {
+  available: boolean;
+  version: string;
+  date: string;
+  notes: string;
+}
+
+function errorMessage(value: unknown, fallback: string): string {
+  if (typeof value === "string" && value) return value;
+  if (value instanceof Error && value.message) return value.message;
+  return fallback;
 }
 
 export function useUpdaterController(): UpdaterController {
@@ -63,7 +64,6 @@ export function useUpdaterController(): UpdaterController {
   // newer manual one (or close a dialog the user opened mid-flight).
   const requestRef = useRef(0);
   const stateRef = useRef<UpdateState>("idle");
-  const updateRef = useRef<Update | null>(null);
 
   const syncState = useCallback((next: UpdateState) => {
     stateRef.current = next;
@@ -82,52 +82,43 @@ export function useUpdaterController(): UpdaterController {
     setReleaseNotes("");
   }, []);
 
-  const setDialogOpen = useCallback(
-    (open: boolean) => {
-      if (!open && (stateRef.current === "checking" || stateRef.current === "installing")) {
-        return;
-      }
-      setDialogOpenState(open);
-    },
-    [],
-  );
+  const setDialogOpen = useCallback((open: boolean) => {
+    if (!open && (stateRef.current === "checking" || stateRef.current === "installing")) {
+      return;
+    }
+    setDialogOpenState(open);
+  }, []);
 
-  const rememberUpdate = useCallback(
-    (update: Update) => {
-      updateRef.current = update;
-      setRelease(captureRelease(update));
+  const rememberRelease = useCallback(
+    (info: BackendUpdateInfo) => {
+      setRelease({ version: info.version ?? "", date: info.date ?? "", notes: info.notes ?? "" });
     },
     [setRelease],
   );
-
-  const forgetUpdate = useCallback(() => {
-    updateRef.current = null;
-    clearRelease();
-  }, [clearRelease]);
 
   const runSilentCheck = useCallback(async () => {
     // Never disturb a user-visible operation or the dialog.
     if (operationRef.current !== "idle") return;
     const requestId = ++requestRef.current;
     try {
-      const update = await check();
+      const info = await invoke<BackendUpdateInfo | null>("check_update");
       if (requestId !== requestRef.current) return;
-      if (update) {
-        rememberUpdate(update);
+      if (info?.available) {
+        rememberRelease(info);
         setError("");
         syncState("available");
       } else {
-        forgetUpdate();
+        clearRelease();
         setError("");
         syncState("idle");
       }
     } catch {
       if (requestId !== requestRef.current) return;
-      forgetUpdate();
+      clearRelease();
       setError("");
       syncState("idle");
     }
-  }, [rememberUpdate, forgetUpdate, syncState]);
+  }, [rememberRelease, clearRelease, syncState]);
 
   const runManualCheck = useCallback(async () => {
     if (operationRef.current === "manual" || operationRef.current === "installing") {
@@ -144,26 +135,31 @@ export function useUpdaterController(): UpdaterController {
     clearRelease();
 
     try {
-      const update = await check();
+      const info = await invoke<BackendUpdateInfo | null>("check_update");
       if (requestId !== requestRef.current) return;
 
-      if (update) {
-        rememberUpdate(update);
+      if (info?.available) {
+        rememberRelease(info);
         setError("");
         syncState("available");
+      } else if (info) {
+        rememberRelease(info);
+        setError("");
+        syncState("up-to-date");
       } else {
-        forgetUpdate();
+        clearRelease();
+        setError("");
         syncState("up-to-date");
       }
     } catch (e) {
       if (requestId !== requestRef.current) return;
-      forgetUpdate();
-      setError(e instanceof Error ? e.message : "Failed to check for updates");
+      clearRelease();
+      setError(errorMessage(e, "Failed to check for updates"));
       syncState("error");
     } finally {
       if (requestRef.current === requestId) operationRef.current = "idle";
     }
-  }, [rememberUpdate, forgetUpdate, clearRelease, syncState]);
+  }, [rememberRelease, clearRelease, syncState]);
 
   const checkForUpdates = useCallback(
     (opts?: { silent?: boolean }) => (opts?.silent ? runSilentCheck() : runManualCheck()),
@@ -182,37 +178,28 @@ export function useUpdaterController(): UpdaterController {
     setError("");
     setProgress(null);
 
+    let stopListening: (() => void) | undefined;
     try {
-      const update = updateRef.current;
-      if (!update) {
-        throw new Error("No update available to install");
-      }
-
-      let downloaded = 0;
-      let contentLength = 0;
-      let sawContentLength = false;
-
-      await update.downloadAndInstall((event) => {
-        if (event.event === "Started") {
-          contentLength = event.data.contentLength ?? 0;
-          sawContentLength = contentLength > 0;
-          downloaded = 0;
-          setProgress(sawContentLength ? 0 : null);
-        } else if (event.event === "Progress") {
-          downloaded += event.data.chunkLength;
-          if (sawContentLength && contentLength > 0) {
-            setProgress(Math.min(100, Math.round((downloaded / contentLength) * 100)));
-          } else {
-            setProgress(null);
+      try {
+        stopListening = await listen<number>("update-progress", (event) => {
+          const percent = event.payload;
+          if (typeof percent === "number" && Number.isFinite(percent)) {
+            setProgress(Math.min(100, Math.max(0, Math.round(percent))));
           }
-        }
-      });
-
-      await relaunch();
+        });
+      } catch {
+        stopListening = undefined;
+      }
+      await invoke("install_update");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to install update");
+      setError(errorMessage(e, "Failed to install the update"));
       syncState("error");
     } finally {
+      try {
+        stopListening?.();
+      } catch {
+        // Releasing the progress listener must never mask the install result.
+      }
       operationRef.current = "idle";
     }
   }, [syncState]);

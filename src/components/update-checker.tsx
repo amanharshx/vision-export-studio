@@ -12,7 +12,7 @@ export function UpdateChecker({
 }: {
   updater: UpdaterController;
 }) {
-  const { state, version, progress, error, checkForUpdates } = updater;
+  const { state, version, progress, checkForUpdates } = updater;
 
   const handleClick = () => {
     void checkForUpdates();
@@ -31,15 +31,15 @@ export function UpdateChecker({
       break;
     case "checking":
       icon = <RefreshCw className="h-3.5 w-3.5 animate-spin" />;
-      label = "Checking...";
+      label = "Checking…";
       className = "text-xs text-muted-foreground transition-colors hover:text-foreground";
       title = "Checking for updates";
       break;
     case "installing":
       icon = <RefreshCw className="h-3.5 w-3.5 animate-spin" />;
-      label = progress !== null ? `Downloading... ${progress}%` : "Downloading...";
+      label = progress !== null ? `Downloading… ${progress}%` : "Downloading…";
       className = "text-xs text-muted-foreground transition-colors hover:text-foreground";
-      title = "Downloading and installing update";
+      title = "Downloading and installing the update";
       break;
     case "up-to-date":
       icon = <CheckCircle className="h-3.5 w-3.5" />;
@@ -51,7 +51,7 @@ export function UpdateChecker({
       icon = <AlertCircle className="h-3.5 w-3.5" />;
       label = "Update failed";
       className = "text-xs text-red-500 transition-colors hover:text-red-600";
-      title = error || "Check for updates";
+      title = "Check for updates";
       break;
     default:
       icon = <RefreshCw className="h-3.5 w-3.5" />;

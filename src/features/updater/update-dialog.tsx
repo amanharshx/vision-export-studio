@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { CheckCircle2, Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,6 +15,40 @@ import {
   type UpdaterController,
 } from "./use-updater-controller";
 
+function ReleaseDetails({
+  version,
+  releaseDate,
+  releaseNotes,
+}: {
+  version: string;
+  releaseDate: string;
+  releaseNotes: string;
+}) {
+  const formattedDate = formatReleaseDate(releaseDate);
+  return (
+    <div className="space-y-3">
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
+        <dt className="text-muted-foreground">Version</dt>
+        <dd className="truncate font-mono">{version || "—"}</dd>
+        {formattedDate ? (
+          <>
+            <dt className="text-muted-foreground">Released</dt>
+            <dd className="truncate">{formattedDate}</dd>
+          </>
+        ) : null}
+      </dl>
+      {releaseNotes ? (
+        <div
+          className="max-h-64 overflow-y-auto rounded-md border bg-muted/30 p-3 text-sm whitespace-pre-wrap break-words"
+          aria-label="Release notes"
+        >
+          {releaseNotes}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function UpdateDialog({
   open,
   updater,
@@ -26,7 +60,6 @@ export function UpdateDialog({
 }) {
   const { state, version, releaseDate, releaseNotes, progress, error } = updater;
   const blocking = state === "checking" || state === "installing";
-  const formattedDate = formatReleaseDate(releaseDate);
 
   // One branch per dialog state; each state owns its description, body, and
   // footer together so a state can never show another state's copy.
@@ -35,7 +68,7 @@ export function UpdateDialog({
   let footer: ReactNode = null;
   switch (state) {
     case "checking":
-      description = "Checking for updates…";
+      description = "Checking GitHub for the latest release…";
       body = (
         <div className="flex justify-center py-6">
           <RefreshCw
@@ -46,28 +79,9 @@ export function UpdateDialog({
       );
       break;
     case "available":
-      description = `Version ${version} is available. Download begins only after you choose Install and restart.`;
+      description = `Vision Export Studio ${version} is ready to install. The app will restart automatically.`;
       body = (
-        <div className="space-y-3">
-          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
-            <dt className="text-muted-foreground">Version</dt>
-            <dd className="truncate font-mono">{version || "—"}</dd>
-            {formattedDate ? (
-              <>
-                <dt className="text-muted-foreground">Released</dt>
-                <dd className="truncate">{formattedDate}</dd>
-              </>
-            ) : null}
-          </dl>
-          {releaseNotes ? (
-            <div
-              className="max-h-64 overflow-y-auto rounded-md border bg-muted/30 p-3 text-sm whitespace-pre-wrap break-words"
-              aria-label="Release notes"
-            >
-              {releaseNotes}
-            </div>
-          ) : null}
-        </div>
+        <ReleaseDetails version={version} releaseDate={releaseDate} releaseNotes={releaseNotes} />
       );
       footer = (
         <DialogFooter>
@@ -79,7 +93,7 @@ export function UpdateDialog({
       );
       break;
     case "installing":
-      description = "Downloading and installing…";
+      description = "Downloading and installing the update…";
       body = (
         <div className="space-y-3 py-2">
           {progress !== null ? (
@@ -99,12 +113,9 @@ export function UpdateDialog({
       );
       break;
     case "up-to-date":
-      description = "The installed version is current. You're up to date.";
+      description = "You have the latest version of Vision Export Studio.";
       body = (
-        <div className="flex items-center gap-2 py-2">
-          <CheckCircle2 className="h-5 w-5 shrink-0 text-green-600" aria-hidden="true" />
-          <p className="text-sm">The installed version is current.</p>
-        </div>
+        <ReleaseDetails version={version} releaseDate={releaseDate} releaseNotes={releaseNotes} />
       );
       footer = (
         <DialogFooter>
@@ -114,11 +125,6 @@ export function UpdateDialog({
       break;
     case "error":
       description = `Update failed: ${error}`;
-      body = (
-        <div className="rounded-md border border-destructive/20 bg-destructive/10 p-3">
-          <p className="text-sm break-words">{error}</p>
-        </div>
-      );
       footer = (
         <DialogFooter>
           <Button onClick={() => void updater.checkForUpdates()}>Try again</Button>
@@ -145,7 +151,7 @@ export function UpdateDialog({
         }}
       >
         <DialogHeader>
-          <DialogTitle>Updates</DialogTitle>
+          <DialogTitle>Vision Export Studio updates</DialogTitle>
           <DialogDescription aria-live="polite">{description}</DialogDescription>
         </DialogHeader>
 

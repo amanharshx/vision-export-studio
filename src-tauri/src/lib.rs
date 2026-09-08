@@ -66,6 +66,8 @@ pub fn run() {
             commands::setup::rebuild_managed_runtime,
             commands::setup::save_python_override,
             commands::setup::save_output_dir_override,
+            commands::updater::check_update,
+            commands::updater::install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -5049,6 +5049,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "time",
  "uuid",
 ]
 

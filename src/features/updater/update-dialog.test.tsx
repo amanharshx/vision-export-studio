@@ -12,36 +12,49 @@ import React, { useEffect, useState } from "react";
 import { act } from "react";
 import { useUpdaterController } from "./use-updater-controller";
 
-type DownloadEvent =
-  | { event: "Started"; data: { contentLength?: number } }
-  | { event: "Progress"; data: { chunkLength: number } }
-  | { event: "Finished" };
+type BackendRelease = {
+  available: boolean;
+  version: string;
+  date: string;
+  notes: string;
+};
 
 let checkCalls = 0;
-let checkImpl: () => Promise<unknown> = async () => null;
-let relaunchCalls = 0;
-let relaunchImpl: () => Promise<void> = async () => {};
-let downloadCalls = 0;
+let checkImpl: () => Promise<BackendRelease | null> = async () => null;
+let installCalls = 0;
+let installImpl: () => Promise<void> = async () => {};
+let progressHandlers: Array<(event: { payload: number }) => void> = [];
+let unlistenCalls = 0;
 
 function resetUpdaterFakes() {
   checkCalls = 0;
-  relaunchCalls = 0;
-  downloadCalls = 0;
+  installCalls = 0;
+  progressHandlers = [];
+  unlistenCalls = 0;
   checkImpl = async () => null;
-  relaunchImpl = async () => {};
-  // Re-assert this suite's plugin fakes before every test: Bun shares
+  installImpl = async () => {};
+  // Re-assert this suite's backend fakes before every test: Bun shares
   // module mocks across files in one process, so another suite's fake must
   // never leak in here (and vice versa).
-  mock.module("@tauri-apps/plugin-updater", () => ({
-    check: () => {
-      checkCalls += 1;
-      return checkImpl();
+  mock.module("@tauri-apps/api/core", () => ({
+    invoke: (command: string) => {
+      if (command === "check_update") {
+        checkCalls += 1;
+        return checkImpl();
+      }
+      if (command === "install_update") {
+        installCalls += 1;
+        return installImpl();
+      }
+      throw new Error(`unexpected invoke: ${command}`);
     },
   }));
-  mock.module("@tauri-apps/plugin-process", () => ({
-    relaunch: () => {
-      relaunchCalls += 1;
-      return relaunchImpl();
+  mock.module("@tauri-apps/api/event", () => ({
+    listen: async (event: string, handler: (event: { payload: number }) => void) => {
+      if (event === "update-progress") progressHandlers.push(handler);
+      return () => {
+        unlistenCalls += 1;
+      };
     },
   }));
 }
@@ -122,17 +135,26 @@ mock.module("@/components/ui/dialog", () => {
   };
 });
 
-mock.module("@tauri-apps/plugin-updater", () => ({
-  check: (...args: unknown[]) => {
-    checkCalls += 1;
-    return checkImpl();
+mock.module("@tauri-apps/api/core", () => ({
+  invoke: (command: string) => {
+    if (command === "check_update") {
+      checkCalls += 1;
+      return checkImpl();
+    }
+    if (command === "install_update") {
+      installCalls += 1;
+      return installImpl();
+    }
+    throw new Error(`unexpected invoke: ${command}`);
   },
 }));
 
-mock.module("@tauri-apps/plugin-process", () => ({
-  relaunch: (...args: unknown[]) => {
-    relaunchCalls += 1;
-    return relaunchImpl();
+mock.module("@tauri-apps/api/event", () => ({
+  listen: async (event: string, handler: (event: { payload: number }) => void) => {
+    if (event === "update-progress") progressHandlers.push(handler);
+    return () => {
+      unlistenCalls += 1;
+    };
   },
 }));
 
@@ -140,22 +162,17 @@ const { cleanup, fireEvent, render, screen, waitFor } = await import("@testing-l
 const { UpdateDialog } = await import("./update-dialog");
 const { UpdateChecker } = await import("@/components/update-checker");
 
-function makeFakeUpdate(opts: {
+function makeRelease(opts: {
+  available?: boolean;
   version?: string;
   date?: string;
-  body?: string;
-  downloadImpl?: (onEvent: (e: DownloadEvent) => void) => Promise<void>;
-}) {
+  notes?: string;
+}): BackendRelease {
   return {
+    available: opts.available ?? true,
     version: opts.version ?? "1.2.0",
-    date: opts.date,
-    body: opts.body,
-    currentVersion: "0.1.13",
-    downloadAndInstall: (onEvent?: (e: DownloadEvent) => void) => {
-      downloadCalls += 1;
-      if (opts.downloadImpl) return opts.downloadImpl(onEvent ?? (() => {}));
-      return Promise.resolve();
-    },
+    date: opts.date ?? "",
+    notes: opts.notes ?? "",
   };
 }
 
@@ -202,6 +219,10 @@ async function simulateDismiss() {
   return screen.getByTestId("dismiss-blocked").textContent;
 }
 
+function countOccurrences(haystack: string, needle: string) {
+  return haystack.split(needle).length - 1;
+}
+
 describe("user-invoked update dialog", () => {
   beforeEach(() => {
     cleanup();
@@ -209,12 +230,12 @@ describe("user-invoked update dialog", () => {
   });
 
   test("startup stays silent, then a manual click opens checking with a fresh check", async () => {
-    const manualGate = deferred<unknown>();
+    const manualGate = deferred<BackendRelease | null>();
     let calls = 0;
     checkImpl = () => {
       calls += 1;
       return calls === 1
-        ? Promise.resolve(makeFakeUpdate({ version: "9.9.9", body: "notes" }))
+        ? Promise.resolve(makeRelease({ version: "9.9.9", notes: "notes" }))
         : manualGate.promise;
     };
     render(<Harness silentOnMount />);
@@ -229,20 +250,24 @@ describe("user-invoked update dialog", () => {
     });
     expect(calls).toBe(2);
     expect(screen.getByTestId("dialog-open").textContent).toBe("open");
-    expect(screen.getByRole("dialog").textContent).toMatch(/checking for updates/i);
+    expect(screen.getByRole("dialog").textContent).toContain("Checking GitHub for the latest release…");
     await act(async () => {
       manualGate.resolve(null);
     });
     await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("up-to-date"));
   });
 
-  test("available shows metadata, invalid metadata omits the date, Not now closes quietly", async () => {
+  test("available shows exact copy and metadata, invalid metadata omits the date, Not now closes quietly", async () => {
     const body = "Line one\nLine two\n- item";
     checkImpl = async () =>
-      makeFakeUpdate({ version: "2.4.6", date: "2026-03-14T12:00:00.000Z", body });
+      makeRelease({ version: "2.4.6", date: "2026-03-14T12:00:00.000Z", notes: body });
     render(<Harness />);
     await openAvailableDialog();
     const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain(
+      "Vision Export Studio 2.4.6 is ready to install. The app will restart automatically.",
+    );
+    expect(dialog.textContent).toContain("Vision Export Studio updates");
     expect(dialog.textContent).toContain("2.4.6");
     expect(dialog.textContent).toContain("2026");
     expect(dialog.textContent).toContain("Line one");
@@ -250,60 +275,49 @@ describe("user-invoked update dialog", () => {
     const notes = screen.getByLabelText(/release notes/i);
     expect(notes.textContent).toBe(body);
     expect(notes.className).toMatch(/whitespace-pre-wrap/);
-    expect(downloadCalls).toBe(0);
+    expect(installCalls).toBe(0);
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /not now/i }));
     });
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(downloadCalls).toBe(0);
-    expect(relaunchCalls).toBe(0);
+    expect(installCalls).toBe(0);
 
     cleanup();
     resetUpdaterFakes();
-    checkImpl = async () => makeFakeUpdate({ version: "3.0.0", date: "not-a-date", body: "" });
+    checkImpl = async () => makeRelease({ version: "3.0.0", date: "not-a-date", notes: "" });
     render(<Harness />);
     await openAvailableDialog();
-    expect(screen.getByRole("dialog").textContent).toContain("3.0.0");
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "Vision Export Studio 3.0.0 is ready to install. The app will restart automatically.",
+    );
     expect(screen.getByRole("dialog").textContent).not.toMatch(/released/i);
     expect(screen.queryByLabelText(/release notes/i)).toBeNull();
   });
 
-  test("install starts on click, shows percent progress, then relaunches", async () => {
-    checkImpl = async () =>
-      makeFakeUpdate({
-        version: "1.2.0",
-        body: "notes",
-        downloadImpl: async (onEvent) => {
-          onEvent({ event: "Started", data: { contentLength: 1000 } });
-          onEvent({ event: "Progress", data: { chunkLength: 250 } });
-          onEvent({ event: "Progress", data: { chunkLength: 250 } });
-        },
-      });
+  test("install starts on click, shows percent progress via backend events", async () => {
+    checkImpl = async () => makeRelease({ version: "1.2.0", notes: "notes" });
+    installImpl = async () => {
+      for (const percent of [25, 50]) {
+        for (const handler of [...progressHandlers]) handler({ payload: percent });
+      }
+    };
     render(<Harness />);
     await openAvailableDialog();
-    expect(downloadCalls).toBe(0);
-    expect(relaunchCalls).toBe(0);
+    expect(installCalls).toBe(0);
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /install and restart/i }));
     });
-    await waitFor(() => expect(screen.getByText(/downloading… 50%/i)).not.toBeNull());
-    expect(screen.getByRole("dialog").textContent).toMatch(/downloading and installing/i);
-    await waitFor(() => expect(relaunchCalls).toBe(1));
-    expect(downloadCalls).toBe(1);
+    await waitFor(() => expect(screen.getAllByText(/downloading… 50%/i).length).toBeGreaterThan(0));
+    expect(screen.getByRole("dialog").textContent).toContain("Downloading and installing the update…");
+    expect(screen.getByRole("button", { name: /downloading… 50%/i })).not.toBeNull();
+    await waitFor(() => expect(installCalls).toBe(1));
+    expect(screen.getByTestId("updater-state").textContent).toBe("installing");
   });
 
   test("unknown size is indeterminate; installing blocks dismiss and duplicate installs", async () => {
-    const downloadGate = deferred<void>();
-    checkImpl = async () =>
-      makeFakeUpdate({
-        version: "1.2.0",
-        body: "notes",
-        downloadImpl: async (onEvent) => {
-          onEvent({ event: "Started", data: {} });
-          onEvent({ event: "Progress", data: { chunkLength: 123 } });
-          await downloadGate.promise;
-        },
-      });
+    const installGate = deferred<void>();
+    checkImpl = async () => makeRelease({ version: "1.2.0", notes: "notes" });
+    installImpl = () => installGate.promise;
     render(<Harness />);
     await openAvailableDialog();
     const install = screen.getByRole("button", { name: /install and restart/i });
@@ -314,10 +328,10 @@ describe("user-invoked update dialog", () => {
       fireEvent.click(install);
     });
     await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("installing"));
-    expect(downloadCalls).toBe(1);
+    expect(installCalls).toBe(1);
     const dialog = screen.getByRole("dialog");
-    expect(dialog.textContent).toMatch(/downloading and installing/i);
-    expect(dialog.textContent).toMatch(/downloading…/i);
+    expect(dialog.textContent).toContain("Downloading and installing the update…");
+    expect(dialog.textContent).toContain("Downloading…");
     expect(dialog.textContent).not.toMatch(/%/);
     expect(screen.queryByRole("button", { name: /^close$/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /not now/i })).toBeNull();
@@ -330,14 +344,14 @@ describe("user-invoked update dialog", () => {
     });
     expect(screen.getByTestId("dialog-open").textContent).toBe("open");
     await act(async () => {
-      downloadGate.resolve();
+      installGate.resolve();
     });
-    await waitFor(() => expect(relaunchCalls).toBe(1));
-    expect(downloadCalls).toBe(1);
+    await waitFor(() => expect(installCalls).toBe(1));
+    await waitFor(() => expect(unlistenCalls).toBeGreaterThan(0));
   });
 
   test("checking blocks dismiss and duplicate checks", async () => {
-    const gate = deferred<unknown>();
+    const gate = deferred<BackendRelease | null>();
     checkImpl = () => gate.promise;
     render(<Harness />);
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -346,7 +360,8 @@ describe("user-invoked update dialog", () => {
     });
     expect(checkCalls).toBe(1);
     expect(screen.getByTestId("dialog-open").textContent).toBe("open");
-    expect(screen.getByRole("dialog").textContent).toMatch(/checking for updates/i);
+    expect(screen.getByRole("dialog").textContent).toContain("Checking GitHub for the latest release…");
+    expect(screen.getByRole("button", { name: /checking…/i })).not.toBeNull();
     expect(screen.queryByRole("button", { name: /not now/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /install and restart/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /^done$/i })).toBeNull();
@@ -358,7 +373,7 @@ describe("user-invoked update dialog", () => {
     });
     expect(screen.getByTestId("dialog-open").textContent).toBe("open");
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /checking/i }));
+      fireEvent.click(screen.getByRole("button", { name: /checking…/i }));
     });
     expect(checkCalls).toBe(1);
     await act(async () => {
@@ -368,24 +383,38 @@ describe("user-invoked update dialog", () => {
     expect(await simulateDismiss()).toBe("0");
   });
 
-  test("up-to-date says the version is current and Done closes", async () => {
-    checkImpl = async () => null;
+  test("up-to-date shows the exact sentence once with current release metadata and Done closes", async () => {
+    checkImpl = async () =>
+      makeRelease({
+        available: false,
+        version: "0.1.13",
+        date: "2026-02-20T12:00:00.000Z",
+        notes: "Current notes",
+      });
     render(<Harness />);
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /^updates$/i }));
     });
     await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("up-to-date"));
-    expect(screen.getByRole("dialog").textContent).toMatch(/installed version is current/i);
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("You have the latest version of Vision Export Studio.");
+    expect(countOccurrences(dialog.textContent ?? "", "You have the latest version of Vision Export Studio.")).toBe(1);
+    expect(dialog.textContent).toContain("0.1.13");
+    expect(dialog.textContent).toContain("2026");
+    expect(dialog.textContent).toContain("Current notes");
+    expect(dialog.textContent).not.toContain("The installed version is current");
+    expect(dialog.textContent).not.toContain("...");
     expect(screen.getByRole("button", { name: /^done$/i })).not.toBeNull();
+    expect(screen.getByRole("button", { name: /up to date/i })).not.toBeNull();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /^done$/i }));
     });
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  test("errors persist, allow closing, and reopening retries with a fresh check", async () => {
+  test("errors appear once, allow closing, and reopening retries with a fresh check", async () => {
     let attempts = 0;
-    const secondGate = deferred<unknown>();
+    const secondGate = deferred<BackendRelease | null>();
     checkImpl = async () => {
       attempts += 1;
       if (attempts === 1) throw new Error("network down");
@@ -396,7 +425,10 @@ describe("user-invoked update dialog", () => {
       fireEvent.click(screen.getByRole("button", { name: /^updates$/i }));
     });
     await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("error"));
-    expect(screen.getByRole("dialog").textContent).toContain("network down");
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("Update failed: network down");
+    expect(countOccurrences(dialog.textContent ?? "", "network down")).toBe(1);
+    expect(dialog.textContent).not.toContain("...");
     expect(screen.getByRole("button", { name: /try again/i })).not.toBeNull();
     expect(screen.getByRole("button", { name: /^close$/i })).not.toBeNull();
     await act(async () => {});
@@ -420,32 +452,10 @@ describe("user-invoked update dialog", () => {
     expect(attempts).toBe(2);
   });
 
-  test("install and relaunch failures stay in error for retry", async () => {
-    checkImpl = async () =>
-      makeFakeUpdate({
-        version: "1.2.0",
-        body: "notes",
-        downloadImpl: async () => {
-          throw new Error("install exploded");
-        },
-      });
-    render(<Harness />);
-    await openAvailableDialog();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /install and restart/i }));
-    });
-    await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("error"));
-    expect(screen.getByRole("dialog").textContent).toContain("install exploded");
-    expect(relaunchCalls).toBe(0);
-    expect(screen.getByRole("button", { name: /try again/i })).not.toBeNull();
-    await act(async () => {});
-    expect(screen.getByTestId("updater-state").textContent).toBe("error");
-
-    cleanup();
-    resetUpdaterFakes();
-    checkImpl = async () => makeFakeUpdate({ version: "1.2.0", body: "notes" });
-    relaunchImpl = async () => {
-      throw new Error("relaunch exploded");
+  test("install failures stay in error once for retry", async () => {
+    checkImpl = async () => makeRelease({ version: "1.2.0", notes: "notes" });
+    installImpl = async () => {
+      throw new Error("install exploded");
     };
     render(<Harness />);
     await openAvailableDialog();
@@ -453,16 +463,38 @@ describe("user-invoked update dialog", () => {
       fireEvent.click(screen.getByRole("button", { name: /install and restart/i }));
     });
     await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("error"));
-    expect(screen.getByRole("dialog").textContent).toContain("relaunch exploded");
-    expect(downloadCalls).toBe(1);
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("Update failed: install exploded");
+    expect(countOccurrences(dialog.textContent ?? "", "install exploded")).toBe(1);
+    expect(installCalls).toBe(1);
+    expect(screen.getByRole("button", { name: /try again/i })).not.toBeNull();
+    await act(async () => {});
+    expect(screen.getByTestId("updater-state").textContent).toBe("error");
+
+    cleanup();
+    resetUpdaterFakes();
+    checkImpl = async () => makeRelease({ version: "1.2.0", notes: "notes" });
+    installImpl = async () => {
+      throw new Error("No update is available to install.");
+    };
+    render(<Harness />);
+    await openAvailableDialog();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /install and restart/i }));
+    });
+    await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("error"));
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "Update failed: No update is available to install.",
+    );
+    expect(installCalls).toBe(1);
     expect(screen.getByRole("button", { name: /try again/i })).not.toBeNull();
     await act(async () => {});
     expect(screen.getByTestId("updater-state").textContent).toBe("error");
   });
 
   test("manual check during silent flight is fresh; stale silent results never land", async () => {
-    const silentGate = deferred<unknown>();
-    const manualGate = deferred<unknown>();
+    const silentGate = deferred<BackendRelease | null>();
+    const manualGate = deferred<BackendRelease | null>();
     let calls = 0;
     checkImpl = () => {
       calls += 1;
@@ -476,19 +508,22 @@ describe("user-invoked update dialog", () => {
     });
     expect(calls).toBe(2);
     expect(screen.getByTestId("dialog-open").textContent).toBe("open");
-    expect(screen.getByRole("dialog").textContent).toMatch(/checking for updates/i);
+    expect(screen.getByRole("dialog").textContent).toContain("Checking GitHub for the latest release…");
     await act(async () => {
-      silentGate.resolve(makeFakeUpdate({ version: "0.0.1", body: "stale" }));
+      silentGate.resolve(makeRelease({ version: "0.0.1", notes: "stale" }));
     });
     await act(async () => {});
     // The stale silent result changes nothing: still open, still checking.
     expect(screen.getByTestId("dialog-open").textContent).toBe("open");
     expect(screen.getByTestId("updater-state").textContent).toBe("checking");
     await act(async () => {
-      manualGate.resolve(makeFakeUpdate({ version: "7.7.7", body: "fresh" }));
+      manualGate.resolve(makeRelease({ version: "7.7.7", notes: "fresh" }));
     });
     await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("available"));
     expect(screen.getByRole("dialog").textContent).toContain("7.7.7");
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "Vision Export Studio 7.7.7 is ready to install. The app will restart automatically.",
+    );
     expect(screen.getByRole("dialog").textContent).not.toContain("stale");
   });
 });
