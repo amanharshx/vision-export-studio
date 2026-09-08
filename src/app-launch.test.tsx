@@ -22,6 +22,12 @@ import type {
 } from "@/lib/types";
 import type { HostSupportResult } from "@/lib/tauri/app";
 import type { UpdaterController } from "@/features/updater/use-updater-controller";
+import { ensureRealUpdaterModule } from "@/features/updater/updater-test-utils";
+
+// Captured before any mock.module call in this process pollutes the cache.
+// The updater dialog suite reuses this real module via globalThis instead of
+// importing the mocked path, so both suites pass in one `bun test` process.
+ensureRealUpdaterModule();
 
 // Launch contract, exercised through the real App: landing renders
 // without the retired Setup screen, Get Started opens model upload for every
@@ -87,19 +93,28 @@ function resetScenario() {
 
 const idleUpdater: UpdaterController = {
   state: "idle",
+  dialogOpen: false,
   version: "",
-  progress: 0,
+  releaseDate: "",
+  releaseNotes: "",
+  progress: null,
   error: "",
-  hasDismissedAnnouncementThisSession: false,
   checkForUpdates: async () => {},
-  beginInstall: async () => {},
-  restartToUpdate: async () => {},
-  dismissAnnouncement: () => {},
+  installUpdate: async () => {},
+  setDialogOpen: () => {},
 };
 
-mock.module("@/features/updater/use-updater-controller", () => ({
-  useUpdaterController: () => idleUpdater,
-}));
+mock.module("@/features/updater/use-updater-controller", () => {
+  const real = (globalThis as Record<string, unknown>).__realUpdaterModule as
+    | Record<string, unknown>
+    | undefined;
+  return {
+    useUpdaterController: () => idleUpdater,
+    formatReleaseDate:
+      (real?.formatReleaseDate as ((raw: string) => string | null) | undefined) ??
+      (() => null),
+  };
+});
 
 mock.module("@tauri-apps/api/event", () => ({
   listen: async () => () => {},
@@ -116,27 +131,7 @@ mock.module("@tauri-apps/plugin-dialog", () => ({
   confirm: async () => false,
 }));
 
-// Radix Dialog/Sheet portals never mount under happy-dom, so no overlay UI
-// can open in client-rendered tests. These faithful passthroughs preserve the
-// open contract (closed renders nothing, open renders children inline) while
-// leaving every other UI module untouched.
-type OverlayMockProps = {
-  open?: boolean;
-  children?: React.ReactNode;
-  onOpenChange?: (open: boolean) => void;
-  [key: string]: unknown;
-};
-
-function mockOverlayModules() {
-  const passthrough = ({ children }: OverlayMockProps) => <>{children}</>;
-  const root = ({ open, children }: OverlayMockProps) => (open ? <>{children}</> : null);
-  const content = ({ children }: OverlayMockProps) => <div role="dialog">{children}</div>;
-  const overlay = () => null;
-  const title = ({ children }: OverlayMockProps) => <h2>{children}</h2>;
-  const description = ({ children }: OverlayMockProps) => <p>{children}</p>;
-  const section = ({ children }: OverlayMockProps) => <div>{children}</div>;
-  return { passthrough, root, content, overlay, title, description, section };
-}
+import { mockOverlayModules } from "@/features/updater/updater-test-utils";
 
 mock.module("@/components/ui/sheet", () => {
   const { passthrough, root, content, overlay, title, description, section } = mockOverlayModules();
