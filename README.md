@@ -79,14 +79,13 @@ Current Linux release assets include Homebrew tarball, `.AppImage`, `.deb`, and 
 
 ### In-App Updates
 
-Released builds can check for updates from `Updates` inside the app.
+Released builds can check for updates from `About` inside the app.
 
 Expected flow:
 
-- click `Updates`
+- open `About` and click `Check for Updates`
 - if no update exists, app shows `Up to date`
-- if update exists, app offers `Update to <version>`
-- after install, click `Restart to update`
+- if update exists, app offers `Install and restart`
 
 Updater metadata is served from GitHub Releases.
 

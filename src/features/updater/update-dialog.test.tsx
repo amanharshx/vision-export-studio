@@ -38,6 +38,9 @@ function resetUpdaterFakes() {
   // never leak in here (and vice versa).
   mock.module("@tauri-apps/api/core", () => ({
     invoke: (command: string) => {
+      if (command === "app_version") return Promise.resolve("0.1.13");
+      if (command === "build_date") return Promise.resolve("2026-09-03");
+      if (command === "open_url") return Promise.resolve();
       if (command === "check_update") {
         checkCalls += 1;
         return checkImpl();
@@ -137,6 +140,9 @@ mock.module("@/components/ui/dialog", () => {
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string) => {
+    if (command === "app_version") return Promise.resolve("0.1.13");
+    if (command === "build_date") return Promise.resolve("2026-09-03");
+    if (command === "open_url") return Promise.resolve();
     if (command === "check_update") {
       checkCalls += 1;
       return checkImpl();
@@ -159,8 +165,8 @@ mock.module("@tauri-apps/api/event", () => ({
 }));
 
 const { cleanup, fireEvent, render, screen, waitFor } = await import("@testing-library/react");
+const { AboutButton, AboutDialog } = await import("./about-dialog");
 const { UpdateDialog } = await import("./update-dialog");
-const { UpdateChecker } = await import("@/components/update-checker");
 
 function makeRelease(opts: {
   available?: boolean;
@@ -187,22 +193,42 @@ function deferred<T>() {
 }
 
 async function openAvailableDialog() {
-  await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: /^updates$/i }));
-  });
+  await openAboutAndCheck();
   await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("available"));
+}
+
+async function openAboutAndCheck() {
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /about/i }));
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /check for updates/i }));
+  });
 }
 
 function Harness({ silentOnMount = false }: { silentOnMount?: boolean }) {
   const updater = useUpdaterController();
+  const [aboutOpen, setAboutOpen] = useState(false);
   useEffect(() => {
     if (silentOnMount) void updater.checkForUpdates({ silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [silentOnMount]);
   return (
     <div>
-      <UpdateChecker updater={updater} />
+      <AboutButton
+        onClick={() => setAboutOpen(true)}
+        updateAvailable={updater.state === "available"}
+      />
+      <AboutDialog
+        open={aboutOpen}
+        updatesEnabled
+        updater={updater}
+        onOpenChange={setAboutOpen}
+      />
       <UpdateDialog open={updater.dialogOpen} updater={updater} onOpenChange={updater.setDialogOpen} />
+      <button type="button" aria-label="Attempt check" onClick={() => void updater.checkForUpdates()}>
+        Attempt check
+      </button>
       <button type="button" aria-label="Attempt close" onClick={() => updater.setDialogOpen(false)}>
         Attempt close
       </button>
@@ -229,6 +255,41 @@ describe("user-invoked update dialog", () => {
     resetUpdaterFakes();
   });
 
+  test("About shows application details without changelog; changelog lives in Update dialog", async () => {
+    checkImpl = async () =>
+      makeRelease({
+        available: false,
+        version: "0.1.13",
+        notes: "## What's Changed\n\n- Current release notes",
+      });
+    render(<Harness silentOnMount />);
+    await waitFor(() => expect(checkCalls).toBe(1));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /about/i }));
+    });
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("Vision Export Studio");
+    expect(dialog.textContent).toContain("Open source");
+    expect(dialog.textContent).toContain("MIT · github.com/amanharshx/vision-export-studio");
+    expect(dialog.textContent).toContain("Built2026-09-03");
+    expect(screen.getByRole("img", { name: /github/i })).not.toBeNull();
+    expect(screen.getByRole("button", { name: /view repository/i })).not.toBeNull();
+    expect(screen.getByRole("button", { name: /check for updates/i })).not.toBeNull();
+    // The About dialog never renders release notes.
+    expect(screen.queryByLabelText(/changelog/i)).toBeNull();
+    expect(checkCalls).toBe(1);
+
+    // Clicking Check for Updates closes About and opens the Update dialog with notes.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /check for updates/i }));
+    });
+    await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("up-to-date"));
+    const changelog = await waitFor(() => screen.getByLabelText(/changelog/i));
+    expect(changelog.textContent).toContain("Current release notes");
+  });
+
   test("startup stays silent, then a manual click opens checking with a fresh check", async () => {
     const manualGate = deferred<BackendRelease | null>();
     let calls = 0;
@@ -243,11 +304,9 @@ describe("user-invoked update dialog", () => {
     expect(calls).toBe(1);
     expect(screen.getByTestId("dialog-open").textContent).toBe("closed");
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("button", { name: /update to 9\.9\.9/i })).not.toBeNull();
+    expect(screen.getByLabelText(/update available/i)).not.toBeNull();
 
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /update to 9\.9\.9/i }));
-    });
+    await openAboutAndCheck();
     expect(calls).toBe(2);
     expect(screen.getByTestId("dialog-open").textContent).toBe("open");
     expect(screen.getByRole("dialog").textContent).toContain("Checking GitHub for the latest release…");
@@ -258,7 +317,8 @@ describe("user-invoked update dialog", () => {
   });
 
   test("available shows exact copy and metadata, invalid metadata omits the date, Not now closes quietly", async () => {
-    const body = "Line one\nLine two\n- item";
+    const body =
+      "## What's Changed\n\n- Line one by @amanharshx in https://github.com/amanharshx/vision-export-studio/pull/158\n- Line two";
     checkImpl = async () =>
       makeRelease({ version: "2.4.6", date: "2026-03-14T12:00:00.000Z", notes: body });
     render(<Harness />);
@@ -270,11 +330,12 @@ describe("user-invoked update dialog", () => {
     expect(dialog.textContent).toContain("Vision Export Studio updates");
     expect(dialog.textContent).toContain("2.4.6");
     expect(dialog.textContent).toContain("2026");
-    expect(dialog.textContent).toContain("Line one");
-    expect(dialog.textContent).toContain("Line two");
-    const notes = screen.getByLabelText(/release notes/i);
-    expect(notes.textContent).toBe(body);
-    expect(notes.className).toMatch(/whitespace-pre-wrap/);
+    const notes = await waitFor(() => screen.getByLabelText(/changelog/i));
+    expect(notes.textContent).toContain("Line one");
+    expect(notes.textContent).toContain("Line two");
+    expect(screen.getByRole("heading", { name: "What's Changed" })).not.toBeNull();
+    expect(screen.getByRole("link", { name: "@amanharshx" })).not.toBeNull();
+    expect(screen.getByRole("link", { name: "#158" })).not.toBeNull();
     expect(installCalls).toBe(0);
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /not now/i }));
@@ -291,7 +352,7 @@ describe("user-invoked update dialog", () => {
       "Vision Export Studio 3.0.0 is ready to install. The app will restart automatically.",
     );
     expect(screen.getByRole("dialog").textContent).not.toMatch(/released/i);
-    expect(screen.queryByLabelText(/release notes/i)).toBeNull();
+    expect(screen.queryByLabelText(/changelog/i)).toBeNull();
   });
 
   test("install starts on click, shows percent progress via backend events", async () => {
@@ -309,7 +370,6 @@ describe("user-invoked update dialog", () => {
     });
     await waitFor(() => expect(screen.getAllByText(/downloading… 50%/i).length).toBeGreaterThan(0));
     expect(screen.getByRole("dialog").textContent).toContain("Downloading and installing the update…");
-    expect(screen.getByRole("button", { name: /downloading… 50%/i })).not.toBeNull();
     await waitFor(() => expect(installCalls).toBe(1));
     expect(screen.getByTestId("updater-state").textContent).toBe("installing");
   });
@@ -355,13 +415,10 @@ describe("user-invoked update dialog", () => {
     checkImpl = () => gate.promise;
     render(<Harness />);
     expect(screen.queryByRole("dialog")).toBeNull();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /^updates$/i }));
-    });
+    await openAboutAndCheck();
     expect(checkCalls).toBe(1);
     expect(screen.getByTestId("dialog-open").textContent).toBe("open");
     expect(screen.getByRole("dialog").textContent).toContain("Checking GitHub for the latest release…");
-    expect(screen.getByRole("button", { name: /checking…/i })).not.toBeNull();
     expect(screen.queryByRole("button", { name: /not now/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /install and restart/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /^done$/i })).toBeNull();
@@ -373,7 +430,7 @@ describe("user-invoked update dialog", () => {
     });
     expect(screen.getByTestId("dialog-open").textContent).toBe("open");
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /checking…/i }));
+      fireEvent.click(screen.getByRole("button", { name: /attempt check/i }));
     });
     expect(checkCalls).toBe(1);
     await act(async () => {
@@ -392,9 +449,7 @@ describe("user-invoked update dialog", () => {
         notes: "Current notes",
       });
     render(<Harness />);
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /^updates$/i }));
-    });
+    await openAboutAndCheck();
     await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("up-to-date"));
     const dialog = screen.getByRole("dialog");
     expect(dialog.textContent).toContain("You have the latest version of Vision Export Studio.");
@@ -405,7 +460,6 @@ describe("user-invoked update dialog", () => {
     expect(dialog.textContent).not.toContain("The installed version is current");
     expect(dialog.textContent).not.toContain("...");
     expect(screen.getByRole("button", { name: /^done$/i })).not.toBeNull();
-    expect(screen.getByRole("button", { name: /up to date/i })).not.toBeNull();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /^done$/i }));
     });
@@ -421,9 +475,7 @@ describe("user-invoked update dialog", () => {
       return secondGate.promise;
     };
     render(<Harness />);
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /^updates$/i }));
-    });
+    await openAboutAndCheck();
     await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("error"));
     const dialog = screen.getByRole("dialog");
     expect(dialog.textContent).toContain("Update failed: network down");
@@ -440,10 +492,8 @@ describe("user-invoked update dialog", () => {
       fireEvent.click(screen.getByRole("button", { name: "Attempt close" }));
     });
     expect(screen.queryByRole("dialog")).toBeNull();
-    // Reopening performs a fresh check.
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /update failed/i }));
-    });
+    // Reopening About and checking again performs a fresh check.
+    await openAboutAndCheck();
     await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("checking"));
     await act(async () => {
       secondGate.resolve(null);
@@ -503,9 +553,7 @@ describe("user-invoked update dialog", () => {
     render(<Harness silentOnMount />);
     await waitFor(() => expect(calls).toBe(1));
     expect(screen.queryByRole("dialog")).toBeNull();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /^updates$/i }));
-    });
+    await openAboutAndCheck();
     expect(calls).toBe(2);
     expect(screen.getByTestId("dialog-open").textContent).toBe("open");
     expect(screen.getByRole("dialog").textContent).toContain("Checking GitHub for the latest release…");

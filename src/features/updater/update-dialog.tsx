@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,14 +15,20 @@ import {
   type UpdaterController,
 } from "./use-updater-controller";
 
+const ReleaseNotes = lazy(() =>
+  import("./release-notes").then((module) => ({ default: module.ReleaseNotes })),
+);
+
 function ReleaseDetails({
   version,
   releaseDate,
   releaseNotes,
+  buildDate,
 }: {
   version: string;
   releaseDate: string;
   releaseNotes: string;
+  buildDate: string;
 }) {
   const formattedDate = formatReleaseDate(releaseDate);
   return (
@@ -36,14 +42,23 @@ function ReleaseDetails({
             <dd className="truncate">{formattedDate}</dd>
           </>
         ) : null}
+        {buildDate ? (
+          <>
+            <dt className="text-muted-foreground">Built</dt>
+            <dd className="truncate">{buildDate}</dd>
+          </>
+        ) : null}
       </dl>
       {releaseNotes ? (
-        <div
-          className="max-h-64 overflow-y-auto rounded-md border bg-muted/30 p-3 text-sm whitespace-pre-wrap break-words"
-          aria-label="Release notes"
-        >
-          {releaseNotes}
-        </div>
+        <section className="max-h-72 overflow-y-auto border-t pt-3 text-sm">
+          <Suspense
+            fallback={
+              <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" aria-hidden="true" />
+            }
+          >
+            <ReleaseNotes source={releaseNotes} />
+          </Suspense>
+        </section>
       ) : null}
     </div>
   );
@@ -81,7 +96,12 @@ export function UpdateDialog({
     case "available":
       description = `Vision Export Studio ${version} is ready to install. The app will restart automatically.`;
       body = (
-        <ReleaseDetails version={version} releaseDate={releaseDate} releaseNotes={releaseNotes} />
+        <ReleaseDetails
+          version={updater.appVersion}
+          releaseDate={releaseDate}
+          releaseNotes={releaseNotes}
+          buildDate={updater.buildDate}
+        />
       );
       footer = (
         <DialogFooter>
@@ -115,7 +135,12 @@ export function UpdateDialog({
     case "up-to-date":
       description = "You have the latest version of Vision Export Studio.";
       body = (
-        <ReleaseDetails version={version} releaseDate={releaseDate} releaseNotes={releaseNotes} />
+        <ReleaseDetails
+          version={updater.appVersion}
+          releaseDate={releaseDate}
+          releaseNotes={releaseNotes}
+          buildDate={updater.buildDate}
+        />
       );
       footer = (
         <DialogFooter>

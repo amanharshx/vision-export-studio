@@ -50,7 +50,7 @@ import type {
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ChevronDown, FileBox, FolderOpen, Info, RefreshCw, RotateCcw, X, CircleHelp, BadgeCheck, CircleX, CircleDashed, TriangleAlert } from "lucide-react";
-import { UpdateChecker } from "@/components/update-checker";
+import { AboutButton } from "@/features/updater/about-dialog";
 import {
   Sheet,
   SheetContent,
@@ -79,7 +79,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { UpdaterController } from "@/features/updater/use-updater-controller";
 
 import { DropZone } from "./drop-zone";
 import { ExportModal, type RfDetrInspectionModalState, type RfDetrSetupModalState, type UltralyticsSetupModalState } from "./export-modal";
@@ -1131,11 +1130,11 @@ export function createEnvironmentPublisher(deps: {
 
 interface ExportWorkspaceProps {
   onBack: () => void;
-  updatesEnabled: boolean;
-  updater: UpdaterController;
+  onOpenAbout: () => void;
+  updateAvailable: boolean;
 }
 
-export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorkspaceProps) {
+export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: ExportWorkspaceProps) {
   const {
     task: setupTask,
     startRuntimeInstall,
@@ -3189,7 +3188,7 @@ export function ExportWorkspace({ onBack, updatesEnabled, updater }: ExportWorks
           <Info className="h-3.5 w-3.5" />
         </button>
 
-        {updatesEnabled ? <UpdateChecker updater={updater} /> : null}
+        <AboutButton onClick={onOpenAbout} updateAvailable={updateAvailable} />
       </div>
 
       {/* Settings slide-in panel */}
