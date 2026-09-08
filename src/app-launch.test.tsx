@@ -103,8 +103,7 @@ function resetScenario() {
 // with the dialog closed, so launch and Environment flows observe the same
 // quiet updater state the idle stub used to provide.
 mock.module("@tauri-apps/api/core", () => ({
-  invoke: (command: string) => {
-    if (command === "app_version") return Promise.resolve("0.1.13");
+    invoke: (command: string) => {
     if (command === "build_date") return Promise.resolve("2026-09-03");
     if (command === "check_update") return Promise.resolve(null);
     if (command === "install_update") return Promise.resolve();

@@ -138,8 +138,7 @@ mock.module("@/components/ui/dialog", () => {
 });
 
 mock.module("@tauri-apps/api/core", () => ({
-  invoke: (command: string) => {
-    if (command === "app_version") return Promise.resolve("0.1.13");
+    invoke: (command: string) => {
     if (command === "build_date") return Promise.resolve("2026-09-03");
     if (command === "open_url") return Promise.resolve();
     if (command === "check_update") {
