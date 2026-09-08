@@ -49,9 +49,10 @@ pub fn open_url(url: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     let mut command = {
-        let mut command = Command::new("cmd");
-        command.args(["/c", "start", ""]);
-        command.arg(&url);
+        // Open the URL without a shell: cmd.exe would parse metacharacters
+        // such as & inside the URL and run whatever follows as a command.
+        let mut command = Command::new("rundll32");
+        command.args(["url.dll,FileProtocolHandler", &url]);
         command
     };
 

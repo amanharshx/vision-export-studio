@@ -330,6 +330,8 @@ describe("user-invoked update dialog", () => {
     expect(dialog.textContent).toContain("Vision Export Studio updates");
     expect(dialog.textContent).toContain("2.4.6");
     expect(dialog.textContent).toContain("2026");
+    // The Version row names the available release, not the installed app.
+    expect(screen.getByText("Version").nextElementSibling?.textContent).toBe("2.4.6");
     const notes = await waitFor(() => screen.getByLabelText(/changelog/i));
     expect(notes.textContent).toContain("Line one");
     expect(notes.textContent).toContain("Line two");

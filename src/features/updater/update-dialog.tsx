@@ -97,7 +97,7 @@ export function UpdateDialog({
       description = `Vision Export Studio ${version} is ready to install. The app will restart automatically.`;
       body = (
         <ReleaseDetails
-          version={updater.appVersion}
+          version={version}
           releaseDate={releaseDate}
           releaseNotes={releaseNotes}
           buildDate={updater.buildDate}
