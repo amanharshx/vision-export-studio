@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ExportWorkspace } from "@/features/export/export-workspace";
-import { UpdateAnnouncement } from "@/features/updater/update-announcement";
+import { UpdateDialog } from "@/features/updater/update-dialog";
 import { useUpdaterController } from "@/features/updater/use-updater-controller";
 import { LandingScreen } from "@/features/landing-screen";
 import { SetupActivityBar } from "@/features/setup/setup-activity-bar";
@@ -109,11 +109,6 @@ function App() {
     setAppState("export");
   };
 
-  const showUpdateAnnouncement =
-    updatesEnabled &&
-    updater.state === "available" &&
-    !updater.hasDismissedAnnouncementThisSession;
-
   let content: ReactNode;
 
   if (appState === "landing") {
@@ -139,12 +134,10 @@ function App() {
     <SetupTaskProvider>
       <TitleBarFill />
       {updatesEnabled ? (
-        <UpdateAnnouncement
-          open={showUpdateAnnouncement}
+        <UpdateDialog
+          open={updater.dialogOpen}
           updater={updater}
-          onOpenChange={(open) => {
-            if (!open) updater.dismissAnnouncement();
-          }}
+          onOpenChange={updater.setDialogOpen}
         />
       ) : null}
       {content}

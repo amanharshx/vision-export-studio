@@ -1,161 +1,219 @@
-import { useEffect, useRef, useState } from "react";
-import { relaunch } from "@tauri-apps/plugin-process";
-import { check, type Update } from "@tauri-apps/plugin-updater";
+import { useCallback, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 export type UpdateState =
   | "idle"
   | "checking"
   | "available"
-  | "downloading"
-  | "ready"
+  | "installing"
   | "up-to-date"
   | "error";
 
 export interface UpdaterController {
   state: UpdateState;
+  dialogOpen: boolean;
   version: string;
-  progress: number;
+  releaseDate: string;
+  releaseNotes: string;
+  progress: number | null;
   error: string;
-  hasDismissedAnnouncementThisSession: boolean;
   checkForUpdates: (opts?: { silent?: boolean }) => Promise<void>;
-  beginInstall: () => Promise<void>;
-  restartToUpdate: () => Promise<void>;
-  dismissAnnouncement: () => void;
+  installUpdate: () => Promise<void>;
+  setDialogOpen: (open: boolean) => void;
+}
+
+export function formatReleaseDate(raw: string): string | null {
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+type ReleaseSnapshot = { version: string; date: string; notes: string };
+
+interface BackendUpdateInfo {
+  available: boolean;
+  version: string;
+  date: string;
+  notes: string;
+}
+
+function errorMessage(value: unknown, fallback: string): string {
+  if (typeof value === "string" && value) return value;
+  if (value instanceof Error && value.message) return value.message;
+  return fallback;
 }
 
 export function useUpdaterController(): UpdaterController {
   const [state, setState] = useState<UpdateState>("idle");
+  const [dialogOpen, setDialogOpenState] = useState(false);
   const [version, setVersion] = useState("");
-  const [progress, setProgress] = useState(0);
+  const [releaseDate, setReleaseDate] = useState("");
+  const [releaseNotes, setReleaseNotes] = useState("");
+  const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState("");
-  const [hasDismissedAnnouncementThisSession, setHasDismissedAnnouncementThisSession] =
-    useState(false);
-  const resetRef = useRef<number | null>(null);
-  const updateRef = useRef<Update | null>(null);
+  // Tracks only user-visible operations. A silent startup check never owns
+  // this: it must neither block a manual check nor ever touch the dialog.
+  const operationRef = useRef<"idle" | "manual" | "installing">("idle");
+  // Monotonic request id so a stale silent result can never overwrite a
+  // newer manual one (or close a dialog the user opened mid-flight).
+  const requestRef = useRef(0);
+  const stateRef = useRef<UpdateState>("idle");
 
-  const clearReset = () => {
-    if (resetRef.current !== null) {
-      window.clearTimeout(resetRef.current);
-      resetRef.current = null;
-    }
-  };
-
-  const scheduleReset = (ms: number) => {
-    clearReset();
-    resetRef.current = window.setTimeout(() => {
-      setState("idle");
-      resetRef.current = null;
-    }, ms);
-  };
-
-  useEffect(() => {
-    return () => {
-      clearReset();
-    };
+  const syncState = useCallback((next: UpdateState) => {
+    stateRef.current = next;
+    setState(next);
   }, []);
 
-  const checkForUpdates = async (opts?: { silent?: boolean }) => {
-    const silent = opts?.silent ?? false;
+  const setRelease = useCallback((next: { version: string; date: string; notes: string }) => {
+    setVersion(next.version);
+    setReleaseDate(next.date);
+    setReleaseNotes(next.notes);
+  }, []);
 
-    clearReset();
-    setError("");
+  const clearRelease = useCallback(() => {
+    setVersion("");
+    setReleaseDate("");
+    setReleaseNotes("");
+  }, []);
 
-    if (!silent) {
-      setState("checking");
+  const setDialogOpen = useCallback((open: boolean) => {
+    if (!open && (stateRef.current === "checking" || stateRef.current === "installing")) {
+      return;
     }
+    setDialogOpenState(open);
+  }, []);
+
+  const rememberRelease = useCallback(
+    (info: BackendUpdateInfo) => {
+      setRelease({ version: info.version ?? "", date: info.date ?? "", notes: info.notes ?? "" });
+    },
+    [setRelease],
+  );
+
+  const runSilentCheck = useCallback(async () => {
+    // Never disturb a user-visible operation or the dialog.
+    if (operationRef.current !== "idle") return;
+    const requestId = ++requestRef.current;
+    try {
+      const info = await invoke<BackendUpdateInfo | null>("check_update");
+      if (requestId !== requestRef.current) return;
+      if (info?.available) {
+        rememberRelease(info);
+        setError("");
+        syncState("available");
+      } else {
+        clearRelease();
+        setError("");
+        syncState("idle");
+      }
+    } catch {
+      if (requestId !== requestRef.current) return;
+      clearRelease();
+      setError("");
+      syncState("idle");
+    }
+  }, [rememberRelease, clearRelease, syncState]);
+
+  const runManualCheck = useCallback(async () => {
+    if (operationRef.current === "manual" || operationRef.current === "installing") {
+      setDialogOpenState(true);
+      return;
+    }
+    operationRef.current = "manual";
+    const requestId = ++requestRef.current;
+
+    setDialogOpenState(true);
+    syncState("checking");
+    setError("");
+    setProgress(null);
+    clearRelease();
 
     try {
-      const update = await check();
+      const info = await invoke<BackendUpdateInfo | null>("check_update");
+      if (requestId !== requestRef.current) return;
 
-      if (update) {
-        updateRef.current = update;
-        setVersion(update.version);
-        setProgress(0);
-        setState("available");
-        return;
-      }
-
-      updateRef.current = null;
-      setVersion("");
-
-      if (!silent) {
-        setState("up-to-date");
-        scheduleReset(3000);
+      if (info?.available) {
+        rememberRelease(info);
+        setError("");
+        syncState("available");
+      } else if (info) {
+        rememberRelease(info);
+        setError("");
+        syncState("up-to-date");
       } else {
-        setState("idle");
+        clearRelease();
+        setError("");
+        syncState("up-to-date");
       }
     } catch (e) {
-      updateRef.current = null;
-      setError(e instanceof Error ? e.message : "Failed to check for updates");
-
-      if (!silent) {
-        setState("error");
-        scheduleReset(5000);
-      } else {
-        setState("idle");
-      }
+      if (requestId !== requestRef.current) return;
+      clearRelease();
+      setError(errorMessage(e, "Failed to check for updates"));
+      syncState("error");
+    } finally {
+      if (requestRef.current === requestId) operationRef.current = "idle";
     }
-  };
+  }, [rememberRelease, clearRelease, syncState]);
 
-  const beginInstall = async () => {
-    clearReset();
-    setHasDismissedAnnouncementThisSession(true);
-    setState("downloading");
+  const checkForUpdates = useCallback(
+    (opts?: { silent?: boolean }) => (opts?.silent ? runSilentCheck() : runManualCheck()),
+    [runSilentCheck, runManualCheck],
+  );
+
+  const installUpdate = useCallback(async () => {
+    if (operationRef.current === "manual" || operationRef.current === "installing") return;
+    if (stateRef.current !== "available") return;
+
+    operationRef.current = "installing";
+    // Invalidate any in-flight silent check so it can never overwrite this flow.
+    ++requestRef.current;
+    setDialogOpenState(true);
+    syncState("installing");
     setError("");
-    setProgress(0);
+    setProgress(null);
 
+    let stopListening: (() => void) | undefined;
     try {
-      const update = updateRef.current;
-
-      if (!update) {
-        setState("idle");
-        return;
-      }
-
-      let downloaded = 0;
-      let contentLength = 0;
-
-      await update.downloadAndInstall((event) => {
-        if (event.event === "Started") {
-          contentLength = event.data.contentLength ?? 0;
-        } else if (event.event === "Progress") {
-          downloaded += event.data.chunkLength;
-          if (contentLength > 0) {
-            setProgress(Math.round((downloaded / contentLength) * 100));
+      try {
+        stopListening = await listen<number>("update-progress", (event) => {
+          const percent = event.payload;
+          if (typeof percent === "number" && Number.isFinite(percent)) {
+            setProgress(Math.min(100, Math.max(0, Math.round(percent))));
           }
-        }
-      });
-
-      setState("ready");
+        });
+      } catch {
+        stopListening = undefined;
+      }
+      await invoke("install_update");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to download update");
-      setState("error");
-      scheduleReset(5000);
+      setError(errorMessage(e, "Failed to install the update"));
+      syncState("error");
+    } finally {
+      try {
+        stopListening?.();
+      } catch {
+        // Releasing the progress listener must never mask the install result.
+      }
+      operationRef.current = "idle";
     }
-  };
-
-  const restartToUpdate = async () => {
-    clearReset();
-    setError("");
-
-    try {
-      await relaunch();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to restart app");
-      setState("error");
-      scheduleReset(5000);
-    }
-  };
+  }, [syncState]);
 
   return {
     state,
+    dialogOpen,
     version,
+    releaseDate,
+    releaseNotes,
     progress,
     error,
-    hasDismissedAnnouncementThisSession,
     checkForUpdates,
-    beginInstall,
-    restartToUpdate,
-    dismissAnnouncement: () => setHasDismissedAnnouncementThisSession(true),
+    installUpdate,
+    setDialogOpen,
   };
 }

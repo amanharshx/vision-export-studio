@@ -21,7 +21,6 @@ import type {
   StackEnvironment,
 } from "@/lib/types";
 import type { HostSupportResult } from "@/lib/tauri/app";
-import type { UpdaterController } from "@/features/updater/use-updater-controller";
 
 // Launch contract, exercised through the real App: landing renders
 // without the retired Setup screen, Get Started opens model upload for every
@@ -83,22 +82,31 @@ function resetScenario() {
   pickedModelPath = null;
   scanRows = null;
   for (const key of Object.keys(calls) as Array<keyof typeof calls>) calls[key] = [];
+  // Re-assert this suite's updater fakes before every test: Bun shares
+  // module mocks across files in one process, so the updater suite's
+  // counting fakes must never leak in here (and vice versa).
+  mock.module("@tauri-apps/api/core", () => ({
+    invoke: (command: string) => {
+      if (command === "check_update") return Promise.resolve(null);
+      if (command === "install_update") return Promise.resolve();
+      throw new Error(`unexpected invoke: ${command}`);
+    },
+  }));
+  mock.module("@tauri-apps/api/event", () => ({
+    listen: async () => () => {},
+  }));
 }
 
-const idleUpdater: UpdaterController = {
-  state: "idle",
-  version: "",
-  progress: 0,
-  error: "",
-  hasDismissedAnnouncementThisSession: false,
-  checkForUpdates: async () => {},
-  beginInstall: async () => {},
-  restartToUpdate: async () => {},
-  dismissAnnouncement: () => {},
-};
-
-mock.module("@/features/updater/use-updater-controller", () => ({
-  useUpdaterController: () => idleUpdater,
+// The App exercises the real updater controller here. Startup performs a
+// silent check against this fake (no update available), which stays idle
+// with the dialog closed, so launch and Environment flows observe the same
+// quiet updater state the idle stub used to provide.
+mock.module("@tauri-apps/api/core", () => ({
+  invoke: (command: string) => {
+    if (command === "check_update") return Promise.resolve(null);
+    if (command === "install_update") return Promise.resolve();
+    throw new Error(`unexpected invoke: ${command}`);
+  },
 }));
 
 mock.module("@tauri-apps/api/event", () => ({
@@ -124,13 +132,23 @@ type OverlayMockProps = {
   open?: boolean;
   children?: React.ReactNode;
   onOpenChange?: (open: boolean) => void;
+  showCloseButton?: boolean;
   [key: string]: unknown;
 };
 
 function mockOverlayModules() {
   const passthrough = ({ children }: OverlayMockProps) => <>{children}</>;
   const root = ({ open, children }: OverlayMockProps) => (open ? <>{children}</> : null);
-  const content = ({ children }: OverlayMockProps) => <div role="dialog">{children}</div>;
+  const content = ({ children, showCloseButton }: OverlayMockProps) => (
+    <div role="dialog">
+      {children}
+      {showCloseButton ? (
+        <button type="button" aria-label="Close">
+          Close
+        </button>
+      ) : null}
+    </div>
+  );
   const overlay = () => null;
   const title = ({ children }: OverlayMockProps) => <h2>{children}</h2>;
   const description = ({ children }: OverlayMockProps) => <p>{children}</p>;

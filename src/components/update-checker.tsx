@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import {
   AlertCircle,
   CheckCircle,
@@ -11,84 +12,63 @@ export function UpdateChecker({
 }: {
   updater: UpdaterController;
 }) {
-  const {
-    state,
-    version,
-    progress,
-    error,
-    checkForUpdates,
-    beginInstall,
-    restartToUpdate,
-  } = updater;
+  const { state, version, progress, checkForUpdates } = updater;
 
-  if (state === "idle") {
-    return (
-      <button
-        onClick={() => void checkForUpdates()}
-        className="flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-        title="Check for updates"
-      >
-        <RefreshCw className="h-3.5 w-3.5" />
-        Updates
-      </button>
-    );
-  }
+  const handleClick = () => {
+    void checkForUpdates();
+  };
 
-  if (state === "checking") {
-    return (
-      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-        Checking...
-      </span>
-    );
-  }
-
-  if (state === "up-to-date") {
-    return (
-      <span className="flex items-center gap-1.5 text-xs text-green-600">
-        <CheckCircle className="h-3.5 w-3.5" />
-        Up to date
-      </span>
-    );
-  }
-
-  if (state === "available") {
-    return (
-      <button
-        onClick={() => void beginInstall()}
-        className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-700"
-      >
-        <Download className="h-3.5 w-3.5" />
-        Update to {version}
-      </button>
-    );
-  }
-
-  if (state === "downloading") {
-    return (
-      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-        Downloading... {progress}%
-      </span>
-    );
-  }
-
-  if (state === "ready") {
-    return (
-      <button
-        onClick={() => void restartToUpdate()}
-        className="flex items-center gap-1.5 text-xs font-medium text-green-600 hover:text-green-700"
-      >
-        <RefreshCw className="h-3.5 w-3.5" />
-        Restart to update
-      </button>
-    );
+  let icon: ReactNode;
+  let label: string;
+  let className: string;
+  let title: string;
+  switch (state) {
+    case "available":
+      icon = <Download className="h-3.5 w-3.5" />;
+      label = version ? `Update to ${version}` : "Update available";
+      className = "text-xs font-medium text-blue-600 hover:text-blue-700";
+      title = "Check for updates";
+      break;
+    case "checking":
+      icon = <RefreshCw className="h-3.5 w-3.5 animate-spin" />;
+      label = "Checking…";
+      className = "text-xs text-muted-foreground transition-colors hover:text-foreground";
+      title = "Checking for updates";
+      break;
+    case "installing":
+      icon = <RefreshCw className="h-3.5 w-3.5 animate-spin" />;
+      label = progress !== null ? `Downloading… ${progress}%` : "Downloading…";
+      className = "text-xs text-muted-foreground transition-colors hover:text-foreground";
+      title = "Downloading and installing the update";
+      break;
+    case "up-to-date":
+      icon = <CheckCircle className="h-3.5 w-3.5" />;
+      label = "Up to date";
+      className = "text-xs text-green-600 transition-colors hover:text-green-700";
+      title = "Check for updates";
+      break;
+    case "error":
+      icon = <AlertCircle className="h-3.5 w-3.5" />;
+      label = "Update failed";
+      className = "text-xs text-red-500 transition-colors hover:text-red-600";
+      title = "Check for updates";
+      break;
+    default:
+      icon = <RefreshCw className="h-3.5 w-3.5" />;
+      label = "Updates";
+      className = "text-xs text-muted-foreground transition-colors hover:text-foreground";
+      title = "Check for updates";
+      break;
   }
 
   return (
-    <span className="flex items-center gap-1.5 text-xs text-red-500" title={error}>
-      <AlertCircle className="h-3.5 w-3.5" />
-      Update failed
-    </span>
+    <button
+      onClick={handleClick}
+      className={`flex items-center gap-1.5 ${className}`}
+      title={title}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
