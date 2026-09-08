@@ -20,14 +20,11 @@ Desktop studio for exporting Ultralytics YOLO `.pt` and Roboflow RF-DETR `.pth` 
 </div>
 <br>
 
-> Select your Ultralytics YOLO `.pt` or Roboflow RF-DETR `.pth` model, pick an export target, and generate deployment-ready output locally - everything runs on your machine, nothing leaves your environment.
-
 ---
 
 ## Table of Contents
 
 - [What it is](#what-it-is)
-- [Features](#features)
 - [Installation](#installation)
 - [First Run](#first-run)
 - [Troubleshooting](#troubleshooting)
@@ -43,26 +40,16 @@ Desktop studio for exporting Ultralytics YOLO `.pt` and Roboflow RF-DETR `.pth` 
 
 ## What it is
 
-[**Vision Export Studio**](https://github.com/amanharshx/vision-export-studio) is a local-first desktop app that exports computer-vision model weights into deployment-ready formats. Model files stay on your machine.
+Vision Export Studio is a desktop app for exporting Ultralytics YOLO `.pt` and Roboflow RF-DETR `.pth` weights. Work stays on your machine.
 
 Two providers, chosen by file extension (mismatches are rejected):
 
 - **Ultralytics YOLO (`.pt`)** - ONNX, TorchScript, OpenVINO, TensorRT, CoreML, LiteRT, TF SavedModel, TF GraphDef, Edge TPU, PaddlePaddle, NCNN, MNN, RKNN, Sony IMX500, Axelera, and ExecuTorch.
 - **Roboflow RF-DETR (`.pth`)** - ONNX (recommended), TensorRT, experimental CoreML, experimental TFLite, and experimental ExecuTorch (XNNPACK).
 
-Per-route precision options, platform requirements, calibration notes, and runtime paths live in the [Export Reference](docs/export-reference.md).
+You confirm you trust an RF-DETR `.pth`. Then the app reads detection vs segmentation, size, and native image size.
 
-## Features
-
-- **Local-first** - exports run on your machine; model files do not leave your environment
-- **Two model families** - Ultralytics YOLO (`.pt`) and Roboflow RF-DETR (`.pth`), selected by file extension
-- **Per-route setup** - each export route is set up explicitly before export; setup never starts an export
-- **Dependency status checks** - each route reports missing Python packages or system binaries before you export, with install hints
-- **Optional Python override** - power users can choose a bootstrap interpreter used only to create the managed environment
-- **Optional output directory** - choose where exported artifacts are written, or use the default next to the source model
-- **Configurable export options** - tune target-specific settings such as image size, batch size, precision, dynamic axes, ONNX opset, TensorRT workspace, and RKNN target chip
-- **RF-DETR checkpoint inspection** - after trusted-checkpoint confirmation, auto-detects model family (detection vs segmentation), size, and recommended native image size from the `.pth` checkpoint
-- **Safer process execution** - export commands run through Tauri/Rust with argv-based subprocess handling
+Per-route precision, platform limits, calibration, and runtime paths: [Export Reference](docs/export-reference.md).
 
 ---
 
@@ -92,7 +79,7 @@ Current Linux release assets include Homebrew tarball, `.AppImage`, `.deb`, and 
 
 ### In-App Updates
 
-Released builds can check for updates from `Updates` inside app.
+Released builds can check for updates from `Updates` inside the app.
 
 Expected flow:
 
@@ -134,7 +121,7 @@ Or: Right-click the `.exe` -> **Properties** -> Check **Unblock** -> **Apply**
 
 ## First Run
 
-Host Python 3.10–3.13 is required (prefers 3.12). There is no bundled Python: install Python 3 first, then restart the app.
+Host Python 3.10–3.13 is required (prefers 3.12). The app does not ship Python. Install Python 3, then restart the app.
 
 Expected flow:
 
@@ -143,7 +130,9 @@ Expected flow:
 - press **Set up** for the selected export route only
 - run the export after that route reports ready
 
-Setup never starts an export.
+Setup never starts an export. Each route reports missing packages or system binaries, with install hints, before you export.
+
+You can pick an output folder. If you do not, artifacts go next to the source model.
 
 Runtime locations:
 
@@ -154,11 +143,11 @@ Runtime locations:
   - `rfdetr-coreml` covers CoreML
   - `rfdetr-tflite` covers TFLite and requires Python 3.12 (`>=3.12, <3.13`)
 
-A chosen Python override is bootstrap only: the app uses it to create the managed environment. Packages are never installed into it and exports never run through it.
+A Python override is used only to create the managed environment. Packages are never installed into it. Exports never run through it.
 
-After `Remove` / `Reset runtime`, the loaded model stays in the workspace; the affected routes need Set up again before export.
+After `Remove` / `Reset runtime`, the loaded model stays in the workspace. The affected routes need Set up again before export.
 
-Ultralytics exports require Ultralytics 8.4.80 or newer; LiteRT requires 8.4.83 or newer. The app reports incompatible runtime versions before export and offers an in-app Ultralytics update when possible.
+Ultralytics exports require Ultralytics 8.4.80 or newer. LiteRT requires 8.4.83 or newer. The app reports incompatible versions before export and can update Ultralytics in-app.
 
 ---
 
@@ -166,7 +155,7 @@ Ultralytics exports require Ultralytics 8.4.80 or newer; LiteRT requires 8.4.83 
 
 - **Unsigned app warnings:** macOS may report the app is damaged and Windows SmartScreen may block it. See the [unsigned app notes](#unsigned-app-notes) above.
 - **No compatible Python:** install Python 3.10–3.13 (3.12 preferred), then restart Vision Export Studio. The RF-DETR TFLite stack needs Python 3.12.
-- **Route not ready:** press **Set up** for that route and wait until it reports ready. Setup installs only that route's environment; other routes still need their own Set up.
+- **Route not ready:** press **Set up** for that route and wait until it reports ready. Setup installs only that route's environment. Other routes still need their own Set up.
 
 ---
 
@@ -192,7 +181,7 @@ bun run tauri build    # local production build
 
 ## Analytics
 
-Vision Export Studio uses PostHog for install-scoped pseudonymous usage analytics. The app stores a persistent install identifier locally so launches from the same install can be measured across sessions.
+The app uses PostHog. Events are tied to this install, not to your name. See [PRIVACY.md](PRIVACY.md).
 
 Current analytics covers:
 
@@ -215,25 +204,23 @@ Collected analytics excludes:
 - raw error text
 - personal identity such as email address or username
 
-More detail lives in [PRIVACY.md](PRIVACY.md).
-
 ---
 
 ## Privacy
 
-Privacy summary: exports run locally, model files stay on your machine, and install-scoped pseudonymous analytics is limited to product usage and app/device metadata. See [PRIVACY.md](PRIVACY.md) for details.
+Exports run on your machine. Model files stay there. Analytics is product usage and app/device metadata only. See [PRIVACY.md](PRIVACY.md).
 
 ---
 
 ## Contributing
 
-Contributions are welcome. Whether it's a bug fix, new format, or documentation improvement - every bit helps. Please read the [Contributing Guide](CONTRIBUTING.md) before opening a pull request.
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ---
 
 ## Security
 
-If you discover a security issue, please do not open a public issue. Use GitHub private vulnerability reporting as described in [SECURITY.md](SECURITY.md).
+If you discover a security issue, do not open a public issue. Use GitHub private vulnerability reporting as described in [SECURITY.md](SECURITY.md).
 
 ---
 
