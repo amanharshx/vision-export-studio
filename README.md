@@ -20,16 +20,15 @@ Desktop studio for exporting Ultralytics YOLO `.pt` and Roboflow RF-DETR `.pth` 
 </div>
 <br>
 
-> Select your Ultralytics YOLO `.pt` or Roboflow RF-DETR `.pth` model, pick an export target, and generate deployment-ready output locally - everything runs on your machine, nothing leaves your environment.
-
 ---
 
 ## Table of Contents
 
-- [Features](#features)
-- [Supported Formats](#supported-formats)
-- [Target Caveats](#target-caveats)
+- [What it is](#what-it-is)
 - [Installation](#installation)
+- [First Run](#first-run)
+- [Troubleshooting](#troubleshooting)
+- [Export Reference](#export-reference)
 - [Build From Source](#build-from-source)
 - [Analytics](#analytics)
 - [Privacy](#privacy)
@@ -39,126 +38,18 @@ Desktop studio for exporting Ultralytics YOLO `.pt` and Roboflow RF-DETR `.pth` 
 
 ---
 
-[**Vision Export Studio**](https://github.com/amanharshx/vision-export-studio) is a desktop app that exports computer-vision model weights into deployment-ready formats. It supports two model families: [Ultralytics](https://www.ultralytics.com/) YOLO `.pt` weights with full target coverage (ONNX, TensorRT, CoreML, LiteRT, and more), and [Roboflow](https://roboflow.com/) RF-DETR `.pth` checkpoints with focused ONNX, TensorRT, CoreML, and experimental TFLite and ExecuTorch targets. Select your model, pick a target, and generate the export locally - model files stay on your machine.
+## What it is
 
-## Features
+Vision Export Studio is a desktop app for exporting Ultralytics YOLO `.pt` and Roboflow RF-DETR `.pth` weights. Work stays on your machine.
 
-- **Local-first** - exports run on your machine; model files do not leave your environment
-- **Managed runtime** - app creates and uses `~/.vision-export-studio/.venv` for Python tooling by default
-- **Optional Python override** - power users can point the app at a different interpreter
-- **Optional output directory** - choose where exported artifacts are written, or use the default next to the source model
-- **Automatic route installs** - route-specific Python dependencies install when needed for most export paths
-- **Dependency status checks** - each route reports missing Python packages or system binaries before you export, with install hints
-- **Two model families** - Ultralytics YOLO (`.pt`) with full target coverage, and Roboflow RF-DETR (`.pth`) for ONNX, TensorRT, CoreML, TFLite, and ExecuTorch
-- **Multiple export targets** - ONNX, TensorRT, CoreML, OpenVINO, LiteRT, ExecuTorch, Paddle, NCNN, RKNN, and more
-- **Configurable export options** - tune target-specific settings such as image size, batch size, precision (FP32/FP16/INT8/W8A16/W8A32), dynamic axes, ONNX opset, TensorRT workspace, and RKNN target chip
-- **RF-DETR checkpoint inspection** - after trusted-checkpoint confirmation, auto-detects model family (detection vs segmentation), size, and recommended native image size from the `.pth` checkpoint
-- **Safer process execution** - export commands run through Tauri/Rust with argv-based subprocess handling
+Two providers, each with a required source extension (mismatches are rejected):
 
----
+- **Ultralytics YOLO (`.pt`)** - ONNX, TorchScript, OpenVINO, TensorRT, CoreML, LiteRT, TF SavedModel, TF GraphDef, Edge TPU, PaddlePaddle, NCNN, MNN, RKNN, Sony IMX500, Axelera, and ExecuTorch.
+- **Roboflow RF-DETR (`.pth`)** - ONNX (recommended), TensorRT, experimental CoreML, experimental TFLite, and experimental ExecuTorch (XNNPACK).
 
-## Supported Formats
+You confirm you trust an RF-DETR `.pth`. Then the app reads detection vs segmentation, size, and native image size.
 
-Vision Export Studio is **not** universal all-to-all model converter.
-
-```text
-source format -> supported route -> target format
-```
-
-Current source support is intentionally narrow:
-
-- Ultralytics-compatible `.pt` weights (full target coverage)
-- Roboflow RF-DETR `.pth` checkpoints (ONNX, TensorRT, CoreML, and experimental TFLite and ExecuTorch)
-- Generic PyTorch checkpoints not supported
-- Reverse conversion not supported
-
-Current source formats:
-
-| Format | Provider | Status | Notes |
-| --- | --- | :---: | --- |
-| `.pt` | Ultralytics YOLO | ✅ | Ultralytics-compatible weights only. |
-| `.pth` | Roboflow RF-DETR | ✅ | RF-DETR checkpoints. Exports to ONNX, TensorRT, CoreML, and experimental TFLite and ExecuTorch. |
-
-Ultralytics YOLO (`.pt`) target formats:
-
-| Format | Status | Notes |
-| --- | :---: | --- |
-| `.pt -> onnx` | ✅ | Most portable intermediate. |
-| `.pt -> torchscript` | ✅ | Traced TorchScript module. |
-| `.pt -> openvino` | ✅ | Optimised for Intel CPUs, iGPUs, and VPUs. |
-| `.pt -> engine` | ✅ | TensorRT. NVIDIA GPU and supported stack required. |
-| `.pt -> coreml` | ✅ | macOS-only. |
-| `.pt -> saved_model` | ✅ | TensorFlow SavedModel output. |
-| `.pt -> pb` | ✅ | TensorFlow GraphDef output. |
-| `.pt -> litert` | ✅ | CPU-only. Export on macOS (Intel/Apple Silicon) or Linux `x86_64`. Exported `.tflite` runs on LiteRT-supported mobile, embedded, edge, browser (LiteRT.js), and Node.js targets. |
-| `.pt -> edgetpu` | ✅ | Linux `x86_64` and `edgetpu_compiler` required. |
-| `.pt -> paddle` | ✅ | PaddlePaddle export path. |
-| `.pt -> ncnn` | ✅ | Mobile-friendly runtime output. |
-| `.pt -> mnn` | ✅ | One-way runtime artifact. |
-| `.pt -> rknn` | ✅ | Linux-only. Target chip required. |
-| `.pt -> imx` | ✅ | Linux-only. Java `>= 17` required. |
-| `.pt -> axelera` | ✅ | Linux-only. |
-| `.pt -> executorch` | ✅ | Edge runtime output. |
-
-Roboflow RF-DETR (`.pth`) target formats:
-
-| Format | Status | Notes |
-| --- | :---: | --- |
-| `.pth -> onnx` | ✅ | Recommended RF-DETR target and primary path. |
-| `.pth -> engine` | ✅ | TensorRT via RF-DETR native export. NVIDIA GPU required. No macOS. |
-| `.pth -> coreml` | ✅ | Experimental native CoreML export. macOS only; fixed shapes only. |
-| `.pth -> tflite` | ⚠️ | Experimental ONNX → TensorFlow → TFLite route. Requires exactly Python 3.12; always emits FP32 and FP16 artifacts, and INT8 adds a third. |
-| `.pth -> executorch` | ⚠️ | Experimental XNNPACK export. Requires macOS ARM64 14+, Linux `x86_64`, or Windows `x86_64`; fixed input shape and batch. |
-
-> [!NOTE]
-> RF-DETR supports ONNX, TensorRT, experimental native CoreML, experimental TFLite, and experimental ExecuTorch. CoreML uses fixed shapes because upstream does not support dynamic batching. TFLite requires Python 3.12 exactly; `onnx2tf` output layouts can vary. It always emits FP32 and FP16 `.tflite` artifacts; INT8 adds a third via dynamic-range weight quantization and requires no calibration. ExecuTorch uses the XNNPACK backend, requires macOS ARM64 14+, Linux `x86_64`, or Windows `x86_64`, and expects fixed-shape, fixed-batch, ImageNet-normalized contiguous NCHW runtime input.
-
-## Export Precision
-
-Each Ultralytics export target shows a route-specific **Precision** control. The available modes and their defaults are:
-
-| Target | Precision modes | Default |
-| --- | --- | --- |
-| ONNX, OpenVINO, TensorRT, MNN | FP16, FP32, INT8 | FP16 |
-| CoreML | FP16, FP32, INT8, W8A16 | FP16 |
-| LiteRT | FP32, INT8, W8A16, W8A32 | FP32 |
-| NCNN | FP16, FP32 | FP16 |
-| TF SavedModel | FP32, INT8 | FP32 |
-| RKNN | FP16, INT8 | FP16 |
-| Sony IMX500 | INT8, W8A16 | INT8 |
-| TorchScript, ExecuTorch, TF GraphDef, Paddle | FP32 (fixed) | FP32 |
-| Edge TPU, Axelera | INT8 (fixed) | INT8 |
-
-TorchScript is FP32-only in this app. Ultralytics FP16 TorchScript export requires GPU `device=0`;
-this app does not expose export-device selection.
-
-RKNN precision depends on the selected chip. The `rv1103`, `rv1106`, `rv1103b`, and `rv1106b` targets
-are INT8-only, so choosing one of them fixes Precision to INT8; all other Rockchip targets offer FP16
-and INT8.
-
-Export commands always pass an explicit canonical `quantize=` argument (FP32 → `32`, FP16 → `16`, INT8 → `8`, W8A16 → `w8a16`, W8A32 → `w8a32`) instead of the legacy `half=True`/`int8=True` switches.
-
-### Calibration data
-
-INT8 calibration modes offer an optional dataset YAML picker: ONNX/OpenVINO/TensorRT/SavedModel INT8, LiteRT INT8 and W8A16, RKNN INT8, IMX INT8 and W8A16, and Edge TPU and Axelera INT8.
-
-The calibration dataset is **optional**. When you omit it, the export still runs and Ultralytics falls back to its default calibration dataset, so accuracy may differ. Calibration YAML is stored per-route and is never auto-reused across routes.
-
----
-
-## Target Caveats
-
-Some targets are one-way deployment artifacts or platform-locked:
-
-- `engine` requires NVIDIA GPU and supported TensorRT stack. No macOS support.
-- `coreml` export is macOS-only.
-- `litert` export requires macOS (Intel or Apple Silicon) or Linux `x86_64`. The exported `.tflite` is portable and runs on LiteRT-supported mobile, embedded, edge, browser (LiteRT.js), and Node.js targets.
-- `edgetpu` export requires Linux `x86_64` and `edgetpu_compiler`.
-- `rknn` export is Linux-only and requires target chip selection. The `rv1103`, `rv1106`, `rv1103b`, and `rv1106b` chips support INT8 only.
-- `imx` export is Linux-only and requires Java `>= 17`.
-- `axelera` export is Linux-only.
-- `litert`, `engine`, `mnn`, `rknn`, `imx`, `axelera`, `edgetpu`, and some `coreml` outputs should be treated as one-way deployment outputs.
-- **Roboflow RF-DETR (`.pth`)** exports to `onnx`, `engine`, experimental `coreml`, experimental `tflite`, and experimental `executorch`. Native `engine` (TensorRT) is NVIDIA-only; native `coreml` is macOS-only with fixed shapes. `tflite` requires Python 3.12 exactly and can emit multiple artifacts. `executorch` uses XNNPACK on macOS ARM64 14+, Linux `x86_64`, or Windows `x86_64`; it requires fixed input shape and batch, with ImageNet-normalized contiguous NCHW runtime input.
+Per-route precision, platform limits, calibration, and runtime paths: [Export Reference](docs/export-reference.md).
 
 ---
 
@@ -188,7 +79,7 @@ Current Linux release assets include Homebrew tarball, `.AppImage`, `.deb`, and 
 
 ### In-App Updates
 
-Released builds can check for updates from `Updates` inside app.
+Released builds can check for updates from `Updates` inside the app.
 
 Expected flow:
 
@@ -199,7 +90,7 @@ Expected flow:
 
 Updater metadata is served from GitHub Releases.
 
-### Troubleshooting
+### Unsigned app notes
 
 > **Note:** The app is not code-signed yet, so macOS and Windows may show security warnings.
 
@@ -226,35 +117,51 @@ Or: Right-click the `.exe` -> **Properties** -> Check **Unblock** -> **Apply**
 
 </details>
 
-### First Launch Runtime Setup
+---
+
+## First Run
+
+Python 3.10–3.13 is required to set up managed export environments (3.12 preferred). The app does not ship Python. Install Python 3, then restart the app.
 
 Expected flow:
 
-- install app
-- let Vision Export Studio prepare runtime on first launch
-- pick export route
-- install route dependencies only when needed
+- open the app (no provider environment is needed to start)
+- drop a `.pt` or `.pth` model and choose its provider (extension mismatches are rejected)
+- press **Set up** for the selected export route only
+- run the export after that route reports ready
 
-Vision Export Studio now defaults to managed runtime in:
+Setup never starts an export. Each route reports missing packages or system binaries, with install hints, before you export.
 
-```text
-~/.vision-export-studio/.venv
-```
+You can pick an output folder. If you do not, artifacts go next to the source model.
 
-Vision Export Studio creates this environment automatically. Ultralytics export-format packages install on demand in this shared environment. RF-DETR routes install on demand in a dedicated stack environment at `~/.vision-export-studio/envs/rfdetr-default/.venv`.
+Runtime locations:
 
-Ultralytics exports require Ultralytics 8.4.80 or newer; LiteRT requires 8.4.83 or newer and Python 3.10+. The app reports incompatible runtime versions before export and offers an in-app Ultralytics update when possible.
+- Ultralytics routes use `~/.vision-export-studio/.venv`, created on Set up for an Ultralytics route.
+- RF-DETR routes use `~/.vision-export-studio/envs/<stack>/.venv`, created on Set up for the selected route:
+  - `rfdetr-default` covers ONNX and ExecuTorch
+  - `rfdetr-tensorrt` covers TensorRT
+  - `rfdetr-coreml` covers CoreML
+  - `rfdetr-tflite` covers TFLite and requires Python 3.12 (`>=3.12, <3.13`)
 
-- managed runtime selection prefers installed Python `3.12` and supports Python `3.10` through `3.13`
-- a managed runtime below Python `3.10` can be upgraded with **Set up a new export runtime** on the Environment panel's Python card
-- the upgrade creates a fresh Python environment; export-format packages reinstall on demand afterwards
-- an explicit Python override still takes precedence over managed selection; for RF-DETR routes it selects the base interpreter used to create the dedicated stack environment, not interpreter used directly for export
+A Python override is used only to create the managed environment. Packages are never installed into it. Exports never run through it.
 
-Current bootstrap limitation:
+After `Remove` / `Reset runtime`, the loaded model stays in the workspace. The affected routes need Set up again before export.
 
-- first-time runtime creation still depends on Python 3 installed on the host machine
-- restart Vision Export Studio after installing Python
-- bundled Python is not implemented yet
+Ultralytics exports require Ultralytics 8.4.80 or newer. LiteRT requires 8.4.83 or newer. The app reports incompatible versions before export and can update Ultralytics in-app.
+
+---
+
+## Troubleshooting
+
+- **Unsigned app warnings:** macOS may report the app is damaged and Windows SmartScreen may block it. See the [unsigned app notes](#unsigned-app-notes) above.
+- **No compatible Python:** install Python 3.10–3.13 (3.12 preferred), then restart Vision Export Studio. The RF-DETR TFLite stack needs Python 3.12.
+- **Route not ready:** press **Set up** for that route and wait until it reports ready. Setup installs only that route's environment. Other routes still need their own Set up.
+
+---
+
+## Export Reference
+
+Full route list, platform requirements, precision modes and defaults, calibration notes, RF-DETR experimental caveats, and runtime paths: [docs/export-reference.md](docs/export-reference.md).
 
 ---
 
@@ -274,7 +181,7 @@ bun run tauri build    # local production build
 
 ## Analytics
 
-Vision Export Studio uses PostHog for install-scoped pseudonymous usage analytics. The app stores a persistent install identifier locally so launches from the same install can be measured across sessions.
+The app uses PostHog. Events are tied to this install, not to your name. See [PRIVACY.md](PRIVACY.md).
 
 Current analytics covers:
 
@@ -297,25 +204,23 @@ Collected analytics excludes:
 - raw error text
 - personal identity such as email address or username
 
-More detail lives in [PRIVACY.md](PRIVACY.md).
-
 ---
 
 ## Privacy
 
-Privacy summary: exports run locally, model files stay on your machine, and install-scoped pseudonymous analytics is limited to product usage and app/device metadata. See [PRIVACY.md](PRIVACY.md) for details.
+Exports run on your machine. Model files stay there. Analytics is product usage and app/device metadata only. See [PRIVACY.md](PRIVACY.md).
 
 ---
 
 ## Contributing
 
-Contributions are welcome. Whether it's a bug fix, new format, or documentation improvement - every bit helps. Please read the [Contributing Guide](CONTRIBUTING.md) before opening a pull request.
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ---
 
 ## Security
 
-If you discover a security issue, please do not open a public issue. Use GitHub private vulnerability reporting as described in [SECURITY.md](SECURITY.md).
+If you discover a security issue, do not open a public issue. Use GitHub private vulnerability reporting as described in [SECURITY.md](SECURITY.md).
 
 ---
 
