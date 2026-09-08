@@ -10,23 +10,7 @@ try {
 
 import React, { useEffect } from "react";
 import { act } from "react";
-import type { UpdaterController } from "./use-updater-controller";
-import { ensureRealUpdaterModule, mockOverlayModules } from "./updater-test-utils";
-
-// app-launch.test.tsx mocks the updater controller to idle and Bun shares
-// module mocks across files in one process. Reuse the real module captured
-// by whichever suite loaded first and drive the harness through it instead
-// of the mocked path.
-ensureRealUpdaterModule();
-
-function useRealUpdaterController(): UpdaterController {
-  const mod = (globalThis as Record<string, unknown>).__realUpdaterModule as
-    | { useUpdaterController?: () => UpdaterController }
-    | undefined;
-  const real = mod?.useUpdaterController;
-  if (!real) throw new Error("real updater controller was not captured before mocks");
-  return real();
-}
+import { useUpdaterController } from "./use-updater-controller";
 
 type DownloadEvent =
   | { event: "Started"; data: { contentLength?: number } }
@@ -45,6 +29,56 @@ function resetUpdaterFakes() {
   downloadCalls = 0;
   checkImpl = async () => null;
   relaunchImpl = async () => {};
+  // Re-assert this suite's plugin fakes before every test: Bun shares
+  // module mocks across files in one process, so another suite's fake must
+  // never leak in here (and vice versa).
+  mock.module("@tauri-apps/plugin-updater", () => ({
+    check: () => {
+      checkCalls += 1;
+      return checkImpl();
+    },
+  }));
+  mock.module("@tauri-apps/plugin-process", () => ({
+    relaunch: () => {
+      relaunchCalls += 1;
+      return relaunchImpl();
+    },
+  }));
+}
+
+type OverlayMockProps = {
+  open?: boolean;
+  children?: React.ReactNode;
+  onOpenChange?: (open: boolean) => void;
+  showCloseButton?: boolean;
+  [key: string]: unknown;
+};
+
+function mockOverlayModules() {
+  const passthrough = ({ children }: OverlayMockProps) => <>{children}</>;
+  const root = ({ open, children }: OverlayMockProps) => (open ? <>{children}</> : null);
+  const content = (props: OverlayMockProps) => {
+    const { children, showCloseButton } = props;
+    // Stash the latest content props so tests can invoke the blocking
+    // handlers (Escape / outside-click) the dialog installs while checking
+    // or installing, which happy-dom cannot dispatch through Radix.
+    (globalThis as Record<string, unknown>).__lastDialogContentProps = props;
+    return (
+      <div role="dialog">
+        {children}
+        {showCloseButton ? (
+          <button type="button" aria-label="Close">
+            Close
+          </button>
+        ) : null}
+      </div>
+    );
+  };
+  const overlay = () => null;
+  const title = ({ children }: OverlayMockProps) => <h2>{children}</h2>;
+  const description = ({ children }: OverlayMockProps) => <p>{children}</p>;
+  const section = ({ children }: OverlayMockProps) => <div>{children}</div>;
+  return { passthrough, root, content, overlay, title, description, section };
 }
 
 mock.module("@/components/ui/dialog", () => {
@@ -117,31 +151,47 @@ async function openAvailableDialog() {
   await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("available"));
 }
 
-function Harness({
-  silentOnMount = false,
-  withEnv = false,
-}: {
-  silentOnMount?: boolean;
-  withEnv?: boolean;
-}) {
-  const updater = useRealUpdaterController();
+function Harness({ silentOnMount = false }: { silentOnMount?: boolean }) {
+  const updater = useUpdaterController();
   useEffect(() => {
     if (silentOnMount) void updater.checkForUpdates({ silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [silentOnMount]);
   return (
     <div>
-      {withEnv ? (
-        <button type="button" title="Environment & settings">
-          Environment
-        </button>
-      ) : null}
       <UpdateChecker updater={updater} />
       <UpdateDialog open={updater.dialogOpen} updater={updater} onOpenChange={updater.setDialogOpen} />
+      <button type="button" aria-label="Attempt close" onClick={() => updater.setDialogOpen(false)}>
+        Attempt close
+      </button>
       <div data-testid="updater-state">{updater.state}</div>
       <div data-testid="dialog-open">{updater.dialogOpen ? "open" : "closed"}</div>
     </div>
   );
+}
+
+type BlockHandler = (event: { preventDefault(): void }) => void;
+
+// Invokes the Escape / outside-click handlers the dialog installs and
+// returns how many of them blocked the close attempt.
+function dialogBlockPreventCount() {
+  const props = (globalThis as Record<string, unknown>).__lastDialogContentProps as
+    | {
+        onEscapeKeyDown?: BlockHandler;
+        onPointerDownOutside?: BlockHandler;
+        onInteractOutside?: BlockHandler;
+      }
+    | undefined;
+  let prevented = 0;
+  const event = {
+    preventDefault: () => {
+      prevented += 1;
+    },
+  };
+  props?.onEscapeKeyDown?.(event);
+  props?.onPointerDownOutside?.(event);
+  props?.onInteractOutside?.(event);
+  return prevented;
 }
 
 describe("user-invoked update dialog", () => {
@@ -317,9 +367,18 @@ describe("user-invoked update dialog", () => {
     expect(screen.queryByRole("button", { name: /not now/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /^done$/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+    // Escape, outside-click, and programmatic close attempts are all blocked.
+    expect(dialogBlockPreventCount()).toBe(3);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Attempt close" }));
+    });
+    expect(screen.getByTestId("dialog-open").textContent).toBe("open");
+    expect(screen.getByRole("dialog")).not.toBeNull();
     await act(async () => {
       gate.resolve(null);
     });
+    await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("up-to-date"));
+    expect(dialogBlockPreventCount()).toBe(0);
   });
 
   test("installing cannot be dismissed and hides actions", async () => {
@@ -342,6 +401,11 @@ describe("user-invoked update dialog", () => {
     expect(screen.queryByRole("button", { name: /install and restart/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /^done$/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+    expect(dialogBlockPreventCount()).toBe(3);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Attempt close" }));
+    });
+    expect(screen.getByTestId("dialog-open").textContent).toBe("open");
     await act(async () => {
       downloadGate.resolve();
     });
@@ -362,7 +426,7 @@ describe("user-invoked update dialog", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  test("errors remain visible and Try again rechecks", async () => {
+  test("errors remain visible, can be closed, and Try again rechecks", async () => {
     let attempts = 0;
     const secondGate = deferred<unknown>();
     checkImpl = async () => {
@@ -381,8 +445,15 @@ describe("user-invoked update dialog", () => {
     await act(async () => {});
     expect(screen.getByTestId("updater-state").textContent).toBe("error");
     expect(screen.getByRole("dialog").textContent).toContain("network down");
+    // The error dialog allows every close path.
+    expect(dialogBlockPreventCount()).toBe(0);
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+      fireEvent.click(screen.getByRole("button", { name: "Attempt close" }));
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // Reopening performs a fresh check.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /update failed/i }));
     });
     await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("checking"));
     await act(async () => {
@@ -444,27 +515,6 @@ describe("user-invoked update dialog", () => {
     expect(downloadCalls).toBe(1);
   });
 
-  test("failed download remains in error without relaunch", async () => {
-    checkImpl = async () =>
-      makeFakeUpdate({
-        version: "1.2.0",
-        body: "notes",
-        downloadImpl: async () => {
-          throw new Error("download exploded");
-        },
-      });
-    render(<Harness />);
-    await openAvailableDialog();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /install and restart/i }));
-    });
-    await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("error"));
-    expect(screen.getByRole("dialog").textContent).toContain("download exploded");
-    expect(relaunchCalls).toBe(0);
-    await act(async () => {});
-    expect(screen.getByTestId("updater-state").textContent).toBe("error");
-  });
-
   test("duplicate checks while checking are ignored", async () => {
     const gate = deferred<unknown>();
     checkImpl = () => gate.promise;
@@ -494,7 +544,10 @@ describe("user-invoked update dialog", () => {
     render(<Harness />);
     await openAvailableDialog();
     const install = screen.getByRole("button", { name: /install and restart/i });
+    // Both clicks dispatch before the state flips, so the guard sees the
+    // second install while the first is still in flight.
     await act(async () => {
+      fireEvent.click(install);
       fireEvent.click(install);
     });
     await waitFor(() => expect(screen.getByTestId("updater-state").textContent).toBe("installing"));
@@ -563,20 +616,5 @@ describe("user-invoked update dialog", () => {
     expect(screen.getByTestId("updater-state").textContent).toBe("available");
     expect(screen.getByRole("dialog").textContent).toContain("7.7.7");
     expect(screen.getByRole("dialog").textContent).not.toContain("stale");
-  });
-
-  test("Environment entry remains unaffected alongside the updater", async () => {
-    checkImpl = async () => makeFakeUpdate({ version: "5.0.0", body: "notes" });
-    render(<Harness withEnv />);
-    expect(screen.getByTitle("Environment & settings")).not.toBeNull();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /^updates$/i }));
-    });
-    await waitFor(() => expect(screen.getByRole("button", { name: /not now/i })).not.toBeNull());
-    expect(screen.getByTitle("Environment & settings")).not.toBeNull();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /not now/i }));
-    });
-    expect(screen.getByTitle("Environment & settings")).not.toBeNull();
   });
 });

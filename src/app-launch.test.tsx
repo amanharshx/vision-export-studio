@@ -21,13 +21,6 @@ import type {
   StackEnvironment,
 } from "@/lib/types";
 import type { HostSupportResult } from "@/lib/tauri/app";
-import type { UpdaterController } from "@/features/updater/use-updater-controller";
-import { ensureRealUpdaterModule } from "@/features/updater/updater-test-utils";
-
-// Captured before any mock.module call in this process pollutes the cache.
-// The updater dialog suite reuses this real module via globalThis instead of
-// importing the mocked path, so both suites pass in one `bun test` process.
-ensureRealUpdaterModule();
 
 // Launch contract, exercised through the real App: landing renders
 // without the retired Setup screen, Get Started opens model upload for every
@@ -89,32 +82,28 @@ function resetScenario() {
   pickedModelPath = null;
   scanRows = null;
   for (const key of Object.keys(calls) as Array<keyof typeof calls>) calls[key] = [];
+  // Re-assert this suite's updater fakes before every test: Bun shares
+  // module mocks across files in one process, so the updater suite's
+  // counting fakes must never leak in here (and vice versa).
+  mock.module("@tauri-apps/plugin-updater", () => ({
+    check: async () => null,
+  }));
+  mock.module("@tauri-apps/plugin-process", () => ({
+    relaunch: async () => {},
+  }));
 }
 
-const idleUpdater: UpdaterController = {
-  state: "idle",
-  dialogOpen: false,
-  version: "",
-  releaseDate: "",
-  releaseNotes: "",
-  progress: null,
-  error: "",
-  checkForUpdates: async () => {},
-  installUpdate: async () => {},
-  setDialogOpen: () => {},
-};
+// The App exercises the real updater controller here. Startup performs a
+// silent check against this fake (no update available), which stays idle
+// with the dialog closed, so launch and Environment flows observe the same
+// quiet updater state the idle stub used to provide.
+mock.module("@tauri-apps/plugin-updater", () => ({
+  check: async () => null,
+}));
 
-mock.module("@/features/updater/use-updater-controller", () => {
-  const real = (globalThis as Record<string, unknown>).__realUpdaterModule as
-    | Record<string, unknown>
-    | undefined;
-  return {
-    useUpdaterController: () => idleUpdater,
-    formatReleaseDate:
-      (real?.formatReleaseDate as ((raw: string) => string | null) | undefined) ??
-      (() => null),
-  };
-});
+mock.module("@tauri-apps/plugin-process", () => ({
+  relaunch: async () => {},
+}));
 
 mock.module("@tauri-apps/api/event", () => ({
   listen: async () => () => {},
@@ -131,7 +120,37 @@ mock.module("@tauri-apps/plugin-dialog", () => ({
   confirm: async () => false,
 }));
 
-import { mockOverlayModules } from "@/features/updater/updater-test-utils";
+// Radix Dialog/Sheet portals never mount under happy-dom, so no overlay UI
+// can open in client-rendered tests. These faithful passthroughs preserve the
+// open contract (closed renders nothing, open renders children inline) while
+// leaving every other UI module untouched.
+type OverlayMockProps = {
+  open?: boolean;
+  children?: React.ReactNode;
+  onOpenChange?: (open: boolean) => void;
+  showCloseButton?: boolean;
+  [key: string]: unknown;
+};
+
+function mockOverlayModules() {
+  const passthrough = ({ children }: OverlayMockProps) => <>{children}</>;
+  const root = ({ open, children }: OverlayMockProps) => (open ? <>{children}</> : null);
+  const content = ({ children, showCloseButton }: OverlayMockProps) => (
+    <div role="dialog">
+      {children}
+      {showCloseButton ? (
+        <button type="button" aria-label="Close">
+          Close
+        </button>
+      ) : null}
+    </div>
+  );
+  const overlay = () => null;
+  const title = ({ children }: OverlayMockProps) => <h2>{children}</h2>;
+  const description = ({ children }: OverlayMockProps) => <p>{children}</p>;
+  const section = ({ children }: OverlayMockProps) => <div>{children}</div>;
+  return { passthrough, root, content, overlay, title, description, section };
+}
 
 mock.module("@/components/ui/sheet", () => {
   const { passthrough, root, content, overlay, title, description, section } = mockOverlayModules();

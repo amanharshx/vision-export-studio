@@ -92,75 +92,82 @@ export function useUpdaterController(): UpdaterController {
     [],
   );
 
-  const checkForUpdates = useCallback(
-    async (opts?: { silent?: boolean }) => {
-      const silent = opts?.silent ?? false;
-
-      if (silent) {
-        // Never disturb a user-visible operation or the dialog.
-        if (operationRef.current !== "idle") return;
-        const requestId = ++requestRef.current;
-        try {
-          const update = await check();
-          if (requestId !== requestRef.current) return;
-          if (update) {
-            updateRef.current = update;
-            setRelease(captureRelease(update));
-            setError("");
-            syncState("available");
-          } else {
-            updateRef.current = null;
-            clearRelease();
-            setError("");
-            syncState("idle");
-          }
-        } catch {
-          if (requestId !== requestRef.current) return;
-          updateRef.current = null;
-          setError("");
-          syncState("idle");
-        }
-        return;
-      }
-
-      if (operationRef.current === "manual" || operationRef.current === "installing") {
-        setDialogOpenState(true);
-        return;
-      }
-      operationRef.current = "manual";
-      const requestId = ++requestRef.current;
-
-      setDialogOpenState(true);
-      syncState("checking");
-      setError("");
-      setProgress(null);
-      clearRelease();
-
-      try {
-        const update = await check();
-        if (requestId !== requestRef.current) return;
-
-        if (update) {
-          updateRef.current = update;
-          setRelease(captureRelease(update));
-          setError("");
-          syncState("available");
-        } else {
-          updateRef.current = null;
-          clearRelease();
-          syncState("up-to-date");
-        }
-      } catch (e) {
-        if (requestId !== requestRef.current) return;
-        updateRef.current = null;
-        const message = e instanceof Error ? e.message : "Failed to check for updates";
-        setError(message);
-        syncState("error");
-      } finally {
-        if (requestRef.current === requestId) operationRef.current = "idle";
-      }
+  const rememberUpdate = useCallback(
+    (update: Update) => {
+      updateRef.current = update;
+      setRelease(captureRelease(update));
     },
-    [syncState, setRelease, clearRelease],
+    [setRelease],
+  );
+
+  const forgetUpdate = useCallback(() => {
+    updateRef.current = null;
+    clearRelease();
+  }, [clearRelease]);
+
+  const runSilentCheck = useCallback(async () => {
+    // Never disturb a user-visible operation or the dialog.
+    if (operationRef.current !== "idle") return;
+    const requestId = ++requestRef.current;
+    try {
+      const update = await check();
+      if (requestId !== requestRef.current) return;
+      if (update) {
+        rememberUpdate(update);
+        setError("");
+        syncState("available");
+      } else {
+        forgetUpdate();
+        setError("");
+        syncState("idle");
+      }
+    } catch {
+      if (requestId !== requestRef.current) return;
+      forgetUpdate();
+      setError("");
+      syncState("idle");
+    }
+  }, [rememberUpdate, forgetUpdate, syncState]);
+
+  const runManualCheck = useCallback(async () => {
+    if (operationRef.current === "manual" || operationRef.current === "installing") {
+      setDialogOpenState(true);
+      return;
+    }
+    operationRef.current = "manual";
+    const requestId = ++requestRef.current;
+
+    setDialogOpenState(true);
+    syncState("checking");
+    setError("");
+    setProgress(null);
+    clearRelease();
+
+    try {
+      const update = await check();
+      if (requestId !== requestRef.current) return;
+
+      if (update) {
+        rememberUpdate(update);
+        setError("");
+        syncState("available");
+      } else {
+        forgetUpdate();
+        syncState("up-to-date");
+      }
+    } catch (e) {
+      if (requestId !== requestRef.current) return;
+      forgetUpdate();
+      setError(e instanceof Error ? e.message : "Failed to check for updates");
+      syncState("error");
+    } finally {
+      if (requestRef.current === requestId) operationRef.current = "idle";
+    }
+  }, [rememberUpdate, forgetUpdate, clearRelease, syncState]);
+
+  const checkForUpdates = useCallback(
+    (opts?: { silent?: boolean }) => (opts?.silent ? runSilentCheck() : runManualCheck()),
+    [runSilentCheck, runManualCheck],
   );
 
   const installUpdate = useCallback(async () => {
