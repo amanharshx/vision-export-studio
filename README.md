@@ -42,7 +42,7 @@ Desktop studio for exporting Ultralytics YOLO `.pt` and Roboflow RF-DETR `.pth` 
 
 Vision Export Studio is a desktop app for exporting Ultralytics YOLO `.pt` and Roboflow RF-DETR `.pth` weights. Work stays on your machine.
 
-Two providers, chosen by file extension (mismatches are rejected):
+Two providers, each with a required source extension (mismatches are rejected):
 
 - **Ultralytics YOLO (`.pt`)** - ONNX, TorchScript, OpenVINO, TensorRT, CoreML, LiteRT, TF SavedModel, TF GraphDef, Edge TPU, PaddlePaddle, NCNN, MNN, RKNN, Sony IMX500, Axelera, and ExecuTorch.
 - **Roboflow RF-DETR (`.pth`)** - ONNX (recommended), TensorRT, experimental CoreML, experimental TFLite, and experimental ExecuTorch (XNNPACK).
@@ -121,7 +121,7 @@ Or: Right-click the `.exe` -> **Properties** -> Check **Unblock** -> **Apply**
 
 ## First Run
 
-Host Python 3.10–3.13 is required (prefers 3.12). The app does not ship Python. Install Python 3, then restart the app.
+Python 3.10–3.13 is required to set up managed export environments (3.12 preferred). The app does not ship Python. Install Python 3, then restart the app.
 
 Expected flow:
 
