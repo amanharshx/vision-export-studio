@@ -111,6 +111,89 @@ input {
   animation: glow-pulse 1.4s ease-in-out infinite;
 }
 
+.markdown-viewer {
+  overflow-wrap: break-word;
+}
+
+.markdown-viewer > :first-child {
+  margin-top: 0;
+}
+
+.markdown-viewer > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-viewer h1,
+.markdown-viewer h2,
+.markdown-viewer h3,
+.markdown-viewer h4 {
+  margin-top: 1.25rem;
+  margin-bottom: 0.75rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.markdown-viewer h1,
+.markdown-viewer h2 {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.3em;
+}
+
+.markdown-viewer h1 { font-size: 1.5em; }
+.markdown-viewer h2 { font-size: 1.25em; }
+.markdown-viewer h3 { font-size: 1.1em; }
+
+.markdown-viewer p,
+.markdown-viewer ul,
+.markdown-viewer ol,
+.markdown-viewer blockquote,
+.markdown-viewer pre {
+  margin-bottom: 0.75rem;
+}
+
+.markdown-viewer ul {
+  list-style: disc;
+  padding-left: 2em;
+}
+
+.markdown-viewer ol {
+  list-style: decimal;
+  padding-left: 2em;
+}
+
+.markdown-viewer a {
+  color: #0550ae;
+  text-underline-offset: 3px;
+}
+
+.dark .markdown-viewer a {
+  color: #79c0ff;
+}
+
+.markdown-viewer a:hover {
+  text-decoration: underline;
+}
+
+.markdown-viewer blockquote {
+  border-left: 0.25em solid var(--border);
+  padding-left: 1em;
+  color: var(--muted-foreground);
+}
+
+.markdown-viewer pre {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--muted);
+  padding: 0.9rem;
+}
+
+.markdown-viewer :not(pre) > code {
+  border-radius: 0.3rem;
+  background: var(--muted);
+  padding: 0.1rem 0.3rem;
+}
+
 button:not(:disabled),
 a,
 [role="button"],

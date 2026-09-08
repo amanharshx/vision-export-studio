@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ExportWorkspace } from "@/features/export/export-workspace";
+import { AboutDialog } from "@/features/updater/about-dialog";
 import { UpdateDialog } from "@/features/updater/update-dialog";
 import { useUpdaterController } from "@/features/updater/use-updater-controller";
 import { LandingScreen } from "@/features/landing-screen";
@@ -47,6 +48,7 @@ function SetupActivityBarHost() {
 function App() {
   const updatesEnabled = !import.meta.env.DEV;
   const [appState, setAppState] = useState<AppState>("landing");
+  const [aboutOpen, setAboutOpen] = useState(false);
   // The retired global setup flag is gone. Navigation and
   // readiness are inventory-driven; only settings load gates first-run and
   // update checks.
@@ -116,15 +118,15 @@ function App() {
       <LandingScreen
         onGetStarted={handleGetStarted}
         settingsReady={settingsReady}
-        updatesEnabled={updatesEnabled}
-        updater={updater}
+        onOpenAbout={() => setAboutOpen(true)}
+        updateAvailable={updater.state === "available"}
       />
     );
   } else {
     content = (
       <ExportWorkspace
-        updatesEnabled={updatesEnabled}
-        updater={updater}
+        onOpenAbout={() => setAboutOpen(true)}
+        updateAvailable={updater.state === "available"}
         onBack={() => setAppState("landing")}
       />
     );
@@ -133,6 +135,12 @@ function App() {
   return (
     <SetupTaskProvider>
       <TitleBarFill />
+      <AboutDialog
+        open={aboutOpen}
+        updatesEnabled={updatesEnabled}
+        updater={updater}
+        onOpenChange={setAboutOpen}
+      />
       {updatesEnabled ? (
         <UpdateDialog
           open={updater.dialogOpen}

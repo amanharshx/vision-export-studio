@@ -1,3 +1,5 @@
+use std::process::{Command, Stdio};
+
 #[derive(serde::Serialize)]
 pub struct AppTelemetryContext {
     pub os: String,
@@ -20,4 +22,46 @@ pub fn get_route_platform_support(
         &route_ids,
         crate::commands::provider_registry::current_host_context(),
     )
+}
+
+#[tauri::command]
+pub fn build_date() -> Option<&'static str> {
+    option_env!("VISION_EXPORT_STUDIO_DATE")
+}
+
+#[tauri::command]
+pub fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err("Only web links can be opened".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(&url);
+        command
+    };
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        // Open the URL without a shell: cmd.exe would parse metacharacters
+        // such as & inside the URL and run whatever follows as a command.
+        let mut command = Command::new("rundll32");
+        command.args(["url.dll,FileProtocolHandler", &url]);
+        command
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(&url);
+        command
+    };
+
+    command
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|_| ())
+        .map_err(|error| format!("Could not open the link: {error}"))
 }

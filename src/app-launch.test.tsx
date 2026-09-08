@@ -87,6 +87,7 @@ function resetScenario() {
   // counting fakes must never leak in here (and vice versa).
   mock.module("@tauri-apps/api/core", () => ({
     invoke: (command: string) => {
+      if (command === "build_date") return Promise.resolve("2026-09-03");
       if (command === "check_update") return Promise.resolve(null);
       if (command === "install_update") return Promise.resolve();
       throw new Error(`unexpected invoke: ${command}`);
@@ -103,6 +104,7 @@ function resetScenario() {
 // quiet updater state the idle stub used to provide.
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string) => {
+    if (command === "build_date") return Promise.resolve("2026-09-03");
     if (command === "check_update") return Promise.resolve(null);
     if (command === "install_update") return Promise.resolve();
     throw new Error(`unexpected invoke: ${command}`);

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -13,6 +13,7 @@ export type UpdateState =
 export interface UpdaterController {
   state: UpdateState;
   dialogOpen: boolean;
+  buildDate: string;
   version: string;
   releaseDate: string;
   releaseNotes: string;
@@ -52,6 +53,7 @@ function errorMessage(value: unknown, fallback: string): string {
 export function useUpdaterController(): UpdaterController {
   const [state, setState] = useState<UpdateState>("idle");
   const [dialogOpen, setDialogOpenState] = useState(false);
+  const [buildDate, setBuildDate] = useState("");
   const [version, setVersion] = useState("");
   const [releaseDate, setReleaseDate] = useState("");
   const [releaseNotes, setReleaseNotes] = useState("");
@@ -64,6 +66,25 @@ export function useUpdaterController(): UpdaterController {
   // newer manual one (or close a dialog the user opened mid-flight).
   const requestRef = useRef(0);
   const stateRef = useRef<UpdateState>("idle");
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const built = await invoke<string | null>("build_date");
+        if (active) {
+          setBuildDate(built ?? "");
+        }
+      } catch {
+        if (active) {
+          setBuildDate("");
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const syncState = useCallback((next: UpdateState) => {
     stateRef.current = next;
@@ -207,6 +228,7 @@ export function useUpdaterController(): UpdaterController {
   return {
     state,
     dialogOpen,
+    buildDate,
     version,
     releaseDate,
     releaseNotes,
