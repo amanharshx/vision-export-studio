@@ -36,9 +36,11 @@ fn watch_git_head() {
         .map(|dir| git.join(dir.trim()))
         .unwrap_or_else(|_| git.clone());
     let ref_path = common.join(target);
-    if ref_path.is_file() {
-        println!("cargo:rerun-if-changed={}", ref_path.display());
-    } else if common.join("packed-refs").is_file() {
+    // Watch the loose ref unconditionally: Cargo also reruns when a watched
+    // path comes into existence, which covers a packed ref becoming loose
+    // on the next commit. Watch packed-refs too when present.
+    println!("cargo:rerun-if-changed={}", ref_path.display());
+    if common.join("packed-refs").is_file() {
         println!("cargo:rerun-if-changed={}/packed-refs", common.display());
     }
 }
