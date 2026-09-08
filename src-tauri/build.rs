@@ -36,10 +36,22 @@ fn watch_git_head() {
         .map(|dir| git.join(dir.trim()))
         .unwrap_or_else(|_| git.clone());
     let ref_path = common.join(target);
-    // Watch the loose ref unconditionally: Cargo also reruns when a watched
-    // path comes into existence, which covers a packed ref becoming loose
-    // on the next commit. Watch packed-refs too when present.
-    println!("cargo:rerun-if-changed={}", ref_path.display());
+    // A missing watched path reruns the script on every invocation, so only
+    // watch the loose ref once it exists. Until then, watch the nearest
+    // existing parent: creating the ref updates the directory and
+    // retriggers the script, after which the file watch below takes over.
+    if ref_path.is_file() {
+        println!("cargo:rerun-if-changed={}", ref_path.display());
+    } else {
+        let mut parent = ref_path.parent();
+        while let Some(dir) = parent {
+            if dir.is_dir() {
+                println!("cargo:rerun-if-changed={}", dir.display());
+                break;
+            }
+            parent = dir.parent();
+        }
+    }
     if common.join("packed-refs").is_file() {
         println!("cargo:rerun-if-changed={}/packed-refs", common.display());
     }
