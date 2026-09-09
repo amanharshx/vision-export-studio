@@ -94,9 +94,9 @@ describe("provider route registry", () => {
     expect(route?.calibrationRecommendedFor).toEqual([]);
     expect(route?.oneWay).toBe(true);
     expect(route?.lossy).toBe(true);
-    expect(route?.notes).toContain("always emits FP32 and FP16");
-    expect(route?.notes).toContain("dynamic-range weight-quantized");
-    expect(route?.notes).toContain("requires no calibration data");
+    expect(route?.experimental).toBe(true);
+    expect(route?.displayPath).toBe("checkpoint.pth -> multiple .tflite files");
+    expect(route?.notes).toBe("Experimental TFLite export through ONNX and TensorFlow. Output layouts may vary.");
   });
 
   test("RF-DETR ExecuTorch fixes XNNPACK semantics and dependency floors", () => {
