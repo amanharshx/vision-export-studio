@@ -34,4 +34,24 @@ describe("release workflow", () => {
     }
     expect(workflow).toContain("not in Tauri CSP connect-src allowlist");
   });
+
+  it("resolves the draft from the releases list before patching updater notes", () => {
+    const workflow = readFileSync(".github/workflows/release.yml", "utf8");
+    const patchIndex = workflow.indexOf("Patch updater manifest notes");
+    const publishIndex = workflow.indexOf("Publish draft release");
+
+    expect(patchIndex).toBeGreaterThanOrEqual(0);
+    expect(publishIndex).toBeGreaterThanOrEqual(0);
+    expect(patchIndex).toBeLessThan(publishIndex);
+
+    const patchSection = workflow.slice(patchIndex, publishIndex);
+
+    expect(patchSection).toContain("releases?per_page=100");
+    expect(patchSection).toContain('--arg tag "$TAG"');
+    expect(patchSection).toContain(".tag_name == $tag");
+    expect(patchSection).toContain(".draft == true");
+    expect(patchSection).not.toContain("releases/tags/");
+    expect(patchSection).toContain("'.body // empty'");
+    expect(patchSection).not.toContain("generate-notes");
+  });
 });
