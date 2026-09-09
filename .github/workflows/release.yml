@@ -190,13 +190,17 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ inputs.tag || github.ref_name }}"
-          RELEASE_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}")"
+          RELEASES_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
+          MATCH_COUNT="$(jq --arg tag "$TAG" '[.[] | select(.tag_name == $tag and .draft == true)] | length' <<< "$RELEASES_JSON")"
+          if [[ "$MATCH_COUNT" != "1" ]]; then
+            echo "expected exactly 1 draft release for tag '$TAG'; found $MATCH_COUNT" >&2
+            exit 1
+          fi
+          RELEASE_JSON="$(jq --arg tag "$TAG" '[.[] | select(.tag_name == $tag and .draft == true)][0]' <<< "$RELEASES_JSON")"
           RELEASE_ID="$(jq -r '.id // empty' <<< "$RELEASE_JSON")"
-          test -n "$RELEASE_ID"
-          TARGET="$(jq -r '.target_commitish // empty' <<< "$RELEASE_JSON")"
-          test -n "$TARGET"
-          NOTES="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" -f tag_name="$TAG" -f target_commitish="$TARGET" --jq .body)"
-          test -n "$NOTES"
+          test -n "$RELEASE_ID" || { echo "draft release for tag '$TAG' has no id" >&2; exit 1; }
+          NOTES="$(jq -r '.body // empty' <<< "$RELEASE_JSON")"
+          test -n "$NOTES" || { echo "draft release ${RELEASE_ID} for tag '$TAG' has empty body" >&2; exit 1; }
           ASSET_ID="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets" --jq 'map(select(.name == "latest.json")) | first.id // empty')"
           test -n "$ASSET_ID"
           gh api -H "Accept: application/octet-stream" "repos/${GITHUB_REPOSITORY}/releases/assets/${ASSET_ID}" > "${RUNNER_TEMP}/latest.json"
