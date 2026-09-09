@@ -415,7 +415,7 @@ export function resolveUltralyticsRoutePython(
  * a pre-existing saved override: users meet the bootstrap-only behavior
  * exactly when their saved Python is first used. */
 export const BOOTSTRAP_FIRST_USE_NOTICE =
-  "Setting up from your saved Python: it only creates the isolated export environment and is never modified.";
+  "Creating an isolated export environment. The Python you selected will not be changed.";
 
 export function getBootstrapFirstUseNotice(
   savedOverride: string,
@@ -3250,7 +3250,7 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
 
               <div className="rounded-xl border border-zinc-200/80 bg-white p-4 shadow-sm">
                 <div className="mb-2.5 flex items-center justify-between">
-                  <p className="text-[13px] font-semibold text-zinc-800">Bootstrap Python</p>
+                  <p className="text-[13px] font-semibold text-zinc-800">Python interpreter</p>
                   {pythonOverride && (
                     <button
                       type="button"
@@ -3280,13 +3280,8 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
                   </button>
                 </div>
                 <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
-                  Used only to create isolated export environments. Your selected Python is never modified and never runs exports directly. Leave empty to auto-detect a compatible Python.
+                  Used to create isolated export environments. The app does not install packages into this Python. Leave empty to choose one automatically.
                 </p>
-                {appliedPythonOverride.trim() && (
-                  <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
-                    Your saved Python creates isolated export environments when setup runs. Packages are installed into app-owned environments, never into your Python.
-                  </p>
-                )}
                 <div className="mt-2.5 flex justify-end">
                   <Button
                     size="sm"
@@ -3408,7 +3403,7 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
         <div className="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm">
           <div><p className="font-medium">What will be removed</p><p className="text-zinc-600">{cleanupConfirmation.environments.join(", ")}</p></div>
           <div><p className="font-medium">Approx. size</p><p className="text-zinc-600">{cleanupConfirmation.estimatedLogicalBytes === null ? "Unavailable" : formatManagedEnvironmentSize(cleanupConfirmation.estimatedLogicalBytes)}</p></div>
-          <div><p className="font-medium">What happens next</p><p className="text-zinc-600">{cleanupConfirmation.hasPythonOverride && <>Your bootstrap Python stays saved. </>}{cleanupConfirmation.isBulkCleanup ? "These environments will be set up again when needed." : "This environment will be set up again when needed."}</p></div>
+          <div><p className="font-medium">What happens next</p><p className="text-zinc-600">{cleanupConfirmation.hasPythonOverride && <>Your selected Python stays saved. </>}{cleanupConfirmation.isBulkCleanup ? "These environments will be set up again when needed." : "This environment will be set up again when needed."}</p></div>
           <div><p className="font-medium">What stays safe</p><p className="text-zinc-600">Your models, exported files, and settings will not be deleted.</p></div>
           <details>
             <summary className="cursor-pointer font-medium">Affected export formats ({cleanupConfirmation.routeIds.length})</summary>

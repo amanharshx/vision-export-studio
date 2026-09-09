@@ -246,7 +246,7 @@ describe("RfDetrSetupPanel", () => {
 
 describe("setup panels bootstrap notice", () => {
   const notice =
-    "Setting up from your saved Python: it only creates the isolated export environment and is never modified.";
+    "Creating an isolated export environment. The Python you selected will not be changed.";
 
   test("setting-up from a saved override explains bootstrap-only behavior", () => {
     const html = renderToStaticMarkup(
@@ -260,7 +260,7 @@ describe("setup panels bootstrap notice", () => {
     );
 
     expect(html).toContain("Setting up");
-    expect(html).toContain("only creates the isolated export environment");
+    expect(html).toContain("Creating an isolated export environment");
   });
 
   test("the RF-DETR panel shows the notice while its stack is created", () => {
@@ -276,7 +276,7 @@ describe("setup panels bootstrap notice", () => {
     );
 
     expect(html).toContain("Setting up");
-    expect(html).toContain("only creates the isolated export environment");
+    expect(html).toContain("Creating an isolated export environment");
   });
 
   test("the notice hides once setup leaves setting-up", () => {
@@ -291,7 +291,7 @@ describe("setup panels bootstrap notice", () => {
     );
 
     expect(html).toContain("Ready");
-    expect(html).not.toContain("only creates the isolated export environment");
+    expect(html).not.toContain("Creating an isolated export environment");
   });
 
   test("setting-up without a notice shows no bootstrap copy", () => {
@@ -305,7 +305,7 @@ describe("setup panels bootstrap notice", () => {
     );
 
     expect(html).toContain("Setting up");
-    expect(html).not.toContain("only creates the isolated export environment");
+    expect(html).not.toContain("Creating an isolated export environment");
   });
 });
 

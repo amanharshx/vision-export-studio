@@ -569,7 +569,7 @@ describe("workspace stability after environment cleanup", () => {
     await clickEnabledButton("Remove all");
     await screen.findByText("Remove RF-DETR environments?");
     expect(
-      screen.getByText("Your bootstrap Python stays saved. These environments will be set up again when needed."),
+      screen.getByText("Your selected Python stays saved. These environments will be set up again when needed."),
     ).not.toBeNull();
     expect(screen.queryByText(/last managed runtime/i)).toBeNull();
     await confirmCleanupDialog("Remove RF-DETR environments?", "Remove all");
@@ -639,7 +639,7 @@ describe("workspace stability after environment cleanup", () => {
     await clickEnabledButton("Reset runtime");
     await screen.findByText("Reset Ultralytics runtime?");
     expect(
-      screen.getByText("Your bootstrap Python stays saved. This environment will be set up again when needed."),
+      screen.getByText("Your selected Python stays saved. This environment will be set up again when needed."),
     ).not.toBeNull();
     await confirmCleanupDialog("Reset Ultralytics runtime?", "Reset runtime");
 
@@ -675,13 +675,13 @@ describe("workspace stability after environment cleanup", () => {
       (screen.getByPlaceholderText("Auto-detect compatible Python") as HTMLInputElement).value,
     ).toBe("/custom/python");
     // New behavior is explained where the override is configured.
-    expect(screen.getByText("Bootstrap Python")).not.toBeNull();
+    expect(screen.getByText("Python interpreter")).not.toBeNull();
     expect(
-      screen.getByText(/only to create isolated export environments/),
+      screen.getByText(/Used to create isolated export environments/),
     ).not.toBeNull();
     expect(
-      screen.getByText(/never into your Python/),
-    ).not.toBeNull();
+      screen.queryByText(/never into your Python/),
+    ).toBeNull();
     await flushPendingUpdates();
   });
 
