@@ -588,7 +588,7 @@ export function ExportModal({
           <HostSupportReason result={hostSupportResult} />
           <p className="mt-2 text-sm leading-6 text-zinc-500">{route.notes}</p>
           {rfdetrSummary && (
-            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <div className="mt-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">
               <p>
                 RF-DETR variant:{" "}
                 <span className="font-mono">
@@ -602,7 +602,6 @@ export function ExportModal({
                     ? ` · multiple ${rfdetrSummary.requiredMultiple}`
                     : ""}
               </p>
-              <p className="mt-1">Use checkpoints from trusted sources only. Local checkpoint loading may execute Python pickle data.</p>
             </div>
           )}
         </DialogHeader>
