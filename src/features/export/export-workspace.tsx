@@ -49,7 +49,7 @@ import type {
 } from "@/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, FileBox, FolderOpen, Info, RefreshCw, RotateCcw, X, CircleHelp, BadgeCheck, CircleX, CircleDashed, TriangleAlert } from "lucide-react";
+import { ArrowLeft, ChevronDown, FileBox, FolderOpen, Settings, RefreshCw, RotateCcw, X, CircleHelp, BadgeCheck, CircleX, CircleDashed, TriangleAlert } from "lucide-react";
 import { AboutButton } from "@/features/updater/about-dialog";
 import {
   Sheet,
@@ -3178,14 +3178,15 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
       </button>
 
       <div className="flex items-center gap-4">
-        {/* (i) settings panel trigger */}
+        {/* Environment & settings panel trigger */}
         <button
           type="button"
           onClick={() => setInfoOpen(true)}
-          className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          className="flex items-center gap-1 rounded-lg p-1.5 text-xs text-muted-foreground transition-colors hover:bg-zinc-200/60 hover:text-foreground"
           title="Environment & settings"
+          aria-label="Environment & settings"
         >
-          <Info className="h-3.5 w-3.5" />
+          <Settings className="h-3.5 w-3.5" />
         </button>
 
         <AboutButton onClick={onOpenAbout} updateAvailable={updateAvailable} />
