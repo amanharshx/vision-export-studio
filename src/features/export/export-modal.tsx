@@ -151,7 +151,7 @@ export function HostSupportReason({ result }: { result: HostSupportResult | null
   return (
     <div className="mt-3 flex gap-2.5 rounded-lg border border-red-200 bg-red-50 p-3">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
-      <p className="text-sm text-red-800">{result.reason}</p>
+      <p className="text-sm text-red-800 select-text">{result.reason}</p>
     </div>
   );
 }

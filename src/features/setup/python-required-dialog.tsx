@@ -91,7 +91,7 @@ export function PythonRequiredDialogBody({
             Setup for <span className="font-mono">{routeId}</span> needs{" "}
             <span className="font-medium text-foreground">{result.requirement}</span>.
           </p>
-          <p>{reason}</p>
+          <p className="select-text">{reason}</p>
           <p>
             Choose a compatible Python, check again after installing one, or
             cancel. Vision Export Studio never downloads Python automatically.
