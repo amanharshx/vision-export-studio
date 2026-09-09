@@ -27,7 +27,7 @@ export function AboutButton({
     <button
       type="button"
       onClick={onClick}
-      className="relative flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+      className="relative text-xs text-muted-foreground transition-colors hover:text-foreground"
       title="About Vision Export Studio"
     >
       About
