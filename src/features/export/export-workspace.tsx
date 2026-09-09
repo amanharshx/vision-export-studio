@@ -3474,6 +3474,15 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
   }
 
   // formats view
+  // Checkpoint failure presentation stays inline here: a missing-stack error
+  // offers setup guidance while a genuine inspection failure keeps its
+  // truthful report. Retry and the manual-variant selector (when permitted)
+  // collapse under a closed disclosure; the workspace file action stays
+  // removed (Back and the file-card control own file exit).
+  const rfdetrFailureError = rfdetrInspectResult?.error ?? "RF-DETR inspection failed.";
+  const rfdetrFailureSetupNeeded = rfdetrFailureError.includes("No healthy RF-DETR environment")
+    || rfdetrFailureError.includes("is not ready for inspection");
+  const rfdetrFailureCanRetry = Boolean(rfdetrInspectionFailure.canRetry && rfdetrTrust && sourcePath && rfdetrTrust.sourcePath === sourcePath);
   return (
     <div className="flex h-dvh flex-col">
       {header}
@@ -3502,59 +3511,63 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
               )}
               {rfdetrInspectStatus === "failed" && (
                 <div className="space-y-3">
-                  <p>{rfdetrInspectResult?.error ?? "RF-DETR inspection failed."}</p>
-                  <div className="flex flex-wrap gap-2">
-                    {rfdetrInspectionFailure.canRetry && rfdetrTrust && sourcePath && rfdetrTrust.sourcePath === sourcePath && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={handleRetryRfDetrInspection}
-                      >
-                        Retry inspection
-                      </Button>
-                    )}
-                    {rfdetrInspectionFailure.showFileAction && (
-                      <Button size="sm" variant="outline" onClick={handleClearFile}>
-                        Choose different file
-                      </Button>
-                    )}
-                  </div>
-                  {rfdetrInspectionFailure.showFileAction && (
-                    <p className="text-xs">
-                      Try a different checkpoint file, or check route compatibility and environment setup.
-                    </p>
-                  )}
-                  {rfdetrInspectionFailure.showManualVariant && (
+                  {rfdetrFailureSetupNeeded ? (
                     <>
-                  <label className="block text-xs font-medium uppercase tracking-wide">Manual variant</label>
-                  <select
-                    value={rfdetrManualClassSymbol}
-                    onChange={(event) => {
-                      setRfDetrVariantMode("manual");
-                      setRfDetrManualClassSymbol(event.target.value);
-                    }}
-                    className="h-9 w-full rounded-md border border-amber-300 bg-white px-3 text-sm"
-                  >
-                    <option value="">Select RF-DETR variant</option>
-                    <optgroup label="Detection">
-                      <option value="RFDETRNano">RFDETRNano</option>
-                      <option value="RFDETRSmall">RFDETRSmall</option>
-                      <option value="RFDETRMedium">RFDETRMedium</option>
-                      <option value="RFDETRLarge">RFDETRLarge</option>
-                    </optgroup>
-                    <optgroup label="Detection legacy">
-                      <option value="RFDETRBase">RFDETRBase (legacy)</option>
-                    </optgroup>
-                    <optgroup label="Segmentation">
-                      <option value="RFDETRSegNano">RFDETRSegNano</option>
-                      <option value="RFDETRSegSmall">RFDETRSegSmall</option>
-                      <option value="RFDETRSegMedium">RFDETRSegMedium</option>
-                      <option value="RFDETRSegLarge">RFDETRSegLarge</option>
-                      <option value="RFDETRSegXLarge">RFDETRSegXLarge</option>
-                      <option value="RFDETRSeg2XLarge">RFDETRSeg2XLarge</option>
-                    </optgroup>
-                  </select>
+                      <p className="font-medium">RF-DETR setup needed</p>
+                      <p className="text-xs">Choose an export target below to set up its environment. Your trusted checkpoint will be inspected automatically afterward.</p>
                     </>
+                  ) : (
+                    <>
+                      <p className="font-medium">Checkpoint inspection failed</p>
+                      <p className="text-xs break-words">{rfdetrFailureError}</p>
+                    </>
+                  )}
+                  {(rfdetrFailureCanRetry || rfdetrInspectionFailure.showManualVariant) && (
+                    <details>
+                      <summary className="cursor-pointer text-xs font-medium">More options</summary>
+                      <div className="space-y-3 pt-2">
+                        {rfdetrFailureSetupNeeded && (
+                          <p className="text-xs break-words opacity-80">{rfdetrFailureError}</p>
+                        )}
+                        {rfdetrFailureCanRetry && (
+                          <Button size="sm" variant="outline" onClick={handleRetryRfDetrInspection}>
+                            Retry inspection
+                          </Button>
+                        )}
+                        {rfdetrInspectionFailure.showManualVariant && (
+                          <>
+                            <label className="block text-xs font-medium uppercase tracking-wide">Manual variant</label>
+                            <select
+                              value={rfdetrManualClassSymbol}
+                              onChange={(event) => {
+                                setRfDetrVariantMode("manual");
+                                setRfDetrManualClassSymbol(event.target.value);
+                              }}
+                              className="h-9 w-full rounded-md border border-amber-300 bg-white px-3 text-sm"
+                            >
+                              <option value="">Select RF-DETR variant</option>
+                              <optgroup label="Detection">
+                                <option value="RFDETRNano">RFDETRNano</option>
+                                <option value="RFDETRSmall">RFDETRSmall</option>
+                                <option value="RFDETRMedium">RFDETRMedium</option>
+                                <option value="RFDETRLarge">RFDETRLarge</option>
+                              </optgroup>
+                              <optgroup label="Detection legacy">
+                                <option value="RFDETRBase">RFDETRBase (legacy)</option>
+                              </optgroup>
+                              <optgroup label="Segmentation">
+                                <option value="RFDETRSegNano">RFDETRSegNano</option>
+                                <option value="RFDETRSegSmall">RFDETRSegSmall</option>
+                                <option value="RFDETRSegMedium">RFDETRSegMedium</option>
+                                <option value="RFDETRSegLarge">RFDETRSegLarge</option>
+                                <option value="RFDETRSegXLarge">RFDETRSegXLarge</option>
+                                <option value="RFDETRSeg2XLarge">RFDETRSeg2XLarge</option>
+                              </optgroup>
+                            </select>
+                          </>
+                        )}
+                      </div>
+                    </details>
                   )}
                 </div>
               )}
