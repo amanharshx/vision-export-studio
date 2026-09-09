@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { ExternalLink, Info, RefreshCw } from "lucide-react";
+import { ExternalLink, RefreshCw } from "lucide-react";
 import { AppIcon } from "@/components/app-icon";
 import { GitHubLogomark } from "@/components/github-logomark";
 import { Button } from "@/components/ui/button";
@@ -30,7 +30,6 @@ export function AboutButton({
       className="relative flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
       title="About Vision Export Studio"
     >
-      <Info className="h-3.5 w-3.5" />
       About
       {updateAvailable ? (
         <span
