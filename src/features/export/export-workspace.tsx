@@ -163,11 +163,11 @@ export function ManagedRuntimeUpgradeDialogBody({
         </DialogDescription>
       </DialogHeader>
       {rebuilding && (
-        <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-200 bg-zinc-50 p-3 font-mono text-xs text-zinc-700">
+        <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-200 bg-zinc-50 p-3 font-mono text-xs text-zinc-700 select-text">
           {lines.join("\n") || "[info] Setting up new export runtime..."}
         </div>
       )}
-      {error && <p className="text-sm text-red-700">{error}</p>}
+      {error && <p className="text-sm text-red-700 select-text">{error}</p>}
       <DialogFooter>
         <Button variant="outline" onClick={onCancel} disabled={rebuilding}>
           Cancel
@@ -978,7 +978,7 @@ export function EnvCard({
         </span>
       </div>
       {path && (
-        <p className="mt-1.5 truncate font-mono text-[11px] text-zinc-400" title={path}>
+        <p className="mt-1.5 truncate font-mono text-[11px] text-zinc-400 select-text" title={path}>
           {path}
         </p>
       )}
@@ -3239,7 +3239,7 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
                 cleanupDisabled={cleanupActionsDisabled}
                 disabledReason={setupConflictMessage}
               />
-              {environmentPanelError && <p className="text-xs text-red-700">{environmentPanelError}</p>}
+              {environmentPanelError && <p className="text-xs text-red-700 select-text">{environmentPanelError}</p>}
             </div>
 
             {/* Configuration */}
@@ -3416,7 +3416,7 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
           <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">{setupConflictMessage}</p>
         )}
         {environmentPanelError && (
-          <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{environmentPanelError}</p>
+          <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 select-text">{environmentPanelError}</p>
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => setCleanupConfirmation(null)} disabled={cleanupBusy}>Cancel</Button>
@@ -3519,7 +3519,7 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
                   ) : (
                     <>
                       <p className="font-medium">Checkpoint inspection failed</p>
-                      <p className="text-xs break-words">{rfdetrFailureError}</p>
+                      <p className="text-xs break-words select-text">{rfdetrFailureError}</p>
                     </>
                   )}
                   {(rfdetrFailureCanRetry || rfdetrInspectionFailure.showManualVariant) && (
@@ -3527,7 +3527,7 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
                       <summary className="cursor-pointer text-xs font-medium">More options</summary>
                       <div className="space-y-3 pt-2">
                         {rfdetrFailureSetupNeeded && (
-                          <p className="text-xs break-words opacity-80">{rfdetrFailureError}</p>
+                          <p className="text-xs break-words opacity-80 select-text">{rfdetrFailureError}</p>
                         )}
                         {rfdetrFailureCanRetry && (
                           <Button size="sm" variant="outline" onClick={handleRetryRfDetrInspection}>

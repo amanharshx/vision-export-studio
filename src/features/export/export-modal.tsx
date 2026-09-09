@@ -267,7 +267,7 @@ function SetupPanelBase({
       <p className={`text-sm font-medium ${tones.text}`}>{title}</p>
       <p className={`mt-1 text-xs ${tones.text}`}>{body}</p>
       {notice && <p className={`mt-1 text-xs ${tones.text}`}>{notice}</p>}
-      {error && <p className="mt-2 text-xs text-red-700">{error}</p>}
+      {error && <p className="mt-2 text-xs text-red-700 select-text">{error}</p>}
       {showRecovery && (
         <div className="mt-2 flex flex-wrap gap-2">
           {onRemoveEnvironment && (
@@ -374,7 +374,7 @@ export function RfDetrInspectionFailurePanel({
   return (
     <div className="rounded-md border border-red-200 bg-red-50 p-3">
       <p className="text-sm font-medium text-red-800">Checkpoint inspection failed</p>
-      <p className="mt-1 text-xs text-red-800">
+      <p className="mt-1 text-xs text-red-800 select-text">
         {error ?? "RF-DETR inspection failed."}
       </p>
       <p className="mt-2 text-xs text-red-700">
@@ -728,13 +728,13 @@ export function ExportModal({
 
             {rfdetrImgszError && (
               <div className="rounded-md border border-red-200 bg-red-50 p-3">
-                <p className="text-sm text-red-800">{rfdetrImgszError}</p>
+                <p className="text-sm text-red-800 select-text">{rfdetrImgszError}</p>
               </div>
             )}
 
             {errorMsg && (
               <div className="rounded-md border border-red-200 bg-red-50 p-3">
-                <p className="text-sm text-red-800">{errorMsg}</p>
+                <p className="text-sm text-red-800 select-text">{errorMsg}</p>
               </div>
             )}
 
