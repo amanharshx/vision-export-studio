@@ -1,0 +1,117 @@
+name: Finalize Release
+
+run-name: >
+  Finalize Release •
+  #${{ github.event.pull_request.number }} •
+  ${{ github.event.pull_request.head.ref }}
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+    paths:
+      - src-tauri/tauri.conf.json
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+
+jobs:
+  finalize:
+    name: Validate bump PR and tag release
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/bump-v') && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.release_tag.outputs.tag }}
+      exists: ${{ steps.release_tag.outputs.exists }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Verify versions and tag release
+        id: release_tag
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --tags
+
+          echo "Merged commit: $MERGE_SHA"
+          echo "Head branch: $HEAD_REF"
+
+          EXPECTED_TAG="${HEAD_REF#release/bump-}"
+          EXPECTED_VERSION="${EXPECTED_TAG#v}"
+          if ! [[ "$EXPECTED_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Head branch '$HEAD_REF' does not encode a semver release (expected release/bump-vX.Y.Z); refusing to tag." >&2
+            exit 1
+          fi
+
+          PKG_VERSION=$(jq -r .version package.json)
+          TAURI_VERSION=$(jq -r .version src-tauri/tauri.conf.json)
+          CARGO_TOML_VERSION=$(grep -m1 '^version = "' src-tauri/Cargo.toml | sed -E 's/^version = "([^"]+)".*/\1/')
+          CARGO_LOCK_VERSION=$(awk '/^name = "vision-export-studio"$/{flag=1;next} flag && /^version = /{print;exit}' src-tauri/Cargo.lock | sed -E 's/^version = "([^"]+)".*/\1/')
+
+          echo "package.json: $PKG_VERSION"
+          echo "tauri.conf.json: $TAURI_VERSION"
+          echo "Cargo.toml: $CARGO_TOML_VERSION"
+          echo "Cargo.lock (vision-export-studio): $CARGO_LOCK_VERSION"
+          echo "Branch expects: $EXPECTED_VERSION"
+
+          if [ -z "$PKG_VERSION" ] || [ -z "$TAURI_VERSION" ] || [ -z "$CARGO_TOML_VERSION" ] || [ -z "$CARGO_LOCK_VERSION" ]; then
+            echo "Could not read all four application versions; refusing to tag." >&2
+            exit 1
+          fi
+
+          if [ "$PKG_VERSION" != "$TAURI_VERSION" ] || [ "$PKG_VERSION" != "$CARGO_TOML_VERSION" ] || [ "$PKG_VERSION" != "$CARGO_LOCK_VERSION" ]; then
+            echo "Application versions disagree; refusing to tag." >&2
+            exit 1
+          fi
+
+          if [ "$PKG_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "Branch $HEAD_REF expects $EXPECTED_VERSION but committed versions are $PKG_VERSION; refusing to tag." >&2
+            exit 1
+          fi
+
+          TAG="$EXPECTED_TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Resolved release tag $TAG from branch $HEAD_REF at $MERGE_SHA."
+
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
+            echo "Tag $TAG already exists on origin; skipping tag and release."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create and push tag
+        if: steps.release_tag.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.release_tag.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+  release:
+    name: Release
+    needs: finalize
+    if: needs.finalize.outputs.exists == 'false'
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.finalize.outputs.tag }}
+    secrets:
+      TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
+      VITE_POSTHOG_HOST: ${{ secrets.VITE_POSTHOG_HOST }}
+      TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+    permissions:
+      contents: write

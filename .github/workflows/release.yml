@@ -1,13 +1,27 @@
 name: Release
 
 run-name: >
-  Publish ${{ inputs.tag }}
+  Release ${{ inputs.tag }}
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       tag:
         description: 'Tag to release'
+        required: true
+        type: string
+    secrets:
+      TAURI_SIGNING_PUBLIC_KEY:
+        required: true
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: true
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: true
+      VITE_POSTHOG_KEY:
+        required: true
+      VITE_POSTHOG_HOST:
+        required: true
+      TAP_GITHUB_TOKEN:
         required: true
 
 jobs:
@@ -43,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.tag }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -128,8 +142,8 @@ jobs:
           VITE_POSTHOG_HOST: ${{ secrets.VITE_POSTHOG_HOST }}
           VITE_INSTALL_CHANNEL: github_release
         with:
-          tagName: ${{ inputs.tag || github.ref_name }}
-          releaseName: '${{ inputs.tag || github.ref_name }}'
+          tagName: ${{ inputs.tag }}
+          releaseName: '${{ inputs.tag }}'
           generateReleaseNotes: true
           releaseDraft: true
           prerelease: false
@@ -141,7 +155,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          VERSION="${{ inputs.tag || github.ref_name }}"
+          VERSION="${{ inputs.tag }}"
           VERSION="${VERSION#v}"
           TARGET_DIR="${CARGO_TARGET_DIR:-src-tauri/target}"
           BUNDLE_DIR="${TARGET_DIR}/release/bundle/appimage"
@@ -171,7 +185,7 @@ jobs:
         if: runner.os == 'Linux' && matrix.linux_homebrew
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ inputs.tag }}
           files: dist/linux-homebrew/vision-export-studio-linux-${{ matrix.linux_tarball_arch }}.tar.gz
           draft: true
 
@@ -189,7 +203,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TAG="${{ inputs.tag || github.ref_name }}"
+          TAG="${{ inputs.tag }}"
           RELEASES_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
           MATCH_COUNT="$(jq --arg tag "$TAG" '[.[] | select(.tag_name == $tag and .draft == true)] | length' <<< "$RELEASES_JSON")"
           if [[ "$MATCH_COUNT" != "1" ]]; then
@@ -213,7 +227,7 @@ jobs:
       - name: Publish draft release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ inputs.tag }}
           draft: false
 
       - name: Resolve Homebrew tap update metadata
@@ -221,7 +235,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TAG="${{ inputs.tag || github.ref_name }}"
+          TAG="${{ inputs.tag }}"
           VERSION="${TAG#v}"
           if [[ -z "$VERSION" ]]; then
             echo "Empty version derived from tag '$TAG'." >&2
