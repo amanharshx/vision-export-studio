@@ -35,7 +35,7 @@ export const rfdetrRoutes: RouteSpec[] = [
     title: "ONNX",
     displayPath: "checkpoint.pth -> inference_model.onnx",
     pipDeps: [{ packageName: "rfdetr[onnx]", installHint: 'pip install "rfdetr[onnx]"' }],
-    notes: "Recommended RF-DETR export target and primary validation path.",
+    notes: "Recommended format for RF-DETR deployment and validation.",
   }),
   rfdetrRoute({
     id: "rfdetr.pth.engine",
@@ -78,7 +78,7 @@ export const rfdetrRoutes: RouteSpec[] = [
     oneWay: true,
     lossy: true,
     experimental: true,
-    notes: "Experimental ONNX → TensorFlow → TFLite export; onnx2tf output layouts can vary. Standard export always emits FP32 and FP16 files; INT8 adds a dynamic-range weight-quantized file and requires no calibration data.",
+    notes: "Experimental TFLite export through ONNX and TensorFlow. Output layouts may vary.",
   }),
   rfdetrRoute({
     id: "rfdetr.pth.executorch",
@@ -94,7 +94,7 @@ export const rfdetrRoutes: RouteSpec[] = [
     platformLock: "macos_arm64_linux_windows_x86_64",
     oneWay: true,
     experimental: true,
-    notes: "Experimental ExecuTorch XNNPACK CPU export. Fixed input shape and batch; runtime input must be ImageNet-normalized contiguous NCHW.",
+    notes: "Experimental XNNPACK export for CPU inference. Requires fixed shapes and ImageNet-normalized NCHW input.",
     unsupportedNote: "ExecuTorch XNNPACK export requires macOS ARM64 14+, Linux x86-64, or Windows x86-64.",
   }),
 ];

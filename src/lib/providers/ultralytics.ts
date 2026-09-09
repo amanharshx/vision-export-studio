@@ -82,7 +82,7 @@ export const ultralyticsRoutes: RouteSpec[] = [
     calibrationRecommendedFor: ["int8"],
     oneWay: true,
     lossy: true,
-    notes: "TensorRT engine. NVIDIA GPU required. One-way, platform-locked at runtime.",
+    notes: "NVIDIA GPU deployment with TensorRT. Engines are tied to the target GPU and TensorRT version.",
     unsupportedNote: "TensorRT requires an NVIDIA GPU. NVIDIA does not support macOS.",
   }),
   route({
@@ -98,7 +98,7 @@ export const ultralyticsRoutes: RouteSpec[] = [
     calibrationRecommendedFor: [],
     oneWay: true,
     lossy: true,
-    notes: "macOS/Linux only. Intermediate TorchScript is discarded. One-way.",
+    notes: "CoreML export for Apple devices. Available on macOS and Linux.",
     unsupportedNote: "CoreML export is supported on macOS and Linux. Windows is not supported.",
   }),
   route({
@@ -169,7 +169,7 @@ export const ultralyticsRoutes: RouteSpec[] = [
     calibrationRecommendedFor: ["int8"],
     oneWay: true,
     lossy: true,
-    notes: "Google Coral hardware only. Full-integer quantisation forced. Linux x86_64 and edgetpu_compiler binary required.",
+    notes: "INT8 export for Google Coral devices. Requires Linux x86-64 and the Edge TPU compiler.",
     unsupportedNote: "The Edge TPU compiler is only available on Linux x86-64.",
   }),
   route({
@@ -210,7 +210,7 @@ export const ultralyticsRoutes: RouteSpec[] = [
     defaultPrecision: "fp16",
     calibrationRecommendedFor: [],
     oneWay: true,
-    notes: "MNN mobile inference. Intermediate ONNX is discarded. One-way.",
+    notes: "Mobile inference with MNN, exported through ONNX.",
   }),
   route({
     id: "ultralytics.pt.rknn",
@@ -228,7 +228,7 @@ export const ultralyticsRoutes: RouteSpec[] = [
     calibrationRecommendedFor: ["int8"],
     oneWay: true,
     lossy: true,
-    notes: "Rockchip NPU deployment. Requires target chip name (name= option). Lossy: discards FP precision.",
+    notes: "Export for Rockchip NPUs. Requires a target chip name.",
     unsupportedNote: "RKNN Toolkit 2 only runs on Linux.",
   }),
   route({
@@ -252,7 +252,7 @@ export const ultralyticsRoutes: RouteSpec[] = [
     calibrationRecommendedFor: ["int8", "w8a16"],
     oneWay: true,
     lossy: true,
-    notes: "Sony IMX500 AI sensor. Linux only. INT8 quantization forced. Java >= 17 required.",
+    notes: "Export for Sony IMX500 AI sensors. Requires Linux and Java 17 or newer.",
     unsupportedNote: "The IMX500 converter (imxconv-pt) is only available on Linux.",
   }),
   route({
@@ -267,7 +267,7 @@ export const ultralyticsRoutes: RouteSpec[] = [
     calibrationRecommendedFor: ["int8"],
     oneWay: true,
     lossy: true,
-    notes: "Axelera Metis AIPU binary. Linux only. INT8 quantization forced. Requires torch >= 2.8.",
+    notes: "INT8 export for Axelera Metis hardware. Requires Linux and PyTorch 2.8 or newer.",
     unsupportedNote: "Axelera Metis SDK requires Linux-specific drivers and compilers.",
   }),
   route({
@@ -277,6 +277,6 @@ export const ultralyticsRoutes: RouteSpec[] = [
     displayPath: "model.pt → model.pte",
     pipDeps: [{ packageName: "executorch", installHint: "pip install executorch" }],
     oneWay: true,
-    notes: "PyTorch ExecuTorch on-device inference. Requires torch >= 2.9. One-way.",
+    notes: "On-device inference with ExecuTorch. Requires PyTorch 2.9 or newer.",
   }),
 ];
