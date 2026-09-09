@@ -18,7 +18,7 @@ function friendlyReleaseNotes(notes: string) {
 
 export function ReleaseNotes({ source }: { source: string }) {
   return (
-    <article className="markdown-viewer max-w-none" aria-label="Changelog">
+    <article className="markdown-viewer max-w-none select-text" aria-label="Changelog">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{

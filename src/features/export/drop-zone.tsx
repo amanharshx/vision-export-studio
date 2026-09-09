@@ -128,7 +128,7 @@ export function DropZone({ path, title, helper, pickerFilterName, pickerExtensio
           {hasFile ? "Change file" : "Browse file"}
         </button>
 
-        {errorMsg && <p className="text-xs text-red-600">{errorMsg}</p>}
+        {errorMsg && <p className="text-xs text-red-600 select-text">{errorMsg}</p>}
       </CardContent>
     </Card>
   );

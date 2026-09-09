@@ -87,7 +87,7 @@ export function ExportLog({ lines, status, installPhase, preview }: ExportLogPro
         <StatusBadge status={status} installPhase={installPhase} />
       </div>
       <ScrollArea className="h-[152px] rounded-md bg-black/30">
-        <pre className="p-3 text-xs leading-6 text-zinc-300">
+        <pre className="p-3 text-xs leading-6 text-zinc-300 select-text">
           {lines.length === 0
             ? `$ ${preview}\nstdout and stderr will stream here.`
             : lines.join("\n")}

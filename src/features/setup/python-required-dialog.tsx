@@ -32,7 +32,7 @@ function IncompatibleList({ entries }: { entries: BootstrapIncompatible[] }) {
           >
             <span className="shrink-0 font-mono">Python {entry.version}</span>
             <span
-              className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-400"
+              className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-400 select-text"
               title={entry.python_path}
             >
               {entry.python_path}
@@ -91,7 +91,7 @@ export function PythonRequiredDialogBody({
             Setup for <span className="font-mono">{routeId}</span> needs{" "}
             <span className="font-medium text-foreground">{result.requirement}</span>.
           </p>
-          <p>{reason}</p>
+          <p className="select-text">{reason}</p>
           <p>
             Choose a compatible Python, check again after installing one, or
             cancel. Vision Export Studio never downloads Python automatically.
@@ -115,7 +115,7 @@ export function PythonRequiredDialogBody({
       </DialogHeader>
       {invalidPath && (
         <p
-          className="truncate rounded-md border border-amber-200 bg-amber-50 px-3 py-2 font-mono text-[11px] text-amber-900"
+          className="truncate rounded-md border border-amber-200 bg-amber-50 px-3 py-2 font-mono text-[11px] text-amber-900 select-text"
           title={invalidPath}
         >
           {invalidPath}
@@ -123,7 +123,7 @@ export function PythonRequiredDialogBody({
       )}
       <IncompatibleList entries={incompatible} />
       {distinctChoiceError && (
-        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 select-text">
           {distinctChoiceError}
         </p>
       )}
