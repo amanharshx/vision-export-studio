@@ -34,8 +34,8 @@ describe("bootstrap first-use notice", () => {
   test("an existing saved override used to create an environment explains the new behavior", () => {
     const notice = getBootstrapFirstUseNotice("/custom/python", "explicit-override");
     expect(notice).toBe(BOOTSTRAP_FIRST_USE_NOTICE);
-    expect(notice).toContain("only creates the isolated export environment");
-    expect(notice).toContain("never modified");
+    expect(notice).toContain("Creating an isolated export environment");
+    expect(notice).toContain("will not be changed");
   });
 
   test("no notice without a saved override, another source, or a blank override", () => {
