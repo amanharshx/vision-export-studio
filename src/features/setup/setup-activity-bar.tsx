@@ -34,11 +34,11 @@ export function SetupActivityDetailsBody({
       </DialogHeader>
       <p className="text-sm text-zinc-700">{task.summary}</p>
       {task.error && (
-        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 select-text">
+        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
           {task.error}
         </p>
       )}
-      <div className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-200 bg-zinc-50 p-3 font-mono text-xs text-zinc-700 select-text">
+      <div data-selectable className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-200 bg-zinc-50 p-3 font-mono text-xs text-zinc-700">
         {task.logs.length > 0 ? task.logs.join("\n") : "No setup output yet."}
       </div>
       <DialogFooter showCloseButton>
@@ -70,6 +70,7 @@ export function SetupActivityBar({
   return (
     <>
       <div
+        data-no-select-start
         className="fixed inset-x-0 bottom-0 z-40 border-t border-zinc-200 bg-white/95 shadow-[0_-2px_12px_rgba(0,0,0,0.06)] backdrop-blur"
       >
         <div className="mx-auto flex w-full max-w-2xl items-center gap-3 px-5 py-2.5">

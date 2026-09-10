@@ -163,11 +163,11 @@ export function ManagedRuntimeUpgradeDialogBody({
         </DialogDescription>
       </DialogHeader>
       {rebuilding && (
-        <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-200 bg-zinc-50 p-3 font-mono text-xs text-zinc-700 select-text">
+        <div data-selectable className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-200 bg-zinc-50 p-3 font-mono text-xs text-zinc-700">
           {lines.join("\n") || "[info] Setting up new export runtime..."}
         </div>
       )}
-      {error && <p className="text-sm text-red-700 select-text">{error}</p>}
+      {error && <p className="text-sm text-red-700">{error}</p>}
       <DialogFooter>
         <Button variant="outline" onClick={onCancel} disabled={rebuilding}>
           Cancel
@@ -978,7 +978,7 @@ export function EnvCard({
         </span>
       </div>
       {path && (
-        <p className="mt-1.5 truncate font-mono text-[11px] text-zinc-400 select-text" title={path}>
+        <p className="mt-1.5 truncate font-mono text-[11px] text-zinc-400" title={path}>
           {path}
         </p>
       )}
@@ -3167,7 +3167,7 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
   const baseName = sourcePath.split(/[\\/]/).pop() ?? sourcePath;
 
   const header = (
-    <header className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-zinc-900/10 bg-white px-5 py-3">
+    <header className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-zinc-900/10 bg-white px-5 py-3 select-none">
       <button
         type="button"
         onClick={handleBack}
@@ -3239,7 +3239,7 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
                 cleanupDisabled={cleanupActionsDisabled}
                 disabledReason={setupConflictMessage}
               />
-              {environmentPanelError && <p className="text-xs text-red-700 select-text">{environmentPanelError}</p>}
+              {environmentPanelError && <p className="text-xs text-red-700">{environmentPanelError}</p>}
             </div>
 
             {/* Configuration */}
@@ -3416,7 +3416,7 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
           <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">{setupConflictMessage}</p>
         )}
         {environmentPanelError && (
-          <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 select-text">{environmentPanelError}</p>
+          <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{environmentPanelError}</p>
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => setCleanupConfirmation(null)} disabled={cleanupBusy}>Cancel</Button>
@@ -3437,9 +3437,9 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
     return (
       <div className="flex min-h-screen flex-col">
         {header}
-        <main className="flex flex-1 items-center justify-center px-4">
+        <main data-no-select-start className="flex flex-1 items-center justify-center px-4">
           <div className="w-full max-w-md">
-            <div className="mb-4 grid grid-cols-2 gap-2 rounded-lg border border-zinc-200 bg-white p-1">
+            <div className="mb-4 grid grid-cols-2 gap-2 rounded-lg border border-zinc-200 bg-white p-1 select-none">
               {providerList().map((provider) => (
                 <button
                   key={provider.id}
@@ -3486,8 +3486,8 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
   return (
     <div className="flex h-dvh flex-col">
       {header}
-      <div className="flex-1 overflow-y-auto">
-        <main className="mx-auto w-full max-w-2xl space-y-6 px-5 py-8">
+      <div data-no-select-start className="flex-1 overflow-y-auto">
+        <main data-no-select-start className="mx-auto w-full max-w-2xl space-y-6 px-5 py-8">
           {filePill}
           {selectedProviderId === "rfdetr" && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
@@ -3519,7 +3519,7 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
                   ) : (
                     <>
                       <p className="font-medium">Checkpoint inspection failed</p>
-                      <p className="text-xs break-words select-text">{rfdetrFailureError}</p>
+                      <p className="text-xs break-words">{rfdetrFailureError}</p>
                     </>
                   )}
                   {(rfdetrFailureCanRetry || rfdetrInspectionFailure.showManualVariant) && (
@@ -3527,7 +3527,7 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
                       <summary className="cursor-pointer text-xs font-medium">More options</summary>
                       <div className="space-y-3 pt-2">
                         {rfdetrFailureSetupNeeded && (
-                          <p className="text-xs break-words opacity-80 select-text">{rfdetrFailureError}</p>
+                          <p className="text-xs break-words opacity-80">{rfdetrFailureError}</p>
                         )}
                         {rfdetrFailureCanRetry && (
                           <Button size="sm" variant="outline" onClick={handleRetryRfDetrInspection}>

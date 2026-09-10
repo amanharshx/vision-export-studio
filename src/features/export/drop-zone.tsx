@@ -75,6 +75,7 @@ export function DropZone({ path, title, helper, pickerFilterName, pickerExtensio
     <Card
       role="button"
       tabIndex={0}
+      data-no-select-start
       onClick={handleBrowse}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleBrowse(); }}
       className={[
@@ -128,7 +129,7 @@ export function DropZone({ path, title, helper, pickerFilterName, pickerExtensio
           {hasFile ? "Change file" : "Browse file"}
         </button>
 
-        {errorMsg && <p className="text-xs text-red-600 select-text">{errorMsg}</p>}
+        {errorMsg && <p className="text-xs text-red-600">{errorMsg}</p>}
       </CardContent>
     </Card>
   );

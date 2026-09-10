@@ -151,7 +151,7 @@ export function HostSupportReason({ result }: { result: HostSupportResult | null
   return (
     <div className="mt-3 flex gap-2.5 rounded-lg border border-red-200 bg-red-50 p-3">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
-      <p className="text-sm text-red-800 select-text">{result.reason}</p>
+      <p className="text-sm text-red-800">{result.reason}</p>
     </div>
   );
 }
@@ -267,7 +267,7 @@ function SetupPanelBase({
       <p className={`text-sm font-medium ${tones.text}`}>{title}</p>
       <p className={`mt-1 text-xs ${tones.text}`}>{body}</p>
       {notice && <p className={`mt-1 text-xs ${tones.text}`}>{notice}</p>}
-      {error && <p className="mt-2 text-xs text-red-700 select-text">{error}</p>}
+      {error && <p className="mt-2 text-xs text-red-700">{error}</p>}
       {showRecovery && (
         <div className="mt-2 flex flex-wrap gap-2">
           {onRemoveEnvironment && (
@@ -374,7 +374,7 @@ export function RfDetrInspectionFailurePanel({
   return (
     <div className="rounded-md border border-red-200 bg-red-50 p-3">
       <p className="text-sm font-medium text-red-800">Checkpoint inspection failed</p>
-      <p className="mt-1 text-xs text-red-800 select-text">
+      <p className="mt-1 text-xs text-red-800">
         {error ?? "RF-DETR inspection failed."}
       </p>
       <p className="mt-2 text-xs text-red-700">
@@ -728,18 +728,18 @@ export function ExportModal({
 
             {rfdetrImgszError && (
               <div className="rounded-md border border-red-200 bg-red-50 p-3">
-                <p className="text-sm text-red-800 select-text">{rfdetrImgszError}</p>
+                <p className="text-sm text-red-800">{rfdetrImgszError}</p>
               </div>
             )}
 
             {errorMsg && (
               <div className="rounded-md border border-red-200 bg-red-50 p-3">
-                <p className="text-sm text-red-800 select-text">{errorMsg}</p>
+                <p className="text-sm text-red-800">{errorMsg}</p>
               </div>
             )}
 
             {exportStatus === "finished" && publishedPaths.length > 0 && (
-              <div className="rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+              <div data-selectable className="rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-800">
                 {publishedPaths.length === 1
                   ? `Created ${publishedPaths[0].split(/[\\/]/).pop()}`
                   : `Created ${publishedArtifactCount} artifacts in run ${publishedRun}`}
