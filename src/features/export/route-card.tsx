@@ -52,7 +52,7 @@ export function RouteRow({ route, hostStatus, onSelect, disabled = false, disabl
       disabled={rowDisabled}
       title={rowDisabledReason}
       className={cn(
-        "flex w-full items-center gap-4 rounded-lg border border-zinc-900/10 bg-white px-4 py-3 text-left transition-colors hover:bg-zinc-50",
+        "flex w-full items-center gap-4 rounded-lg border border-zinc-900/10 bg-white px-4 py-3 text-left transition-colors hover:bg-zinc-50 select-none",
         !compatible && "opacity-50",
         rowDisabled && "cursor-not-allowed opacity-45 hover:bg-white",
       )}

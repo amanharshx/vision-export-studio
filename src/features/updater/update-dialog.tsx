@@ -181,7 +181,7 @@ export function UpdateDialog({
       >
         <DialogHeader>
           <DialogTitle>Vision Export Studio updates</DialogTitle>
-          <DialogDescription aria-live="polite" className={state === "error" ? "select-text" : undefined}>{description}</DialogDescription>
+          <DialogDescription aria-live="polite">{description}</DialogDescription>
         </DialogHeader>
 
         {body}

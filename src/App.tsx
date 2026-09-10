@@ -58,6 +58,27 @@ function App() {
   const firstRunSentRef = useRef(false);
   const updater = useUpdaterController();
 
+  // Suppress accidental selections starting on marked empty backgrounds.
+  // Content drags, inputs, clicks, scrolling, and portals are untouched.
+  useEffect(() => {
+    const onSelectStart = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (target.closest('input, textarea, [contenteditable="true"]')) return;
+      if (target.closest("button, select")) return;
+      if (!target.closest("[data-no-select-start]")) return;
+      if (
+        target.closest(
+          "p, pre, code, span, a, h1, h2, h3, h4, h5, h6, li, ul, ol, dt, dd, td, th, label, blockquote, [data-selectable]",
+        )
+      )
+        return;
+      event.preventDefault();
+    };
+    document.addEventListener("selectstart", onSelectStart);
+    return () => document.removeEventListener("selectstart", onSelectStart);
+  }, []);
+
   useEffect(() => {
     if (appOpenedSentRef.current) {
       return;

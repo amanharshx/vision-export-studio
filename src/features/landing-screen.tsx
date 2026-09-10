@@ -23,7 +23,10 @@ export function LandingScreen({
         <AboutButton onClick={onOpenAbout} updateAvailable={updateAvailable} />
       </div>
       {/* Left — Branding */}
-      <div className="flex flex-1 flex-col items-center justify-center bg-primary/5 px-12 py-8">
+      <div
+        data-no-select-start
+        className="flex flex-1 flex-col items-center justify-center bg-primary/5 px-12 py-8"
+      >
         <div className="flex w-full max-w-lg flex-col items-center">
           <AppIcon className="mb-8 h-24 w-24 drop-shadow-md" />
           <h1 className="mb-6 text-center text-4xl font-bold tracking-tight text-foreground">
@@ -67,7 +70,10 @@ export function LandingScreen({
       </div>
 
       {/* Right — Targets + CTA */}
-      <div className="flex flex-1 flex-col justify-center px-12 py-8">
+      <div
+        data-no-select-start
+        className="flex flex-1 flex-col justify-center px-12 py-8"
+      >
         <div className="max-w-md space-y-6">
           <div>
             <h3 className="mb-3 text-sm font-medium text-muted-foreground">
