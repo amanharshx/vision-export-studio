@@ -128,6 +128,8 @@ describe("managed environment cleanup helpers", () => {
       defaultExpanded: true,
     }));
     expect(html).toContain("No RF-DETR environments installed");
+    expect(html).toContain("0 installed · not set up");
+    expect(html).toContain("text-amber-500");
     expect(html).not.toContain("Remove all");
     expect(html).not.toContain("Approx. size");
     expect(html).not.toContain("Size unavailable");
@@ -136,7 +138,7 @@ describe("managed environment cleanup helpers", () => {
   test("missing Ultralytics runtime hides reset and shows absent state", () => {
     const html = renderToStaticMarkup(React.createElement(EnvironmentGroups, {
       envInfo: null,
-      envError: null,
+      envError: "no python",
       redetecting: false,
       managedRuntimeUpgradeNudge: null,
       openManagedRuntimeUpgrade: () => {},
@@ -148,7 +150,16 @@ describe("managed environment cleanup helpers", () => {
       },
     }));
     expect(html).toContain("Managed runtime not installed");
+    expect(html).toContain("Not set up");
+    // Each EnvCard renders the badge text plus a matching title attribute.
+    expect((html.match(/>Not installed</g) ?? []).length).toBe(2);
+    expect(html).toContain("text-amber-500");
+    expect(html).toContain("border-l-amber-400");
+    expect(html).toContain("bg-amber-50");
     expect(html).not.toContain("Reset runtime");
+    expect(html).not.toContain("text-red-500");
+    expect(html).not.toContain("border-l-red-400");
+    expect(html).not.toContain("bg-red-50");
   });
 
   test("available size with null bytes renders unavailable, never 0 B", () => {
