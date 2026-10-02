@@ -20,6 +20,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # Runs only in release.yml, so CI cannot catch a broken bump.
+      - dependency-name: "tauri-apps/tauri-action"
     groups:
       actions:
         patterns: ["*"]
