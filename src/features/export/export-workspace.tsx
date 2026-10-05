@@ -661,26 +661,33 @@ export function getRfDetrExportImgszError(
   return validateRfDetrImgsz(imgsz, inspect?.required_multiple ?? null);
 }
 
-type EnvCardStatus = "ok" | "error" | "loading";
+type EnvCardStatus = "ok" | "warning" | "error" | "loading";
 export type ProviderGroupStatus = "ready" | "partial" | "missing" | "loading" | "error";
 
 export function getUltralyticsGroupStatus(
   envInfo: EnvironmentInfo | null,
   envError: string | null,
   redetecting: boolean,
-): Exclude<ProviderGroupStatus, "error"> {
-  if (redetecting || (!envInfo && !envError)) return "loading";
-  if (!envInfo) return "missing";
+  ultralyticsExists?: boolean | null,
+): ProviderGroupStatus {
+  if (redetecting) return "loading";
+  if (ultralyticsExists === false) return "missing";
+  if (!envInfo && !envError) return "loading";
+  // Only exists === false confirms the absent state (handled above). Any
+  // other detection failure is a genuine error (red) without parsing backend
+  // strings; size unknown (null/undefined) never confirms absence.
+  if (!envInfo) return "error";
   switch (envInfo.status) {
     case "ok": return "ready";
     case "partial": return "partial";
     case "loading": return "loading";
     case "missing":
-    case "error": return "missing";
+    case "error": return "error";
   }
 }
 
-export function getRfdetrGroupStatus(stacks: StackEnvironment[]): "ready" | "error" {
+export function getRfdetrGroupStatus(stacks: StackEnvironment[]): "ready" | "missing" | "error" {
+  if (stacks.length === 0) return "missing";
   return stacks.every((stack) =>
     stack.python_version.status === "available" && stack.rfdetr_version.status === "available",
   )
@@ -691,8 +698,8 @@ export function getRfdetrGroupStatus(stacks: StackEnvironment[]): "ready" | "err
 function providerGroupIcon(status: ProviderGroupStatus) {
   switch (status) {
     case "ready": return BadgeCheck;
-    case "partial": return TriangleAlert;
-    case "missing":
+    case "partial":
+    case "missing": return TriangleAlert;
     case "error": return CircleX;
     case "loading": return CircleDashed;
   }
@@ -701,8 +708,8 @@ function providerGroupIcon(status: ProviderGroupStatus) {
 function providerGroupIconColor(status: ProviderGroupStatus): string {
   switch (status) {
     case "ready": return "text-emerald-600";
-    case "partial": return "text-amber-500";
-    case "missing":
+    case "partial":
+    case "missing": return "text-amber-500";
     case "error": return "text-red-500";
     case "loading": return "text-zinc-400";
   }
@@ -795,11 +802,16 @@ export function EnvironmentGroups({
   cleanupDisabled?: boolean;
   disabledReason?: string | null;
 }) {
-  const ultralyticsGroupStatus = getUltralyticsGroupStatus(envInfo, envError, redetecting);
-  const ultralyticsGroupSummary = ultralyticsGroupStatus[0].toUpperCase() + ultralyticsGroupStatus.slice(1);
-  const rfdetrGroupStatus = getRfdetrGroupStatus(stacks);
-  const rfdetrGroupSummary = `${stacks.length} installed · ${rfdetrGroupStatus}`;
   const ultralyticsSize = managedEnvironmentSizes["ultralytics-managed"];
+  const ultralyticsGroupStatus = getUltralyticsGroupStatus(envInfo, envError, redetecting, ultralyticsSize?.exists);
+  const ultralyticsGroupSummary = ultralyticsGroupStatus === "missing"
+    ? "Not set up"
+    : ultralyticsGroupStatus[0].toUpperCase() + ultralyticsGroupStatus.slice(1);
+  const ultralyticsUnconfigured = ultralyticsGroupStatus === "missing";
+  const rfdetrGroupStatus = getRfdetrGroupStatus(stacks);
+  const rfdetrGroupSummary = rfdetrGroupStatus === "missing"
+    ? `${stacks.length} installed · not set up`
+    : `${stacks.length} installed · ${rfdetrGroupStatus}`;
   const stackSizes = stacks.map((stack) => managedEnvironmentSizes[stack.key]);
   const rfdetrSize = managedEnvironmentSizes["rfdetr-all"] ?? (
     stackSizes.some((size) => size?.status === "calculating")
@@ -828,13 +840,23 @@ export function EnvironmentGroups({
         <EnvCard
           title="Python"
           status={
-            redetecting || (!envInfo && !envError)
+            redetecting
               ? "loading"
-              : envError || !envInfo?.python_version
-                ? "error"
-                : "ok"
+              : ultralyticsUnconfigured
+                ? "warning"
+                : (!envInfo && !envError)
+                  ? "loading"
+                  : envError || !envInfo?.python_version
+                    ? "error"
+                    : "ok"
           }
-          version={envInfo?.python_version || (envError ? "Error" : "...")}
+          version={
+            redetecting
+              ? (envInfo?.python_version || "...")
+              : ultralyticsUnconfigured
+                ? "Not installed"
+                : (envInfo?.python_version || (envError ? "Error" : "..."))
+          }
           path={envInfo?.python_path}
           hint={
             <TooltipProvider>
@@ -861,13 +883,23 @@ export function EnvironmentGroups({
         <EnvCard
           title="Ultralytics YOLO"
           status={
-            redetecting || (!envInfo && !envError)
+            redetecting
               ? "loading"
-              : envInfo?.ultralytics_version
-                ? "ok"
-                : "error"
+              : ultralyticsUnconfigured
+                ? "warning"
+                : (!envInfo && !envError)
+                  ? "loading"
+                  : envInfo?.ultralytics_version
+                    ? "ok"
+                    : "error"
           }
-          version={envInfo?.ultralytics_version || (redetecting ? "..." : "Not found")}
+          version={
+            redetecting
+              ? (envInfo?.ultralytics_version || "...")
+              : ultralyticsUnconfigured
+                ? "Not installed"
+                : (envInfo?.ultralytics_version || ((!envInfo && !envError) ? "..." : "Not found"))
+          }
           path={envInfo?.yolo_path || undefined}
         />
         <div className="flex items-center justify-between gap-3 rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
@@ -922,7 +954,7 @@ export function EnvironmentGroups({
   );
 }
 
-const ENV_CARD_PLACEHOLDERS = new Set(["Not found", "Error", "..."]);
+const ENV_CARD_PLACEHOLDERS = new Set(["Not found", "Not installed", "Error", "..."]);
 const ENV_CARD_MAX_VERSION_LENGTH = 32;
 
 function displayVersion(version: string): string {
@@ -951,15 +983,19 @@ export function EnvCard({
   const borderColor =
     status === "ok"
       ? "border-l-emerald-500"
-      : status === "error"
-        ? "border-l-red-400"
-        : "border-l-zinc-300";
+      : status === "warning"
+        ? "border-l-amber-400"
+        : status === "error"
+          ? "border-l-red-400"
+          : "border-l-zinc-300";
   const badgeBg =
     status === "ok"
       ? "bg-emerald-50 text-emerald-700"
-      : status === "error"
-        ? "bg-red-50 text-red-600"
-        : "bg-zinc-100 text-zinc-400";
+      : status === "warning"
+        ? "bg-amber-50 text-amber-700"
+        : status === "error"
+          ? "bg-red-50 text-red-600"
+          : "bg-zinc-100 text-zinc-400";
 
   return (
     <div
@@ -3109,6 +3145,9 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
         if (managedEnvironmentDeletionSucceeded(report, "ultralytics-managed")) {
           setEnvInfo(null);
           await handleRedetect(true);
+          // Refresh the size inventory so exists === false confirms the
+          // absent state promptly; until then a detection failure stays red.
+          await scanProviderEnvironments("ultralytics").catch(() => {});
         }
       } else {
         await refreshStackEnvironmentCards();
@@ -3134,7 +3173,7 @@ export function ExportWorkspace({ onBack, onOpenAbout, updateAvailable }: Export
     } finally {
       setCleanupBusy(false);
     }
-  }, [blockOnSetupConflict, cleanupBusy, cleanupConfirmation, dismissTask, handleRedetect, invalidateManagedEnvironmentSizesForMutation, providerEnvPython, refreshRouteDependencies, refreshStackEnvironmentCards, selectedProviderId, selectedRouteId, setupTask, stackEnvironments]);
+  }, [blockOnSetupConflict, cleanupBusy, cleanupConfirmation, dismissTask, handleRedetect, invalidateManagedEnvironmentSizesForMutation, providerEnvPython, refreshRouteDependencies, refreshStackEnvironmentCards, scanProviderEnvironments, selectedProviderId, selectedRouteId, setupTask, stackEnvironments]);
 
   // Save output dir override
   const handleSaveOutputDir = useCallback(async () => {

@@ -237,7 +237,14 @@ mock.module("@/lib/tauri/managed-environments", () => ({
     calls.cleanup.push([keys]);
     // Faithful deletion simulation: the fake backend removes exactly the
     // requested environments so post-cleanup probes observe their absence.
-    if (keys.includes("ultralytics-managed")) detectedEnv = null;
+    if (keys.includes("ultralytics-managed")) {
+      detectedEnv = null;
+      scanRows = (scanRows ?? []).map((row) =>
+        row.key === "ultralytics-managed"
+          ? { ...row, status: "available" as const, estimated_logical_bytes: 0, size_error: null, exists: false as const }
+          : row,
+      );
+    }
     if (keys.includes("rfdetr-all")) stacks = [];
     else if (keys.some((key) => key.startsWith("rfdetr-"))) {
       stacks = stacks.filter((stack) => !keys.includes(stack.key));
@@ -497,9 +504,9 @@ describe("workspace stability after environment cleanup", () => {
     await waitFor(() => expect(calls.detect.length).toBeGreaterThan(detectCallsBefore));
     // The workspace stays put with the model; upload-era navigation is gone.
     expectStableWorkspaceWithModel("best.pt");
-    // The affected provider reports its honest missing state while the
+    // The affected provider reports its honest not-set-up state while the
     // healthy RF-DETR stack is untouched.
-    await screen.findByRole("button", { name: /Ultralytics YOLO Missing/ });
+    await screen.findByRole("button", { name: /Ultralytics YOLO Not set up/ });
     expect(screen.getByRole("button", { name: /Roboflow RF-DETR 1 installed/ })).not.toBeNull();
     // Output settings and the (empty) Python selection survive cleanup.
     expect((screen.getByDisplayValue("/tmp/exports-out") as HTMLInputElement).value).toBe("/tmp/exports-out");
@@ -549,7 +556,7 @@ describe("workspace stability after environment cleanup", () => {
     // Still on model upload with no provider environments and no redirects.
     expect(screen.getByRole("button", { name: "Browse file" })).not.toBeNull();
     expect(screen.queryByText("Set up Vision Export Studio")).toBeNull();
-    await screen.findByRole("button", { name: /Ultralytics YOLO Missing/ });
+    await screen.findByRole("button", { name: /Ultralytics YOLO Not set up/ });
 
     // Uploading a model afterwards opens the workspace without any setup.
     pickedModelPath = "/tmp/best.pt";
